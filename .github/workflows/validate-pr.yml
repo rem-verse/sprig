@@ -1,0 +1,85 @@
+---
+name: Validate Merge Okay
+
+on:
+  pull_request:
+    branches:
+      - trunk
+    
+jobs:
+  lint-bash:
+    name: Lint Bash Scripts
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version: 'stable'
+      - name: Install shfmt
+        run: go install mvdan.cc/sh/v3/cmd/shfmt@latest
+      - name: Install shellcheck
+        run: sudo apt install -y shellcheck
+      - name: Run lint script
+        run: ./.github/scripts/lint-bash.sh
+  lint-pwsh:
+    name: Lint Powershell Scripts
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Force
+      - name: Import PSScriptAnalyzer
+        shell: pwsh
+        run: Import-Module PSScriptAnalyzer
+      - name: Run Script Linter
+        shell: pwsh
+        run: ./.github/scripts/lint-pwsh.ps1
+  fmt-and-clippy:
+    name: Format & Clippy
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable
+      - name: Run format check
+        run: cargo fmt --all --check
+      - name: Validate clippy
+        run: cargo clippy -- -W clippy::pedantic -D warnings
+  build:
+    name: Build
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-12]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable
+      - name: Run Build
+        run: cargo build --all
+  test:
+    name: Run non doc tests
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-12]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@nextest
+      - name: Install Rust
+        run: rustup update stable
+      - name: Run Nextest
+        run: cargo nextest run
+  doc-test:
+    name: Run doc tests
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-12]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable
+      - name: Run Doc Tests
+        run: cargo test --doc

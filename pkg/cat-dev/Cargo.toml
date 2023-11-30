@@ -1,0 +1,24 @@
+[package]
+name = "cat-dev"
+description = "A library for interacting with the CAT-DEV hardware units distributed by Nintendo (i.e. a type of Wii-U DevKits)."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+bytes.workspace = true
+configparser = "^3.0.3"
+fnv.workspace = true
+futures = "^0.3.29"
+mac_address.workspace = true
+miette.workspace = true
+network-interface.workspace = true
+thiserror = "^1.0.50"
+tracing.workspace = true
+tokio.workspace = true
+valuable.workspace = true
+
+[dev-dependencies]
+tempfile = "^3.8.1"

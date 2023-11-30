@@ -1,0 +1,97 @@
+#!/usr/bin/env sh
+
+# This script is correct in order to run correctly under POSIX shell.
+# shellcheck disable=SC1007
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export SCRIPT_DIR
+
+# So there were two original `setbridge` scripts. `setbridge` as a cygwin
+# script, and `setbridge.bat`.
+#
+# These scripts differ in two main ways:
+#
+# 1. If you try to run the shell script directly as opposed to the batch file,
+#    the shell script yells at you saying it can only be 'source'd. The batch
+#    script does not contain this check, and is in fact the only way it's
+#    documented being used (as a script).
+# 2. If you set the "SESSION_MANAGER" environment variable to "1", than the
+#    shell script tries to spin up a whole bunch of other commands to
+#    `SessionManagerUtil.exe`. As far as I can tell the batch script does not
+#    touch this at all and really only tries to set the title. :(
+#
+# all this to say... this script acts very weird in the official install
+# of the Cafe SDK, and in order to maintain the most amount of compatability
+# BOTH our BASH, and PWSH functions will support being `source`'d, and run
+# directly as a command. Even if the originals techincally kind of did and
+# didn't?
+
+if [ -z "$SPRIG_RUNNING_FROM_SOURCE" ]; then
+	SPRIG_RUNNING_FROM_SOURCE=0
+fi
+SPRIG_RC=0
+if [ "$SPRIG_RUNNING_FROM_SOURCE" -eq 1 ] && [ -f "${SCRIPT_DIR}/../../../target/debug/setbridgeconfig" ]; then
+	"${SCRIPT_DIR}"/../../../target/debug/setbridgeconfig "$@"
+	SPRIG_RC=$?
+elif [ "$SPRIG_RUNNING_FROM_SOURCE" -eq 1 ] && [ -f "${SCRIPT_DIR}/../../../target/release/setbridgeconfig" ]; then
+	"${SCRIPT_DIR}"/../../../target/release/setbridgeconfig "$@"
+	SPRIG_RC=$?
+else
+	setbridgeconfig "$@"
+	SPRIG_RC=$?
+fi
+
+if [ "$SPRIG_RC" -ne 0 ]; then
+	# exit 1 can be hit if you're running the shell script directly in certain
+	# shells.
+	#
+	# shellcheck disable=SC2317
+	return 1 2>/dev/null || exit 1
+fi
+
+unset bridge_name
+unset is_default
+
+SPRIG_DELETED_BRIDGE=0
+bridge_ipaddr=""
+bridge_name=""
+is_default=""
+for arg in "$@"; do
+	if [ "$(echo "$arg" | cut -c1)" != "-" ]; then
+		if [ -z "$bridge_name" ]; then
+			bridge_name="$arg"
+		else
+			bridge_ipaddr="$arg"
+		fi
+	fi
+	if [ "$arg" = "-d" ]; then
+		SPRIG_DELETED_BRIDGE=1
+	fi
+	if [ "$arg" = "-default" ]; then
+		is_default=" (and default)"
+	fi
+done
+
+if [ "$SPRIG_DELETED_BRIDGE" -eq 1 ]; then
+	# The original script didn't clear `BRIDGE_CURRENT_*` variables, or switch to
+	# the default bridge.
+	echo "Cleared stored IP address for $bridge_name (current environment unchanged)."
+else
+	echo "Setting hostbridge for current session${is_default} to ${bridge_name} ${bridge_ipaddr}."
+	export BRIDGE_CURRENT_NAME="$bridge_name"
+	export BRIDGE_CURRENT_IP_ADDRESS="$bridge_ipaddr"
+fi
+
+unset arg is_default bridge_name bridge_ipaddr SPRIG_DELETED_BRIDGE SPRIG_RC
+
+if [ "$SESSION_MANAGER" = "" ]; then
+	export SESSION_MANAGER="0"
+fi
+if [ "$SESSION_MANAGER" -eq 1 ]; then
+	echo "!!! NOT YET IMPLEMENTED !!!"
+	if [ "$SPRIG_USE_CAFEX_SETBRIDGE" -eq 1 ]; then
+		true
+	else
+		true
+	fi
+	exit 1
+fi

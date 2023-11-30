@@ -1,0 +1,23 @@
+[package]
+name = "bridgectl"
+description = "A tool that aims to solve all your cat-dev bridge interaction needs."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+# Is a CLI tool with a potentially common name, people can build it/use our packages with scripts included.
+publish = false
+
+[dependencies]
+cat-dev = { path = "../../pkg/cat-dev" }
+clap = { version = "^4.4.10", features = ["color", "derive", "env", "error-context", "help", "suggestions", "unicode", "usage", "wrap_help"] }
+fnv.workspace = true
+log = { path = "../../pkg/log" }
+mac_address.workspace = true
+miette.workspace = true
+once_cell.workspace = true
+terminal_size = "^0.3.0"
+tokio.workspace = true
+tracing.workspace = true
+valuable.workspace = true

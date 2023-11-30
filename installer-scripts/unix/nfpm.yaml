@@ -1,0 +1,55 @@
+---
+name: "sprig"
+description: |
+  Sprig is a WIP re-implementation of the developer tools for the Wii-U!
+homepage: "https://github.com/rem-verse/sprig"
+license: "MIT"
+maintainer: "Cynthia <cynthia@corp.rem-verse.email>"
+vendor: "RemVerse"
+version: "v0.0.1"
+
+arch: "amd64"
+platform: "linux"
+
+section: "default"
+priority: "optional"
+
+replaces: []
+provides: []
+recommends: []
+suggests: []
+conflicts: []
+
+contents:
+- src: ../../target/release/bridgectl
+  dst: /usr/local/bin/bridgectl
+- src: ../../target/release/findbridge
+  dst: /usr/local/bin/findbridge
+- src: ../../target/release/getbridgeconfig
+  dst: /usr/local/bin/getbridgeconfig
+- src: ../../target/release/setbridgeconfig
+  dst: /usr/local/bin/setbridgeconfig
+- src: ../../cmd/getbridge/sh/getbridge
+  dst: /usr/local/bin/getbridge
+- src: ../../cmd/getbridgetype/sh/getbridgetype
+  dst: /usr/local/bin/getbridgetype
+- src: ../../cmd/setbridge/sh/setbridge
+  dst: /usr/local/bin/setbridge
+
+overrides:
+  deb:
+    depends:
+      - libgcc-s1
+      - libc6
+  rpm:
+    depends:
+      - libgcc
+      - glibc
+  apk:
+    depends:
+      - gcompat
+      - libgcc
+  archlinux:
+    depends:
+      - gcc-libs
+      - glibc

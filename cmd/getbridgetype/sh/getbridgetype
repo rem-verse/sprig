@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+
+# This block was not present in the `getbridgetype` script, and instead has
+# been ported from `cafe.bat`, to remove a dependency on `cafe.bat`,
+# `cafex_env.bat`, or `mochiato`.
+#
+# The original block was:
+#
+# ```batch
+# :: Default hardware board connected to PC for [catdevmp|catdev4]
+# if "%CAFE_HARDWARE%"=="" set CAFE_HARDWARE=catdevmp
+# ```
+if [ "$CAFE_HARDWARE" = "" ]; then
+	CAFE_HARDWARE="catdevmp"
+	export CAFE_HARDWARE
+fi
+
+if [ "$CAFE_HARDWARE" = "ev" ]; then
+	BRIDGE_TYPE="Toucan"
+elif [ "$CAFE_HARDWARE" = "ev_x4" ]; then
+	BRIDGE_TYPE="Mion"
+elif [ "$(echo "$CAFE_HARDWARE" | cut -c 7-)" = "mp" ]; then
+	BRIDGE_TYPE="Mion"
+elif [ "$(echo "$CAFE_HARDWARE" | cut -c 7-7)" -le 2 ]; then
+	BRIDGE_TYPE="Toucan"
+else
+	BRIDGE_TYPE="Mion"
+fi
+export BRIDGE_TYPE

@@ -1,0 +1,19 @@
+# Build Artifacts go here.
+/target/
+# Editor Artifacts go here.
+/.vscode/
+
+# Notes can go here.
+/scratch/
+
+# Package formats
+/installer-scripts/osx/working-dir/
+/installer-scripts/win/.wix/
+/installer-scripts/win/*.msi
+/installer-scripts/win/*.wixpdb
+/installer-scripts/osx/sprig.pkg
+/installer-scripts/osx/sprig.dist
+/installer-scripts/unix/*.apk
+/installer-scripts/unix/*.deb
+/installer-scripts/unix/*.pkg.tar.zst
+/installer-scripts/unix/*.rpm

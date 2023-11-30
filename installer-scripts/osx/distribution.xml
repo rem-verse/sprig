@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<installer-gui-script minSpecVersion="2">
+  <title>Sprig</title>
+  <domains enable_localSystem="true" />
+  <options customize="never"
+    require-scripts="false"
+    rootVolumeOnly="true"
+    hostArchitectures="x86_64" />
+  <choices-outline>
+    <line choice="sprig"/>
+  </choices-outline>
+  <choice id="sprig" title="sprig">
+    <pkg-ref id="sprig.pkg"/>
+  </choice>
+  <pkg-ref id="sprig.pkg" version="0.0.1" />
+</installer-gui-script>

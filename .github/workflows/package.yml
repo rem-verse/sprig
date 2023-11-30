@@ -1,0 +1,121 @@
+---
+name: Validate Merge
+
+on:
+  push:
+    branches:
+      - trunk
+    
+jobs:
+  package-win:
+    name: Package Windows systems
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable
+      - name: Build Rust Code
+        run: cargo build --release --all
+      - name: Build Packages
+        run: |
+          cd installer-scripts/win/
+          dotnet tool install --global wix
+          wix extension add WiXToolset.UI.wixext
+          wix extension add WiXToolset.Util.wixext
+          wix build sprig.wxs -ext WiXToolset.Util.wixext -ext WiXToolset.UI.wixext -defaultcompressionlevel high -arch "x64" -bindpath "../../"
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.msi
+          path: installer-scripts/win/sprig.msi
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.wixpdb
+          path: installer-scripts/win/sprig.wixpdb
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig-target-directory-win
+          path: |
+            target/release/
+            !target/release/.fingerprint
+            !target/release/build
+            !target/release/deps
+            !target/release/examples
+            !target/release/incremental
+  package-osx:
+    name: Package Mac OS X systems
+    runs-on: macos-12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable
+      - name: Build Rust Code
+        run: cargo build --release --all
+      - name: Build Packages
+        run: |
+          cd installer-scripts/osx/
+          ./package.sh
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.dist
+          path: installer-scripts/osx/sprig.dist
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.pkg
+          path: installer-scripts/osx/sprig.pkg
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig-target-directory-osx
+          path: |
+            target/release/
+            !target/release/.fingerprint
+            !target/release/build
+            !target/release/deps
+            !target/release/examples
+            !target/release/incremental
+  package-unix:
+    name: Package Unix systems
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable
+      - name: Install NFPM
+        run: |
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt update
+          sudo apt install nfpm -y
+      - name: Build Rust Code
+        run: cargo build --release --all
+      - name: Build Packages
+        run: |
+          cd installer-scripts/unix/
+          nfpm package -p deb
+          nfpm package -p rpm
+          nfpm package -p apk
+          nfpm package -p archlinux
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.deb
+          path: installer-scripts/unix/sprig_0.0.1_amd64.deb
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.rpm
+          path: installer-scripts/unix/sprig-0.0.1-1.x86_64.rpm
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.apk
+          path: installer-scripts/unix/sprig_0.0.1_x86_64.apk
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig_amd64.pkg.tar.zst
+          path: installer-scripts/unix/sprig-0.0.1-1-x86_64.pkg.tar.zst
+      - uses: actions/upload-artifact@v3
+        with:
+          name: sprig-target-directory-unix
+          path: |
+            target/release/
+            !target/release/.fingerprint
+            !target/release/build
+            !target/release/deps
+            !target/release/examples
+            !target/release/incremental

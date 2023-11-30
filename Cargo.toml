@@ -1,0 +1,36 @@
+[workspace]
+members = [
+  "cmd/bridgectl",
+  "cmd/findbridge",
+  "cmd/getbridgeconfig",
+  "cmd/setbridgeconfig",
+  "pkg/cat-dev",
+  "pkg/log",
+]
+resolver = "2"
+
+[workspace.dependencies]
+bytes = "^1.5.0"
+fnv = "^1.0.7"
+mac_address = "^1.1.5"
+miette = { version = "^5.10.0", features = ["fancy"] }
+network-interface = "^1.1.1"
+once_cell = "^1.18.0"
+tracing = { version = "^0.1.40", features = ["valuable"] }
+tokio = { version = "^1.34.0", features = ["full", "tracing"] }
+valuable = { version = "^0.1.0", features = ["derive"] }
+
+[workspace.package]
+authors = ["Cynthia <cynthia@coan.dev>"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/rem-verse/sprig"
+version = "0.0.1"
+
+[profile.release]
+codegen-units = 1
+opt-level = 3
+lto = "fat"
+panic = "abort"
+split-debuginfo = "packed"
+strip = "none"

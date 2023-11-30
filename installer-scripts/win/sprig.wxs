@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+  xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Manufacturer="RemVerse"
+    Name="Sprig"
+    Language="1033"
+    Version="0.0.1"
+    UpgradeCode="f25b6ffc-5890-42f2-a1c1-0f7dd4a9ee11">
+
+    <ui:WixUI Id="WixUI_Minimal" InstallDirectory="INSTALLFOLDER" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="ManufacturerFolder" Name="!(bind.Property.Manufacturer)" SourceName=".">
+        <Directory Id="INSTALLDIR" Name="!(bind.Property.ProductName)" SourceName=".">
+          <Component>
+            <File Id="bridgectl" Name="bridgectl.exe" Source="target/release/bridgectl.exe" KeyPath="yes" />
+            <Environment Id="Path" Action="set" Name="PATH" Part="last" System="yes" Value="[INSTALLDIR]/bin" />
+          </Component>
+          <Component>
+            <File Id="findbridge" Name="findbridge.exe" Source="target/release/findbridge.exe" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="getbridgeconfig" Name="getbridgeconfig.exe" Source="target/release/getbridgeconfig.exe" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="setbridgeconfig" Name="setbridgeconfig.exe" Source="target/release/setbridgeconfig.exe" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="setbridgecmd" Name="setbridge.cmd" Source="cmd/setbridge/pwsh/setbridge.cmd" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="setbridgeps1" Name="setbridge.ps1" Source="cmd/setbridge/pwsh/setbridge.ps1" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="getbridgecmd" Name="getbridge.cmd" Source="cmd/getbridge/pwsh/getbridge.cmd" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="getbridgeps1" Name="getbridge.ps1" Source="cmd/getbridge/pwsh/getbridge.ps1" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="getbridgetypecmd" Name="getbridgetype.cmd" Source="cmd/getbridgetype/pwsh/getbridgetype.cmd" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="getbridgetypeps1" Name="getbridgetype.ps1" Source="cmd/getbridgetype/pwsh/getbridgetype.ps1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Default">
+      <ComponentRef Id="bridgectl" />
+      <ComponentRef Id="findbridge" />
+      <ComponentRef Id="getbridgeconfig" />
+      <ComponentRef Id="setbridgeconfig" />
+      <ComponentRef Id="setbridgecmd" />
+      <ComponentRef Id="setbridgeps1" />
+      <ComponentRef Id="getbridgecmd" />
+      <ComponentRef Id="getbridgeps1" />
+      <ComponentRef Id="getbridgetypecmd" />
+      <ComponentRef Id="getbridgetypeps1" />
+    </Feature>
+    <util:BroadcastEnvironmentChange />
+
+    <WixVariable Id="WixUILicense.rtf" Value="license.rtf" />
+  </Package>
+
+</Wix>

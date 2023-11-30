@@ -1,0 +1,70 @@
+#!/usr/bin/env sh
+
+# This script is correct in order to run correctly under POSIX shell.
+# shellcheck disable=SC1007
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export SCRIPT_DIR
+
+if [ -z "$SPRIG_RUNNING_FROM_SOURCE" ]; then
+	SPRIG_RUNNING_FROM_SOURCE=0
+fi
+if [ "$SPRIG_RUNNING_FROM_SOURCE" -eq 1 ]; then
+	# shellcheck source=./cmd/getbridgetype/sh/getbridgetype
+	. "${SCRIPT_DIR}/../../getbridgetype/sh/getbridgetype"
+else
+	# shellcheck source=./cmd/getbridgetype/sh/getbridgetype
+	. "${SCRIPT_DIR}/getbridgetype"
+fi
+
+if [ "$BRIDGE_TYPE" = "Mion" ]; then
+	command_option1="$1"
+	if [ "$command_option1" = "" ]; then
+		# This block was not present in the original `getbridge` script, and
+		# instead has been ported from `cafe.bat`, to remove a dependency on
+		# `cafe.bat`, `cafex_env.bat`, or `mochiato`.
+		#
+		# The original block was:
+		#
+		# ```batch
+		# if not "%BRIDGE_CURRENT_NAME%"=="" goto :skip_mion
+		# if not exist "%MION_BRIDGE_TOOLS%\getbridgeconfig.exe" goto skip_mion
+		# :mion_name
+		# for /f "usebackq tokens=5" %%i in (`"%MION_BRIDGE_TOOLS%\getbridgeconfig.exe" -default`) do (
+		#     set BRIDGE_CURRENT_NAME=%%i
+		#     goto mion_ip_address
+		# )
+		# :mion_ip_address
+		# for /f "usebackq skip=1 tokens=5" %%i in (`"%MION_BRIDGE_TOOLS%\getbridgeconfig.exe" -default`) do (
+		#     set BRIDGE_CURRENT_IP_ADDRESS=%%i
+		# )
+		# :skip_mion
+		# ```
+		if [ "$BRIDGE_CURRENT_NAME" = "" ]; then
+			if [ "$SPRIG_RUNNING_FROM_SOURCE" -eq 1 ] && [ -f "${SCRIPT_DIR}/../../../target/debug/getbridgeconfig" ]; then
+				default_bridges=$("${SCRIPT_DIR}"/../../../target/debug/getbridgeconfig -default)
+			elif [ "$SPRIG_RUNNING_FROM_SOURCE" -eq 1 ] && [ -f "${SCRIPT_DIR}/../../../target/release/getbridgeconfig" ]; then
+				default_bridges=$("${SCRIPT_DIR}"/../../../target/release/getbridgeconfig -default)
+			else
+				default_bridges=$(getbridgeconfig -default)
+			fi
+			BRIDGE_CURRENT_NAME="$(echo "$default_bridges" | awk '{print $5}' | head -n1)"
+			BRIDGE_CURRENT_IP_ADDRESS="$(echo "$default_bridges" | awk '{print $5}' | tail -n1)"
+
+			export BRIDGE_CURRENT_NAME
+			export BRIDGE_CURRENT_IP_ADDRESS
+		fi
+
+		echo "Current Bridge Name        = $BRIDGE_CURRENT_NAME"
+		echo "Current Bridge IP Address  = $BRIDGE_CURRENT_IP_ADDRESS"
+	else
+		if [ "$SPRIG_RUNNING_FROM_SOURCE" -eq 1 ] && [ -f "${SCRIPT_DIR}/../../../target/debug/getbridgeconfig" ]; then
+			"${SCRIPT_DIR}"/../../../target/debug/getbridgeconfig "$@"
+		elif [ "$SPRIG_RUNNING_FROM_SOURCE" -eq 1 ] && [ -f "${SCRIPT_DIR}/../../../target/release/getbridgeconfig" ]; then
+			"${SCRIPT_DIR}"/../../../target/release/getbridgeconfig "$@"
+		else
+			getbridgeconfig "$@"
+		fi
+	fi
+else
+	echo "Bridge type invalid: This bridge tool only works with Catdev v3 or ev_x4 and newer devkits"
+fi
