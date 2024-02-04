@@ -25,8 +25,8 @@
 
 use crate::{
 	errors::{CatBridgeError, NetworkError},
-	mion::{
-		proto::{MionIdentity, MionIdentityAnnouncement},
+	mion::proto::{
+		control::{MionIdentity, MionIdentityAnnouncement},
 		MION_ANNOUNCE_TIMEOUT_SECONDS, MION_CONTROL_PORT,
 	},
 };

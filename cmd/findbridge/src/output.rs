@@ -5,7 +5,7 @@
 //! that may not always be clear to you as a user. I promise this is the exact
 //! same way the original tools acted, and the output does match EXACTLY.
 
-use cat_dev::mion::proto::MionIdentity;
+use cat_dev::mion::proto::control::MionIdentity;
 use network_interface::Addr;
 use std::io::Write;
 

@@ -5,76 +5,26 @@
 //! except for maybe importing a few types that APIs return. In general you
 //! probably want to use the functions available in the other modules under
 //! [`crate::mion`] in order to interact with the MIONs in a safe way.
+//!
+//! Each of these roughly correlate to one MION service, e.g.:
+//!
+//! - port 7974 is the "control" port, which can be used for discovery. So for
+//!   communicating on that port you access: [`crate::mion::proto::control`].
+//! - port 7978 on the other hand is used by `mionps` to look up parameters,
+//!   so we call it the "parameter" port, so you can access types for
+//!   communicating on that port under: [`crate::mion::proto::parameter`].
 
-mod announcement;
-pub use announcement::*;
+pub mod control;
+pub mod parameter;
 
-use crate::errors::{NetworkError, NetworkParseError};
-use std::fmt::{Display, Formatter, Result as FmtResult};
+/// The port the MION uses for 'control' commands.
+pub const MION_CONTROL_PORT: u16 = 7974;
+/// The port the MION uses for parameter commands.
+pub const MION_PARAMETER_PORT: u16 = 7978;
 
-/// Used as a "Request" & "Response" code for a packet when talking with
-/// the MION Bridge.
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub enum MionCommandByte {
-	Search,
-	Broadcast,
-	AnnounceYourselves,
-	AcknowledgeAnnouncement,
-}
-impl Display for MionCommandByte {
-	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
-		match *self {
-			Self::Search => write!(fmt, "Search(0x3f)"),
-			Self::Broadcast => write!(fmt, "Broadcast(0x21)"),
-			Self::AnnounceYourselves => write!(fmt, "AnnounceYourselves(0x2A)"),
-			Self::AcknowledgeAnnouncement => write!(fmt, "AcknowledgeAnnouncement(0x20)"),
-		}
-	}
-}
-impl TryFrom<u8> for MionCommandByte {
-	type Error = NetworkError;
-
-	fn try_from(value: u8) -> Result<Self, Self::Error> {
-		match value {
-			0x3F => Ok(Self::Search),
-			0x21 => Ok(Self::Broadcast),
-			0x2A => Ok(Self::AnnounceYourselves),
-			0x20 => Ok(Self::AcknowledgeAnnouncement),
-			_ => Err(NetworkError::ParseError(NetworkParseError::UnknownCommand(
-				value,
-			))),
-		}
-	}
-}
-impl From<MionCommandByte> for u8 {
-	fn from(value: MionCommandByte) -> Self {
-		match value {
-			MionCommandByte::Search => 0x3F,
-			MionCommandByte::Broadcast => 0x21,
-			MionCommandByte::AnnounceYourselves => 0x2A,
-			MionCommandByte::AcknowledgeAnnouncement => 0x20,
-		}
-	}
-}
-
-#[cfg(test)]
-mod unit_tests {
-	use super::*;
-
-	#[test]
-	pub fn ser_and_deser() {
-		for command_byte in vec![
-			MionCommandByte::Search,
-			MionCommandByte::Broadcast,
-			MionCommandByte::AnnounceYourselves,
-			MionCommandByte::AcknowledgeAnnouncement,
-		] {
-			assert_eq!(
-				command_byte,
-				MionCommandByte::try_from(u8::from(command_byte))
-					.expect("Failed to serialize/deserialize command byte: {command_byte}"),
-				"MionCommandByte was not the same after serializing, and deserializing."
-			);
-		}
-	}
-}
+/// The amount of seconds we'll wait for a MION Control board to respond to a
+/// ping.
+pub const MION_ANNOUNCE_TIMEOUT_SECONDS: u64 = 10;
+/// MION timeouts for sending packets directly to the MION, on the parameter
+/// port.
+pub const MION_PARAMETER_TIMEOUT_SECONDS: u64 = 5;

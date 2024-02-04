@@ -90,6 +90,29 @@ pub enum APIError {
 	#[error("A Device Name can only be 255 bytes long, but you specified one: {0} bytes long.")]
 	#[diagnostic(code(cat_dev::api::name_too_long))]
 	DeviceNameTooLong(usize),
+	/// You tried asking for a parameter of a specific name, but we could not
+	/// find a parameter with the name you specified.
+	///
+	/// We have created the concept of "name"'s for some parameters in the
+	/// parameter space. Although the official CLI tools just used indexes, I
+	/// in particular find indexes hard to remember so wanted to ensure folks
+	/// could just "say" what they wanted to lookup. Of course though not every
+	/// field is named, nor does it mean the API was given a non typo'd value.
+	#[error("The MION Parameter name: {0} is not known, cannot find index.")]
+	#[diagnostic(code(cat_dev::api::parameter::name_not_known))]
+	MIONParameterNameNotKnown(String),
+	/// You tried asking for a parameter that does not exist.
+	///
+	/// There are only 512 parameters, so you can only ask for parameters in
+	/// (0-511) inclusive.
+	#[error("You asked for the MION Parameter at index: {0}, but MION Parameter indexes cannot be greater than 511.")]
+	#[diagnostic(code(cat_dev::api::parameter::not_in_range))]
+	MIONParameterNotInRage(usize),
+	/// You passed a parameter space to an API that requires the full parameter
+	/// space, but it was not the correct length (512 bytes).
+	#[error("The MION Parameter body you passed in was: {0} bytes long, but must be exactly 512 bytes long!")]
+	#[diagnostic(code(cat_dev::api::parameter::body_incorrect_length))]
+	MIONParameterBodyNotCorrectLength(usize),
 }
 
 /// Trying to interact with the filesystem has resulted in an error.
@@ -160,6 +183,11 @@ pub enum NetworkError {
 	#[error("Failed to set the socket we're bound on as a broadcast address, this is needed to discover CAT devices.")]
 	#[diagnostic(code(cat_dev::net::set_broadcast_failure))]
 	SetBroadcastFailure,
+	#[error(
+		"Timed out while writing/reading data from the network, failed to send and receive data."
+	)]
+	#[diagnostic(code(cat_dev::net::timeout))]
+	TimeoutError,
 }
 
 /// We tried parsing some data from the network, but failed to do so, someone
@@ -185,6 +213,9 @@ pub enum NetworkParseError {
 	#[error("Tried to read Packet of type ({0}) from network needs at least {1} bytes, but only got {2} bytes: {3:02x?}")]
 	#[diagnostic(code(cat_dev::net::parse::not_enough_data))]
 	NotEnoughData(&'static str, usize, usize, Bytes),
+	#[error("Tried to read Packet of type ({0}) from network, must be encoded exactly as [{1:02x?}], but got [{2:02x?}]")]
+	#[diagnostic(code(cat_dev::net::parse::packet_doesnt_match_static_data))]
+	PacketDoesntMatchStaticPayload(&'static str, &'static [u8], Bytes),
 	/// The overall size of the packet was too long, and there was unexpected
 	/// data at the end, a.k.a. the "Trailer".
 	#[error("Unexpected Trailer for Packet `{0}` received from the network (we're not sure what do with this extra data), extra bytes: {1:02x?}")]
@@ -194,4 +225,11 @@ pub enum NetworkParseError {
 	#[error("Unknown Code aka Packet Type: `{0}` received from the network (this may mean your CAT-DEV is doing something we didn't expect)")]
 	#[diagnostic(code(cat_dev::net::parse::unknown_packet_type))]
 	UnknownCommand(u8),
+	/// Unknown packet tpe for the MION Params port.
+	#[error("Unknown Packet Type: `{0}` received from the network (this may mean your CAT-DEV is doing something we didn't expect)")]
+	#[diagnostic(code(cat_dev::net::parse::params::unknown_packet_type))]
+	UnknownParamsPacketType(i32),
+	#[error("Error code received from MION Params: `{0}`")]
+	#[diagnostic(code(cat_dev::net::parse::params::error_code))]
+	ParamsPacketErrorCode(i32),
 }

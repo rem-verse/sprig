@@ -5,7 +5,7 @@ use crate::{
 	utils::{add_context_to, bridge_state_from_path, get_bridge_state_path},
 };
 use cat_dev::{
-	mion::{discovery::discover_bridges, proto::MionIdentity},
+	mion::{discovery::discover_bridges, proto::control::MionIdentity},
 	BridgeHostState,
 };
 use miette::miette;

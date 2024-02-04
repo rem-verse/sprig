@@ -9,7 +9,7 @@
 
 use crate::{
 	errors::{APIError, NetworkError, NetworkParseError},
-	mion::proto::MionCommandByte,
+	mion::proto::control::MionCommandByte,
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use mac_address::MacAddress;
@@ -934,7 +934,7 @@ mod unit_tests {
 				0x61,
 			]);
 			// Pad extra detailed data.
-			buff.extend([0x0; 239]);
+			buff.extend_from_slice(&[0x0; 239]);
 			// Unexpected trailers...
 			buff.extend_from_slice(b"abcd");
 

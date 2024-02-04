@@ -12,7 +12,7 @@ use cat_dev::{
 	errors::CatBridgeError,
 	mion::{
 		discovery::{discover_bridges, find_mion, MIONFindBy},
-		proto::MionIdentity,
+		proto::control::MionIdentity,
 	},
 };
 use mac_address::MacAddress;
