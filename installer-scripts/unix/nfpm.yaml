@@ -6,7 +6,7 @@ homepage: "https://github.com/rem-verse/sprig"
 license: "MIT"
 maintainer: "Cynthia <cynthia@corp.rem-verse.email>"
 vendor: "RemVerse"
-version: "v0.0.1"
+version: "v0.0.2"
 
 arch: "amd64"
 platform: "linux"
