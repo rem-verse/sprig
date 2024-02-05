@@ -8,10 +8,5 @@
 //! whole, you're _probably_ really actually talking to the MION.
 
 pub mod discovery;
+pub mod parameter;
 pub mod proto;
-
-/// The Port the MION uses for 'control' commands.
-pub const MION_CONTROL_PORT: u16 = 7974;
-/// The amount of seconds we'll wait for a MION Control board to respond to a
-/// ping.
-pub const MION_ANNOUNCE_TIMEOUT_SECONDS: u64 = 10;

@@ -1,0 +1,16 @@
+[package]
+name = "mionparamspace"
+description = "A re-implementation of the Cafe SDK's Host Bridge Software tool `mionparamspace`."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+# Is a CLI tool with a potentially common name, people can build it/use our packages with scripts included.
+publish = false
+
+[dependencies]
+cat-dev = { path = "../../pkg/cat-dev" }
+time.workspace = true
+tokio.workspace = true
+

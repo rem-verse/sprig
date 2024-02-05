@@ -12,6 +12,20 @@ use tracing_subscriber::{
 /// Check if we have actually initialized logging before.
 static HAS_INITIALIZED_LOGGING: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
+/// Determine if our logger will use ANSI escape codes.
+///
+/// Although i wish we had support for better detection than this, this is
+/// unfortunately inhereted from tracing-subscriber which is significantly
+/// better at like everything else.
+///
+/// So even though it kinda stinks here, it's worth the tradeoff. This line is
+/// copied directly from tracing subscriber:
+/// <https://github.com/tokio-rs/tracing/blob/07b490067c0e2af61f48a3d2afb85a20ab70ba95/tracing-subscriber/src/fmt/fmt_subscriber.rs#L697>
+#[must_use]
+pub fn will_ansi() -> bool {
+	env_var("NO_COLOR").map_or(true, |v| v.is_empty())
+}
+
 /// Install all the logging configuration needed for an application.
 ///
 /// This should only ever be called as the very first part of `main`, and

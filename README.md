@@ -16,6 +16,13 @@ how these Development Environments exist.
 something related to preservation, and don't have one. PLEASE reach out, I'd
 be more than happy to use my hardware to test things for you.***
 
+## Why The Name Sprig? ##
+
+The name "sprig" was chosen after "sprigatito" the "Weed Cat Pokemon", because
+not only was the code name for the Wii-U "CAT" (cat-dev/cat-r/etc.), and the
+fact "Cat Bridge - Dev" is shortened to CBD (thus 'weed'). Plus Sprig is just a
+fun word to say.
+
 ## What Parts Are Re-Implemented ##
 
 As mentioned at the top of this repository ALMOST ALL of the tools here are
@@ -29,6 +36,18 @@ officially part of the Cafe SDK developed by Nintendo, plugins to use other
 compilers besides MULTI (so we don't need the license keys!), and a suite of
 tools designed from the ground up to offer a pleasent development experience.
 As some of the CLI choices of the Cafe SDK are not great choices looking back.
+
+### Overarching Cafe Tools ###
+
+Official Tool Replacements:
+
+- [ ] `cafe.bat`
+- [ ] `cafex_env.bat`
+- [ ] `cafex`
+
+Sprig Custom Tooling:
+
+- [ ] `mochiato`: our replacement for `cafe.bat`/`cafex_env.bat`
 
 ### Host Bridge Tools ###
 
@@ -67,17 +86,24 @@ Sprig Custom Tooling:
 - [-] `bridgectl`: our replacement tool that wraps all the bridge commands, and
                     host-bridge utilities into a single tool.
 
-## Overarching Cafe Tools ##
+### Cat-Dev Bridge Internal Tools ###
 
-Official Tool Replacements:
+There are some tools that are not explicitly mentioned being tools in any parts
+of the developer facing documentation, however they are used for interacting
+with that cat-dev bridges a developer would have used. Sometimes, these tools
+were also used to build things ontop of them (e.g. `mionps` is used during
+`cafe.bat`).
 
-- [ ] `cafe.bat`
-- [ ] `cafex_env.bat`
-- [ ] `cafex`
-
-Sprig Custom Tooling:
-
-- [ ] `mochiato`: our replacement for `cafe.bat`/`cafex_env.bat`
+- [ ] `CatLog`: a port of the the csharp "CatLog" utility who's source was
+      included in some of the cafe sdk releases, which receives logs over
+      the serial port.
+- [x] `mionps`: a tool used to fetch the "parameter space"
+      from a particular MION board. It is not clear what the parameter space
+      is, but it contains a whole bunch of configuration values you can
+      get/set.
+- [x] `mionparameterspace`: a tool like `mionps`, but it has different output
+      and is probably an older version of `mionps` that couldn't be removed
+      cause someone depended on it's behavior somewhere.
 
 ## Building ##
 
@@ -114,10 +140,3 @@ on the OS you're using:
 From there you can run: `./installer-scripts/<os-type>/<install scripts>`, and
 read: `./installer-scripts/<os-type>/README.md` to get instructions on how to
 build things for your OS.
-
-## Why The Name Sprig? ##
-
-The name "sprig" was chosen after "sprigatito" the "Weed Cat Pokemon", because
-not only was the code name for the Wii-U "CAT" (cat-dev/cat-r/etc.), and the
-fact "Cat Bridge - Dev" is shortened to CBD (thus 'weed'). Plus Sprig is just a
-fun word to say.
