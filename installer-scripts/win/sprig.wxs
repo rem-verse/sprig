@@ -6,7 +6,7 @@
   <Package Manufacturer="RemVerse"
     Name="Sprig"
     Language="1033"
-    Version="0.0.1"
+    Version="0.0.2"
     UpgradeCode="f25b6ffc-5890-42f2-a1c1-0f7dd4a9ee11">
 
     <ui:WixUI Id="WixUI_Minimal" InstallDirectory="INSTALLFOLDER" />

@@ -96,19 +96,19 @@ jobs:
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.deb
-          path: installer-scripts/unix/sprig_0.0.1_amd64.deb
+          path: installer-scripts/unix/sprig_0.0.2_amd64.deb
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.rpm
-          path: installer-scripts/unix/sprig-0.0.1-1.x86_64.rpm
+          path: installer-scripts/unix/sprig-0.0.2-1.x86_64.rpm
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.apk
-          path: installer-scripts/unix/sprig_0.0.1_x86_64.apk
+          path: installer-scripts/unix/sprig_0.0.2_x86_64.apk
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.pkg.tar.zst
-          path: installer-scripts/unix/sprig-0.0.1-1-x86_64.pkg.tar.zst
+          path: installer-scripts/unix/sprig-0.0.2-1-x86_64.pkg.tar.zst
       - uses: actions/upload-artifact@v3
         with:
           name: sprig-target-directory-unix
