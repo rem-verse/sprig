@@ -710,7 +710,7 @@ mod unit_tests {
 			Err(APIError::MIONParameterNameNotKnown("512".to_owned())),
 		);
 
-		assert_eq!(parsed_packet.get_parameter_by_index(511), Ok(0xFF),);
+		assert_eq!(parsed_packet.get_parameter_by_index(511), Ok(0xFF));
 		assert_eq!(
 			// 512 is out of bounds as we start counting at 0.
 			parsed_packet.get_parameter_by_index(512),
@@ -811,14 +811,14 @@ mod unit_tests {
 			// We should always construct from a dumped packet, because we don't yet
 			// know what the header values are, and they could be important :)
 			assert!(
-				SetMionParameters::new(Bytes::from(&REAL_LIFE_DUMPED_MION_PARAMETERS_PACKET[8..]),)
+				SetMionParameters::new(Bytes::from(&REAL_LIFE_DUMPED_MION_PARAMETERS_PACKET[8..]))
 					.is_ok(),
 				"Failed to construct `SetMionParameters` from a valid dumped parameters set!",
 			);
 
 			// Invalid parameters length
 			assert_eq!(
-				SetMionParameters::new(Bytes::from(&REAL_LIFE_DUMPED_MION_PARAMETERS_PACKET[7..]),),
+				SetMionParameters::new(Bytes::from(&REAL_LIFE_DUMPED_MION_PARAMETERS_PACKET[7..])),
 				Err(APIError::MIONParameterBodyNotCorrectLength(513)),
 			);
 		}
@@ -854,7 +854,7 @@ mod unit_tests {
 				Err(APIError::MIONParameterNameNotKnown("512".to_owned())),
 			);
 
-			assert_eq!(parsed_packet.get_parameter_by_index(511), Ok(69),);
+			assert_eq!(parsed_packet.get_parameter_by_index(511), Ok(69));
 			assert_eq!(
 				// 512 is out of bounds as we start counting at 0.
 				parsed_packet.get_parameter_by_index(512),

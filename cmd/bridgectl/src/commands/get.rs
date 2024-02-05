@@ -1,11 +1,8 @@
 //! Handles fetching the information for just one particular bridge.
 
 use crate::{
-	commands::get_padded_string,
-	exit_codes::{
-		GET_DEFAULT_CONFLICTING_FILTERS, GET_DEFAULT_WITH_FILTERS,
-		GET_FAILED_TO_FIND_SPECIFIC_DEVICE, GET_FAILED_TO_SEARCH_FOR_DEVICE,
-	},
+	commands::argv_helpers::{coalesce_bridge_arguments, get_default_bridge, get_padded_string},
+	exit_codes::{GET_FAILED_TO_FIND_SPECIFIC_DEVICE, GET_FAILED_TO_SEARCH_FOR_DEVICE},
 	utils::{add_context_to, bridge_state_from_path, get_bridge_state_path},
 };
 use cat_dev::{
@@ -31,143 +28,122 @@ pub async fn handle_get(
 	cli_arguments: Option<String>,
 	host_state_path: Option<PathBuf>,
 ) {
-	if just_fetch_default {
-		if flag_arguments.0.is_some()
-			|| flag_arguments.1.is_some()
-			|| flag_arguments.2.is_some()
-			|| cli_arguments.is_some()
-		{
-			if use_json {
-				error!(
-				  id = "bridgectl::get::no_filters_allowed_on_default",
-				  flags.ip = ?flag_arguments.0,
-				  flags.mac = ?flag_arguments.1,
-				  flags.name = ?flag_arguments.2,
-				  args.positional = ?cli_arguments,
-				  suggestions = valuable(&[
-					  "If you want to fetch the default bridge all you need to do is run: `bridgectl get --default`",
-					  "If you want to apply extra filtering you can do something like outputting JSON, and using `jq` to filter",
-				  ]),
-				);
-			} else {
-				error!(
-          "\n{:?}",
-					add_context_to(
-						miette!("Cannot specify filters when fetching the default bridge!"),
-						[
-							miette!("If you want to fetch the default bridge all you need to do is run: `bridgectl get --default`."),
-							miette!(
-								help = format!(
-          			  "Flags: (--ip: `{:?}`, --mac: `{:?}`, --name: `{:?}`) / Positional Argument: `{:?}`",
-          			  flag_arguments.0,
-          			  flag_arguments.1,
-          			  flag_arguments.2,
-          			  cli_arguments,
-          			),
-								"If you want to apply extra filtering you can do something like outputting JSON, and using `jq` to filter.",
-							),
-						].into_iter(),
-					),
-        );
-			}
-
-			std::process::exit(GET_DEFAULT_WITH_FILTERS);
-		}
-
-		get_default_bridge(use_json, use_table, host_state_path).await;
-		return;
-	}
-
-	let (filter_ip, filter_mac, filter_name) =
-		coalesce_arguments(use_json, flag_arguments, cli_arguments);
-	get_bridge(
+	let did_specify_cli_arg = cli_arguments.is_some();
+	if let Some((filter_ip, filter_mac, filter_name)) = coalesce_bridge_arguments(
 		use_json,
-		use_table,
-		filter_ip,
-		filter_mac,
-		filter_name,
-		host_state_path,
-	)
-	.await;
+		just_fetch_default,
+		flag_arguments,
+		cli_arguments,
+		did_specify_cli_arg,
+	) {
+		print_bridge(
+			use_json,
+			use_table,
+			filter_ip,
+			filter_mac,
+			filter_name,
+			host_state_path,
+		)
+		.await;
+	} else {
+		print_default_bridge(use_json, use_table, host_state_path).await;
+	}
 }
 
-async fn get_default_bridge(use_json: bool, use_table: bool, host_state_path: Option<PathBuf>) {
+async fn print_default_bridge(use_json: bool, use_table: bool, host_state_path: Option<PathBuf>) {
 	const TABLE_HEADER: &str = "Bridge Name                    | IP Address      ";
 	const TABLE_HEADER_LINE: &str = "-------------------------------------------------";
 
-	let bridge_state =
-		bridge_state_from_path(get_bridge_state_path(&host_state_path, use_json), use_json).await;
-
-	if let Some((default_bridge_name, opt_bridge_ip)) = bridge_state.get_default_bridge() {
-		if use_table {
-			let rendered_name = get_padded_string(&default_bridge_name, 30);
-			let rendered_ip = get_padded_string(
-				opt_bridge_ip.map_or("<missing data>".to_owned(), |bip| format!("{bip}")),
-				15,
-			);
-			let full_line = format!("{rendered_name} | {rendered_ip}");
-
-			if use_json {
-				info!(
-					id = "bridgectl::get::default_bridge_table",
-					line = TABLE_HEADER
-				);
-				info!(
-					id = "bridgectl::get::default_bridge_table",
-					line = TABLE_HEADER_LINE
-				);
-				info!(
-				  id = "bridgectl::get::default_bridge_table",
-				  line = full_line,
-				  bridge.name = default_bridge_name,
-				  bridge.ip = ?opt_bridge_ip,
-				);
-			} else {
-				println!("{TABLE_HEADER}");
-				println!("{TABLE_HEADER_LINE}");
-				println!("{full_line}");
-			}
-		} else if use_json {
-			info!(
-				id = "bridgectl::get::default_bridge",
-				bridge.ip = opt_bridge_ip.map_or(String::new(), |ip| format!("{ip}")),
-				bridge.name = default_bridge_name,
-			);
-		} else {
-			info!(
-				bridge.ip = opt_bridge_ip.map_or(String::new(), |ip| format!("{ip}")),
-				bridge.name = default_bridge_name,
-				"Found default bridge!",
-			);
-		}
-	} else if use_json {
-		error!(
-		  id = "bridgectl::get::no_default_bridge",
-		  host_state_path = %bridge_state.get_path().display(),
-		  suggestions = valuable(&[
-				"Please double check the configuration file located at the path specified, and ensure `BRIDGE_DEFAULT_NAME` is set to a real bridge name.",
-				"If the bridge isn't set as the default you can use `bridge add --default <name> <ip>`, or `bridge set-default <'name' or 'ip'>`.",
-		  ]),
-		  "No default bridge present in configuration file.",
+	let (default_bridge_name, opt_bridge_ip) = get_default_bridge(use_json, host_state_path).await;
+	if use_json {
+		info!(
+			id = "bridgectl::get::default_bridge_detailed_lookup",
+			line = "Found default bridge, attempting to lookup detailed information to print.",
 		);
 	} else {
-		error!(
-      "\n{:?}",
-			add_context_to(
-				miette!("No default bridge present in the configuration file."),
-				[
-					miette!("Please double check the configuration file located at the path specified, and ensure `BRIDGE_DEFAULT_NAME` is set to a real bridge name."),
-					miette!(
-						help = format!("The bridge configuration file was located at: {}", bridge_state.get_path().display()),
-						"If the bridge isn't set as the default you can use `bridge add --default <name> <ip>`, or `bridge set-default <'name' or 'ip'>`.",
-					),
-				].into_iter(),
-			),
-    );
+		info!(
+			"Found default bridge in configuration, attempting to lookup detailed information..."
+		);
+	}
+
+	match find_identity_from_network(opt_bridge_ip, None, Some(default_bridge_name.as_str())).await
+	{
+		Ok(Some(identity)) => {
+			print_detailed_bridge(use_json, use_table, &identity);
+		}
+		Ok(None) => {
+			if use_json {
+				warn!(
+					id = "bridgectl::get::find_default_identity_failed",
+					line = "find_identity_from_network returned Ok(None) for default bridge.",
+				);
+			} else {
+				warn!("Could not find default bridge, perhaps it is not running, or the file contents are incorrect? Printing out known static information.");
+			}
+		}
+		Err(cause) => {
+			if use_json {
+				warn!(
+					id = "bridgectl::get::failed_to_execute_broadcast",
+					?cause,
+					help = "Could not setup sockets to broadcast and search for detailed information; perhaps another program is already using the single MION port? Trying to find MION from config file (will be less detailed).",
+				);
+			} else {
+				warn!(
+				"\n{:?}",
+				miette!(
+					help = "Perhaps another program is already using the single MION port?",
+					"Could not setup sockets to broadcast and search for detailed information on the default MION (trying to search config file, will be less detailed).",
+				).wrap_err(cause),
+			);
+			}
+		}
+	}
+
+	if use_table {
+		let rendered_name = get_padded_string(&default_bridge_name, 30);
+		let rendered_ip = get_padded_string(
+			opt_bridge_ip.map_or("<missing data>".to_owned(), |bip| format!("{bip}")),
+			15,
+		);
+		let full_line = format!("{rendered_name} | {rendered_ip}");
+
+		if use_json {
+			info!(
+				id = "bridgectl::get::default_bridge_table",
+				line = TABLE_HEADER
+			);
+			info!(
+				id = "bridgectl::get::default_bridge_table",
+				line = TABLE_HEADER_LINE
+			);
+			info!(
+			  id = "bridgectl::get::default_bridge_table",
+			  line = full_line,
+			  bridge.name = default_bridge_name,
+			  bridge.ip = ?opt_bridge_ip,
+			);
+		} else {
+			println!("{TABLE_HEADER}");
+			println!("{TABLE_HEADER_LINE}");
+			println!("{full_line}");
+		}
+	} else if use_json {
+		info!(
+			id = "bridgectl::get::default_bridge",
+			bridge.ip = opt_bridge_ip.map_or(String::new(), |ip| format!("{ip}")),
+			bridge.name = default_bridge_name,
+		);
+	} else {
+		info!(
+			bridge.ip = opt_bridge_ip.map_or(String::new(), |ip| format!("{ip}")),
+			bridge.name = default_bridge_name,
+			"Found default bridge!",
+		);
 	}
 }
 
-async fn get_bridge(
+async fn print_bridge(
 	use_json: bool,
 	use_table: bool,
 	filter_ip: Option<Ipv4Addr>,
@@ -184,7 +160,7 @@ async fn get_bridge(
 			if use_json {
 				error!(
 					id = "bridgectl::get::failed_to_execute_broadcast",
-					cause = ?cause,
+					?cause,
 					help = "Could not setup sockets to broadcast and search for all MIONs; perhaps another program is already using the single MION port? Trying to find MION from config file (will be less detailed).",
 				);
 			} else {
@@ -409,69 +385,6 @@ async fn find_identity_from_network(
 			Err(cause) => Err(cause),
 		}
 	}
-}
-
-fn coalesce_arguments(
-	use_json: bool,
-	flag_arguments: (Option<Ipv4Addr>, Option<String>, Option<String>),
-	cli_arguments: Option<String>,
-) -> (Option<Ipv4Addr>, Option<MacAddress>, Option<String>) {
-	let mac_flag = flag_arguments
-		.1
-		.and_then(|mac| MacAddress::try_from(mac.as_str()).ok());
-	let Some(cli_arg) = cli_arguments else {
-		return (flag_arguments.0, mac_flag, flag_arguments.2);
-	};
-
-	if let Ok(arg_as_ip) = cli_arg.parse::<Ipv4Addr>() {
-		if flag_arguments.0.is_none() {
-			return (Some(arg_as_ip), mac_flag, flag_arguments.2);
-		}
-	}
-	if let Ok(arg_as_mac) = cli_arg.parse::<MacAddress>() {
-		if mac_flag.is_none() {
-			return (flag_arguments.0, Some(arg_as_mac), flag_arguments.2);
-		}
-	}
-	if flag_arguments.2.is_none() {
-		return (flag_arguments.0, mac_flag, Some(cli_arg));
-	}
-
-	if use_json {
-		error!(
-		  id = "bridgectl::get::conflicting_filters_on_get",
-		  flags.ip = ?flag_arguments.0,
-		  flags.mac = ?mac_flag,
-		  flags.name = ?flag_arguments.2,
-		  args.positional = cli_arg,
-		  suggestions = valuable(&[
-			  "If the positional argument is a name, it may be trying to be parsed as something like an IP/Mac.",
-				"Get bridge can only filter down to one bridge, if you're trying to apply multiple ip filters/name filters/mac filters either use multiple `bridgectl get` calls, or use something like `bridgectl list`.",
-		  ]),
-		);
-	} else {
-		error!(
-      "\n{:?}",
-			add_context_to(
-				miette!("Positional argument conflicts with flag arguments!"),
-				[
-					miette!("If the positional argument is a name, it may be trying to be parsed as something like an IP/Mac."),
-					miette!(
-						help = format!(
-        			"Flags: (--ip: `{:?}`, --mac: `{:?}`, --name: `{:?}`) / Positional Argument: `{:?}`",
-        			flag_arguments.0,
-        			mac_flag,
-        			flag_arguments.2,
-        			cli_arg,
-						),
-						"Get bridge can only filter down to one bridge, if you're trying to apply multiple ip filters/name filters/mac filters either use multiple `bridgectl get` calls, or use something like `bridgectl list`.",
-					),
-				].into_iter(),
-			),
-    );
-	}
-
-	std::process::exit(GET_DEFAULT_CONFLICTING_FILTERS);
 }
 
 fn print_detailed_bridge(use_json: bool, use_table: bool, bridge: &MionIdentity) {

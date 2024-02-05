@@ -118,6 +118,49 @@ pub enum Subcommands {
 		)]
 		output_as_table: bool,
 	},
+	#[command(name = "get-parameters", visible_alias = "gp")]
+	GetParameters {
+		#[arg(
+			short = 'd',
+			long = "default",
+			help = "Get the parameters from the default bridge.",
+			long_help = "A shortcut to get parameters from the default bridge, not needing to specify any other lookup fields."
+		)]
+		default: bool,
+		#[arg(
+			short = 'i',
+			long = "ip",
+			help = "The IP Address of the bridge to get parameters from.",
+			long_help = "Get the parameters of the bridge located at this IP address."
+		)]
+		bridge_ipaddr: Option<Ipv4Addr>,
+		#[arg(
+			short = 'm',
+			long = "mac-address",
+			help = "The Mac Address of the bridge to get parameters from.",
+			long_help = "Get the parameters of the bridge found by searching for the bridge with this MAC Address."
+		)]
+		bridge_mac: Option<String>,
+		#[arg(
+			short = 'n',
+			long = "name",
+			help = "The Name of the bridge to get parameters from.",
+			long_help = "Get the parameters of the bridge found by searching for the bridge with this Name."
+		)]
+		bridge_name: Option<String>,
+		#[arg(
+			index = 1,
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what bridge you want to get parameters from with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
+		)]
+		bridge_name_positional: Option<String>,
+		#[arg(
+			index = 2,
+			help = "The list of bridge parameters to fetch by name or index (separated by comma).",
+			long_help = "The list of parameters you want to fetch separated by comma, this can be the name of the field, or the index of the field."
+		)]
+		parameter_names_positional: Option<String>,
+	},
 	/// An alternative to `-h`, or `--help` to show the help for the top level CLI.
 	#[command(name = "help")]
 	Help {},
@@ -180,6 +223,49 @@ pub enum Subcommands {
 		)]
 		bridge_name_positional: Option<String>,
 	},
+	#[command(name = "set-parameters", visible_alias = "sp")]
+	SetParameters {
+		#[arg(
+			short = 'd',
+			long = "default",
+			help = "Set the parameters on the default bridge.",
+			long_help = "A shortcut to set parameters on the default bridge, not needing to specify any other lookup fields."
+		)]
+		default: bool,
+		#[arg(
+			short = 'i',
+			long = "ip",
+			help = "The IP of the bridge to set the parameters on.",
+			long_help = "Set the parameters of the bridge located at this IP address."
+		)]
+		bridge_ipaddr: Option<Ipv4Addr>,
+		#[arg(
+			short = 'm',
+			long = "mac-address",
+			help = "The Mac Address of the bridge to set the parameters on.",
+			long_help = "Set the parameters of the bridge found by searching for the bridge with this MAC Address."
+		)]
+		bridge_mac: Option<String>,
+		#[arg(
+			short = 'n',
+			long = "name",
+			help = "The Name of the bridge to set the parameters on.",
+			long_help = "Set the parameters of the bridge found by searching for the bridge with this Name."
+		)]
+		bridge_name: Option<String>,
+		#[arg(
+			index = 1,
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what bridge you want to set parameters on with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
+		)]
+		bridge_name_positional: Option<String>,
+		#[arg(
+			index = 2,
+			help = "The list of bridge parameters to set in the form of `(name or index)=(value)`.",
+			long_help = "The list of bridge parameters to set in the form of `(name or index)=(value)`. You can specify multiple parameters to set by using ',',"
+		)]
+		parameter_names_positional: Option<String>,
+	},
 }
 impl Subcommands {
 	/// If this subcommand matches a particular name.
@@ -202,6 +288,14 @@ impl Subcommands {
 				bridge_name_positional,
 				output_as_table,
 			} => name == "get",
+			Self::GetParameters {
+				default,
+				bridge_ipaddr,
+				bridge_mac,
+				bridge_name,
+				bridge_name_positional,
+				parameter_names_positional,
+			} => name == "get-parameters" || name == "gp",
 			Self::Help {} => name == "help",
 			Self::List {
 				use_cache,
@@ -216,6 +310,14 @@ impl Subcommands {
 				bridge_name,
 				bridge_name_positional,
 			} => name == "set-default" || name == "set_default",
+			Self::SetParameters {
+				default,
+				bridge_ipaddr,
+				bridge_mac,
+				bridge_name,
+				bridge_name_positional,
+				parameter_names_positional,
+			} => name == "set-parameters" || name == "sp",
 			_ => false,
 		}
 	}

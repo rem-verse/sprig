@@ -13,7 +13,10 @@ pub mod knobs;
 pub mod utils;
 
 use crate::{
-	commands::{handle_add_or_update, handle_get, handle_help, handle_list, handle_remove_bridge},
+	commands::{
+		handle_add_or_update, handle_get, handle_get_parameters, handle_help, handle_list,
+		handle_remove_bridge, handle_set_default_bridge, handle_set_parameters,
+	},
 	exit_codes::{
 		ARGUMENT_PARSING_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE, NO_ARGUMENT_SPECIFIED_FAILURE,
 		SHOULD_NEVER_HAPPEN_FAILURE,
@@ -25,11 +28,14 @@ use crate::{
 	utils::get_bridge_state_path,
 };
 use clap::Parser;
-use commands::handle_set_default_bridge;
 use log::install_logging_handlers;
 use miette::miette;
 use tracing::error;
 
+#[allow(
+	// Most of this is just farming out to subcommands which can't be shorter.
+	clippy::too_many_lines,
+)]
 #[tokio::main]
 async fn main() {
 	let (argv, use_json) = bootstrap_cli();
@@ -94,6 +100,24 @@ async fn main() {
 			)
 			.await;
 		}
+		Subcommands::GetParameters {
+			default,
+			bridge_ipaddr,
+			bridge_mac,
+			bridge_name,
+			bridge_name_positional,
+			parameter_names_positional,
+		} => {
+			handle_get_parameters(
+				use_json,
+				default,
+				(bridge_ipaddr, bridge_mac, bridge_name),
+				bridge_name_positional,
+				parameter_names_positional,
+				argv.bridge_state_path,
+			)
+			.await;
+		}
 		// Help is handled above.
 		Subcommands::Help {} => unreachable!(),
 		Subcommands::List {
@@ -130,6 +154,24 @@ async fn main() {
 				use_json,
 				bridge_name,
 				bridge_name_positional,
+				argv.bridge_state_path,
+			)
+			.await;
+		}
+		Subcommands::SetParameters {
+			default,
+			bridge_ipaddr,
+			bridge_mac,
+			bridge_name,
+			bridge_name_positional,
+			parameter_names_positional,
+		} => {
+			handle_set_parameters(
+				use_json,
+				default,
+				(bridge_ipaddr, bridge_mac, bridge_name),
+				bridge_name_positional,
+				parameter_names_positional,
 				argv.bridge_state_path,
 			)
 			.await;

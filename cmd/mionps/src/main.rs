@@ -166,7 +166,7 @@ async fn do_set(ip: Ipv4Addr, timeout: Option<Duration>, offset: u16, value: u8,
 				_ => 0,
 			};
 
-			println!("mionps: ERROR: set response returned error (status={size_error_code}/0)",);
+			println!("mionps: ERROR: set response returned error (status={size_error_code}/0)");
 			if verbose {
 				log_verbose("tcpSessionFn returned 1010");
 			}

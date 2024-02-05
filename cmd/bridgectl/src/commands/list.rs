@@ -1,6 +1,7 @@
 //! Handling listing all the bridges on the network, or cached bridges.
 
 use crate::{
+	commands::argv_helpers::get_padded_string,
 	exit_codes::LIST_COULD_NOT_SEARCH,
 	utils::{add_context_to, bridge_state_from_path, get_bridge_state_path},
 };
@@ -9,7 +10,7 @@ use cat_dev::{
 	BridgeHostState,
 };
 use miette::miette;
-use std::{fmt::Display, path::PathBuf};
+use std::path::PathBuf;
 use terminal_size::{terminal_size, Width as TermWidth};
 use tokio::time::{sleep, Duration};
 use tracing::{error, field::valuable, info, warn};
@@ -51,7 +52,7 @@ async fn list_from_network(use_json: bool, use_table: bool, scan_timeout: Option
 			if use_json {
 				error!(
 					id = "bridgectl::list::failed_to_execute_broadcast",
-					cause = ?cause,
+					?cause,
 					help = "Could not setup sockets to broadcast and search for all MIONs; perhaps another program is already using the single MION port?",
 				);
 			} else {
@@ -282,19 +283,4 @@ fn list_from_cache(use_json: bool, use_table: bool, host_state: &BridgeHostState
 			);
 		}
 	}
-}
-
-pub(crate) fn get_padded_string(ty: impl Display, max_length: usize) -> String {
-	let mut to_return = String::with_capacity(max_length);
-	let as_display = format!("{ty}");
-	if as_display.len() > max_length {
-		to_return.push_str(&as_display[..(max_length - 3)]);
-		to_return.push_str("...");
-	} else {
-		to_return = as_display;
-		while to_return.len() < max_length {
-			to_return.push(' ');
-		}
-	}
-	to_return
 }

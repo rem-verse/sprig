@@ -161,7 +161,7 @@ async fn mion_find_by_name_or_ip(use_json: bool, bridge_name_or_ip: String) -> (
 			if use_json {
 				error!(
 					id = "bridgectl::add::failed_to_execute_broadcast",
-					cause = ?cause,
+					?cause,
 					help = "Could not setup sockets to broadcast and search for all MIONs; perhaps another program is already using the single MION port?",
 				);
 			} else {
@@ -245,7 +245,7 @@ async fn mion_find_name_from_ip(use_json: bool, bridge_ip: Ipv4Addr) -> String {
 			if use_json {
 				error!(
 					id = "bridgectl::add::failed_to_execute_search",
-					cause = ?cause,
+					?cause,
 					ip = %bridge_ip,
 					help = "Could not send packet directly to MION perhaps it's not on, or reachable?",
 				);
