@@ -22,6 +22,7 @@ pub async fn handle_get_parameters(
 	bridge_flag_arguments: (Option<Ipv4Addr>, Option<String>, Option<String>),
 	bridge_or_params_arguments: Option<String>,
 	only_params_arguments: Option<String>,
+	parameter_space_port: Option<u16>,
 	host_state_path: Option<PathBuf>,
 ) {
 	let had_params_arg = only_params_arguments.is_some();
@@ -63,8 +64,12 @@ pub async fn handle_get_parameters(
 		host_state_path,
 	)
 	.await;
-	let parameters = fetch_parameters(use_json, bridge_ip).await;
-	print_parameters(use_json, &param_filters, &parameters);
+
+	print_parameters(
+		use_json,
+		&param_filters,
+		&fetch_parameters(use_json, bridge_ip, parameter_space_port).await,
+	);
 }
 
 fn print_parameters(use_json: bool, parameter_filters: &str, parameters: &DumpedMionParameters) {
@@ -107,8 +112,12 @@ fn print_parameters(use_json: bool, parameter_filters: &str, parameters: &Dumped
 	}
 }
 
-async fn fetch_parameters(use_json: bool, bridge_ip: Ipv4Addr) -> DumpedMionParameters {
-	match get_parameters(bridge_ip, None).await {
+async fn fetch_parameters(
+	use_json: bool,
+	bridge_ip: Ipv4Addr,
+	bridge_port: Option<u16>,
+) -> DumpedMionParameters {
+	match get_parameters(bridge_ip, bridge_port, None).await {
 		Ok(params) => params,
 		Err(cause) => {
 			if use_json {

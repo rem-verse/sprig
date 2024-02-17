@@ -109,6 +109,13 @@ pub enum Subcommands {
 			long_help = "If you don't want to specify what bridge you want to get parameters from with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
 		bridge_name_positional: Option<String>,
+		#[arg(
+			short = 'p',
+			long = "port",
+			help = "The 'parameter space' port to use.",
+			long_help = "The 'parameter space' port to use. Official tools don't support changing this, but it is configurable in `setup.cgi`."
+		)]
+		parameter_space_port: Option<u16>,
 	},
 	/// Get info on a single bridge, using any piece of information we can search for.
 	#[command(name = "get")]
@@ -197,6 +204,13 @@ pub enum Subcommands {
 			long_help = "The list of parameters you want to fetch separated by comma, this can be the name of the field, or the index of the field."
 		)]
 		parameter_names_positional: Option<String>,
+		#[arg(
+			short = 'p',
+			long = "port",
+			help = "The 'parameter space' port to use.",
+			long_help = "The 'parameter space' port to use. Official tools don't support changing this, but it is configurable in `setup.cgi`."
+		)]
+		parameter_space_port: Option<u16>,
 	},
 	/// An alternative to `-h`, or `--help` to show the help for the top level CLI.
 	#[command(name = "help")]
@@ -302,6 +316,13 @@ pub enum Subcommands {
 			long_help = "The list of bridge parameters to set in the form of `(name or index)=(value)`. You can specify multiple parameters to set by using ',',"
 		)]
 		parameter_names_positional: Option<String>,
+		#[arg(
+			short = 'p',
+			long = "port",
+			help = "The 'parameter space' port to use.",
+			long_help = "The 'parameter space' port to use. Official tools don't support changing this, but it is configurable in `setup.cgi`."
+		)]
+		parameter_space_port: Option<u16>,
 	},
 }
 impl Subcommands {
@@ -323,6 +344,7 @@ impl Subcommands {
 				bridge_mac,
 				bridge_name,
 				bridge_name_positional,
+				parameter_space_port,
 			} => name == "dump-parameters" || name == "dp",
 			Self::Get {
 				default,
@@ -339,6 +361,7 @@ impl Subcommands {
 				bridge_name,
 				bridge_name_positional,
 				parameter_names_positional,
+				parameter_space_port,
 			} => name == "get-parameters" || name == "gp",
 			Self::Help {} => name == "help",
 			Self::List {
@@ -361,6 +384,7 @@ impl Subcommands {
 				bridge_name,
 				bridge_name_positional,
 				parameter_names_positional,
+				parameter_space_port,
 			} => name == "set-parameters" || name == "sp",
 			_ => false,
 		}

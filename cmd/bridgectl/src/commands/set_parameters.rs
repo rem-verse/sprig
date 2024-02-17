@@ -23,6 +23,7 @@ pub async fn handle_set_parameters(
 	bridge_flag_arguments: (Option<Ipv4Addr>, Option<String>, Option<String>),
 	bridge_or_params_arguments: Option<String>,
 	only_params_arguments: Option<String>,
+	parameter_space_port: Option<u16>,
 	host_state_path: Option<PathBuf>,
 ) {
 	let had_params_arg = only_params_arguments.is_some();
@@ -65,15 +66,23 @@ pub async fn handle_set_parameters(
 		host_state_path,
 	)
 	.await;
-	do_set_parameters(use_json, bridge_ip, parameters_to_set).await;
+	do_set_parameters(use_json, bridge_ip, parameter_space_port, parameters_to_set).await;
 }
 
 async fn do_set_parameters(
 	use_json: bool,
 	ip: Ipv4Addr,
+	parameter_space_port: Option<u16>,
 	parameters_to_set: Vec<(ParameterLocationSpecification, u8)>,
 ) {
-	match set_parameters(parameters_to_set.into_iter(), ip, None).await {
+	match set_parameters(
+		parameters_to_set.into_iter(),
+		ip,
+		parameter_space_port,
+		None,
+	)
+	.await
+	{
 		Ok(_) => {
 			info!("Successfully set your parameters!");
 		}
