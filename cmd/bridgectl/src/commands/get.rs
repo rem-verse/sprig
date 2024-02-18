@@ -2,7 +2,9 @@
 
 use crate::{
 	commands::argv_helpers::{coalesce_bridge_arguments, get_default_bridge, get_padded_string},
-	exit_codes::{GET_FAILED_TO_FIND_SPECIFIC_DEVICE, GET_FAILED_TO_SEARCH_FOR_DEVICE},
+	exit_codes::{
+		GET_FAILED_TO_FIND_SPECIFIC_DEVICE, GET_FAILED_TO_SEARCH_FOR_DEVICE, GET_NO_BRIDGE_FILTERS,
+	},
 	knobs::env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	utils::{add_context_to, bridge_state_from_path, get_bridge_state_path},
 };
@@ -46,23 +48,42 @@ pub async fn handle_get(
 		cli_arguments,
 		did_specify_cli_arg,
 	) {
-		print_bridge(
-			use_json,
-			use_table,
-			filter_ip,
-			filter_mac,
-			filter_name,
-			host_state_path,
-		)
-		.await;
-	} else if BRIDGE_CURRENT_NAME.is_some() || BRIDGE_CURRENT_IP_ADDRESS.is_some() {
-		print_mochiato_bridge(
-			use_json,
-			use_table,
-			BRIDGE_CURRENT_NAME.clone(),
-			*BRIDGE_CURRENT_IP_ADDRESS,
-		)
-		.await;
+		if filter_ip.is_none() && filter_mac.is_none() && filter_name.is_none() {
+			if BRIDGE_CURRENT_NAME.is_some() || BRIDGE_CURRENT_IP_ADDRESS.is_some() {
+				print_mochiato_bridge(
+					use_json,
+					use_table,
+					BRIDGE_CURRENT_NAME.clone(),
+					*BRIDGE_CURRENT_IP_ADDRESS,
+				)
+				.await;
+			} else if use_json {
+				error!(
+					id = "bridgectl::get::no_bridge_filters",
+					help = "You didn't specify any bridge to get the information of!",
+				);
+				std::process::exit(GET_NO_BRIDGE_FILTERS);
+			} else {
+				error!(
+					"\n{:?}",
+					miette!(
+						help = "See `bridgectl get --help` for more information!",
+						"You didn't specify any bridge to get the information of!",
+					),
+				);
+				std::process::exit(GET_NO_BRIDGE_FILTERS);
+			}
+		} else {
+			print_bridge(
+				use_json,
+				use_table,
+				filter_ip,
+				filter_mac,
+				filter_name,
+				host_state_path,
+			)
+			.await;
+		}
 	} else {
 		print_default_bridge(use_json, use_table, host_state_path).await;
 	}

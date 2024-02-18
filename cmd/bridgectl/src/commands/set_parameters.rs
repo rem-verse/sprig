@@ -3,7 +3,7 @@ use crate::{
 	exit_codes::{
 		SET_PARAMS_FAILED_TO_SET_PARAMS, SET_PARAMS_INVALID_PARAMETER_SET_STRING,
 		SET_PARAMS_INVALID_PARAMETER_VALUE, SET_PARAMS_NO_AVAILABLE_BRIDGE,
-		SET_PARAMS_NO_PARAMETERS_SPECIFIED,
+		SET_PARAMS_NO_BRIDGE_FILTERS, SET_PARAMS_NO_PARAMETERS_SPECIFIED,
 	},
 	knobs::env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	utils::add_context_to,
@@ -180,6 +180,10 @@ fn parse_parameters_to_set_list(
 	locations
 }
 
+#[allow(
+	// This is barely over, and I don't think it's worth it to lower the count.
+	clippy::too_many_lines,
+)]
 async fn get_a_bridge_ip(
 	use_json: bool,
 	just_fetch_default: bool,
@@ -195,6 +199,29 @@ async fn get_a_bridge_ip(
 		bridge_or_params_argument,
 		had_params_arg,
 	) {
+		if filter_ip.is_none() && filter_mac.is_none() && filter_name.is_none() {
+			if let Some(ip_address) = *BRIDGE_CURRENT_IP_ADDRESS {
+				return ip_address;
+			} else if let Some(name) = BRIDGE_CURRENT_NAME.as_deref() {
+				return get_mochiato_bridge_ip(use_json, name).await;
+			} else if use_json {
+				error!(
+					id = "bridgectl::set_parameters::no_bridge_filters",
+					help = "You didn't specify any bridge to set the parameters of!",
+				);
+				std::process::exit(SET_PARAMS_NO_BRIDGE_FILTERS);
+			} else {
+				error!(
+					"\n{:?}",
+					miette!(
+						help = "See `bridgectl set-params --help` for more information!",
+						"You didn't specify any bridge to set the parameters of!",
+					),
+				);
+				std::process::exit(SET_PARAMS_NO_BRIDGE_FILTERS);
+			}
+		}
+
 		if let Some(ip) = filter_ip {
 			return ip;
 		}
@@ -266,10 +293,6 @@ async fn get_a_bridge_ip(
 				std::process::exit(SET_PARAMS_NO_AVAILABLE_BRIDGE);
 			}
 		}
-	} else if let Some(ip_addr) = *BRIDGE_CURRENT_IP_ADDRESS {
-		ip_addr
-	} else if let Some(name) = BRIDGE_CURRENT_NAME.as_deref() {
-		get_mochiato_bridge_ip(use_json, name).await
 	} else {
 		get_default_bridge_ip(use_json, host_state_path).await
 	}
