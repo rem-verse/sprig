@@ -5,6 +5,7 @@ use crate::{
 		SET_PARAMS_INVALID_PARAMETER_VALUE, SET_PARAMS_NO_AVAILABLE_BRIDGE,
 		SET_PARAMS_NO_PARAMETERS_SPECIFIED,
 	},
+	knobs::env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	utils::add_context_to,
 };
 use cat_dev::mion::{
@@ -34,21 +35,23 @@ pub async fn handle_set_parameters(
 	} else {
 		if use_json {
 			error!(
-				id = "bridgectl::get_parameters::no_params",
+				id = "bridgectl::set_parameters::no_params",
 				suggestions = valuable(&[
-					"You can run `bridgectl get-params <bridge> <params>`, `bridgectl gp --default <params>`, etc.",
-					"You can run `bridgectl get-params --help` to get more information.",
+					"You can run `bridgectl set-params <bridge> <params>`, `bridgectl sp --default <params>`, etc.",
+					"If running in a mochiato/cafe/cafex environment you can run: `bridgectl set-params <params>`.",
+					"You can run `bridgectl set-params --help` to get more information.",
 				]),
-				"No parameter arguments passed to `bridgectl get-params`, but we need a list of parameters to fetch!",
+				"No parameter arguments passed to `bridgectl set-params`, but we need a list of parameters to fetch!",
 			);
 		} else {
 			error!(
         "\n{:?}",
         add_context_to(
-          miette!("No parameter arguments passed to `bridgectl get-params`, but we need a list of parameters to fetch"),
+          miette!("No parameter arguments passed to `bridgectl set-params`, but we need a list of parameters to fetch"),
           [
-            miette!("You can run `bridgectl get-params <bridge> <params>`, `bridgectl gp --default <params>`, etc."),
-            miette!("You can run `bridgectl get-params --help` to get more information on how to use this command."),
+            miette!("You can run `bridgectl set-params <bridge> <params>`, `bridgectl sp --default <params>`, etc."),
+						miette!("If running in a mochiato/cafe/cafex environment you can run: `bridgectl set-params <params>`."),
+            miette!("You can run `bridgectl set-params --help` to get more information on how to use this command."),
           ].into_iter(),
         ),
       );
@@ -211,7 +214,7 @@ async fn get_a_bridge_ip(
 			Ok(None) => {
 				if use_json {
 					error!(
-					  id = "bridgectl::set_parameters::get_failed_to_find_a_device",
+					  id = "bridgectl::set_parameters::set_failed_to_find_a_device",
 					  filter.ip = ?filter_ip,
 					  filter.mac = ?filter_mac,
 					  filter.name = ?filter_name,
@@ -227,7 +230,7 @@ async fn get_a_bridge_ip(
 						"\n{:?}",
 						add_context_to(
 							miette!(
-								"Failed to find bridge that matched the series of filters, cannot get parameters.",
+								"Failed to find bridge that matched the series of filters, cannot set parameters.",
 							),
 							[
 								miette!("Please ensure the CAT-DEV you're trying to find is powered on, and running."),
@@ -263,8 +266,67 @@ async fn get_a_bridge_ip(
 				std::process::exit(SET_PARAMS_NO_AVAILABLE_BRIDGE);
 			}
 		}
+	} else if let Some(ip_addr) = *BRIDGE_CURRENT_IP_ADDRESS {
+		ip_addr
+	} else if let Some(name) = BRIDGE_CURRENT_NAME.as_deref() {
+		get_mochiato_bridge_ip(use_json, name).await
 	} else {
 		get_default_bridge_ip(use_json, host_state_path).await
+	}
+}
+
+async fn get_mochiato_bridge_ip(use_json: bool, bridge_name: &str) -> Ipv4Addr {
+	match find_mion(MIONFindBy::Name(bridge_name.to_owned()), false, None).await {
+		Ok(Some(identity)) => identity.ip_address(),
+		Ok(None) => {
+			if use_json {
+				error!(
+					  id = "bridgectl::set_parameters::failed_to_find_ip_of_mochiato_bridge",
+					  bridge.name = bridge_name,
+					  suggestions = valuable(&[
+						  "Please ensure the default CAT-DEV you're trying to find is powered on, and running.",
+						  "Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+						  "If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+						  "Ensure `cafe`/`cafex`/`mochiato` has been loaded with the latest information.",
+					  ]),
+					);
+			} else {
+				error!(
+						"\n{:?}",
+						add_context_to(
+							miette!(
+								"Failed to find the `cafe`/`cafex`/`mochiato` bridge's ip by broadcasting, and was not specified, cannot set parameters.",
+							),
+							[
+								miette!("Please ensure the default CAT-DEV you're trying to find is powered on, and running."),
+								miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
+								miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
+								miette!("Ensure `cafe`/`cafex`/`mochiato` has been loaded with the latest information."),
+							].into_iter(),
+						),
+					);
+			}
+			std::process::exit(SET_PARAMS_NO_AVAILABLE_BRIDGE);
+		}
+		Err(cause) => {
+			if use_json {
+				error!(
+						id = "bridgectl::set_parameters::failed_to_execute_broadcast",
+						?cause,
+						help = "Could not setup sockets to broadcast and search for the default MION; perhaps another program is already using the single MION port?",
+					);
+			} else {
+				error!(
+					"\n{:?}",
+					miette!(
+						help = "Perhaps another program is already using the single MION port?",
+						"Could not setup sockets to broadcast and search for the default MION.",
+					)
+					.wrap_err(cause),
+				);
+			}
+			std::process::exit(SET_PARAMS_NO_AVAILABLE_BRIDGE);
+		}
 	}
 }
 
@@ -292,7 +354,7 @@ async fn get_default_bridge_ip(use_json: bool, host_state_path: Option<PathBuf>)
 						"\n{:?}",
 						add_context_to(
 							miette!(
-								"Failed to find the default bridge's ip since the configuration file did not have it, cannot get parameters.",
+								"Failed to find the default bridge's ip since the configuration file did not have it, cannot set parameters.",
 							),
 							[
 								miette!("Please ensure the default CAT-DEV you're trying to find is powered on, and running."),

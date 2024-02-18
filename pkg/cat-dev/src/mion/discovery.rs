@@ -20,7 +20,7 @@
 //! If you are in different VLANs/Subnets and you do have the ability to run
 //! a repeater heading in BOTH directions (both are required for all bits of
 //! functionality!), you want to broadcast the port
-//! [`crate::mion::MION_CONTROL_PORT`] aka 7974. Otherwise things will not
+//! [`crate::mion::proto::MION_CONTROL_PORT`] aka 7974. Otherwise things will not
 //! work.
 
 use crate::{
@@ -126,7 +126,7 @@ where
 /// Discover all the Cat-Dev Bridges actively on the network.
 ///
 /// NOTE: This will only find MIONs within the time window of
-///   [`crate::mion::MION_ANNOUNCE_TIMEOUT_SECONDS`].
+///   [`crate::mion::proto::MION_ANNOUNCE_TIMEOUT_SECONDS`].
 ///   To stop scanning for broadcasts early, simply close the receiving end of
 ///   the channel.
 ///

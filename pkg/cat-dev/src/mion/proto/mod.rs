@@ -18,6 +18,7 @@
 //!   actually configurable in `http://<mionip>/setup.cgi`. Specifically you
 //!   can change it under "Parameter Space".
 
+pub mod cgis;
 pub mod control;
 pub mod parameter;
 

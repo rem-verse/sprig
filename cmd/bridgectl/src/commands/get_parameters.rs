@@ -4,6 +4,7 @@ use crate::{
 		GET_PARAMS_FAILED_TO_GET_PARAMS, GET_PARAMS_NO_AVAILABLE_BRIDGE,
 		GET_PARAMS_NO_PARAMETERS_SPECIFIED,
 	},
+	knobs::env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	utils::add_context_to,
 };
 use cat_dev::mion::{
@@ -36,6 +37,7 @@ pub async fn handle_get_parameters(
 				id = "bridgectl::get_params::no_params",
 				suggestions = valuable(&[
 					"You can run `bridgectl get-params <bridge> <params>`, `bridgectl gp --default <params>`, etc.",
+					"If running in a mochiato/cafe/cafex environment you can run: `bridgectl get-params <parms>`.",
 					"You can run `bridgectl get-params --help` to get more information.",
 				]),
 				"No parameter arguments passed to `bridgectl get-params`, but we need a list of parameters to fetch!",
@@ -47,6 +49,7 @@ pub async fn handle_get_parameters(
           miette!("No parameter arguments passed to `bridgectl get-params`, but we need a list of parameters to fetch"),
           [
             miette!("You can run `bridgectl get-params <bridge> <params>`, `bridgectl gp --default <params>`, etc."),
+						miette!("If running in a mochiato/cafe/cafex environment you can run: `bridgectl get-params <params>`."),
             miette!("You can run `bridgectl get-params --help` to get more information on how to use this command."),
           ].into_iter(),
         ),
@@ -227,8 +230,67 @@ async fn get_a_bridge_ip(
 				std::process::exit(GET_PARAMS_NO_AVAILABLE_BRIDGE);
 			}
 		}
+	} else if let Some(ip_address) = *BRIDGE_CURRENT_IP_ADDRESS {
+		ip_address
+	} else if let Some(name) = BRIDGE_CURRENT_NAME.as_deref() {
+		get_mochiato_bridge_ip(use_json, name).await
 	} else {
 		get_default_bridge_ip(use_json, host_state_path).await
+	}
+}
+
+async fn get_mochiato_bridge_ip(use_json: bool, bridge_name: &str) -> Ipv4Addr {
+	match find_mion(MIONFindBy::Name(bridge_name.to_owned()), false, None).await {
+		Ok(Some(identity)) => identity.ip_address(),
+		Ok(None) => {
+			if use_json {
+				error!(
+					  id = "bridgectl::get_parameters::failed_to_find_ip_of_mochiato_bridge",
+					  bridge.name = bridge_name,
+					  suggestions = valuable(&[
+						  "Please ensure the default CAT-DEV you're trying to find is powered on, and running.",
+						  "Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+						  "If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+						  "Ensure `cafe`/`cafex`/`mochiato` has been loaded with the latest information.",
+					  ]),
+					);
+			} else {
+				error!(
+						"\n{:?}",
+						add_context_to(
+							miette!(
+								"Failed to find the `cafe`/`cafex`/`mochiato` bridge's ip by broadcasting, and was not specified, cannot get parameters.",
+							),
+							[
+								miette!("Please ensure the default CAT-DEV you're trying to find is powered on, and running."),
+								miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
+								miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
+								miette!("Ensure `cafe`/`cafex`/`mochiato` has been loaded with the latest information."),
+							].into_iter(),
+						),
+					);
+			}
+			std::process::exit(GET_PARAMS_NO_AVAILABLE_BRIDGE);
+		}
+		Err(cause) => {
+			if use_json {
+				error!(
+						id = "bridgectl::get_parameters::failed_to_execute_broadcast",
+						?cause,
+						help = "Could not setup sockets to broadcast and search for the default MION; perhaps another program is already using the single MION port?",
+					);
+			} else {
+				error!(
+					"\n{:?}",
+					miette!(
+						help = "Perhaps another program is already using the single MION port?",
+						"Could not setup sockets to broadcast and search for the default MION.",
+					)
+					.wrap_err(cause),
+				);
+			}
+			std::process::exit(GET_PARAMS_NO_AVAILABLE_BRIDGE);
+		}
 	}
 }
 

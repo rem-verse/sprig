@@ -32,7 +32,7 @@ use tokio::{
 /// ## Errors
 ///
 /// - If we fail to connect, send, or receive data from the MION IP Address
-///   on the [`MION_PARAMETER_PORT`].
+///   on the [`DEFAULT_MION_PARAMETER_PORT`].
 /// - If we do not get a response within [`MION_PARAMETER_TIMEOUT_SECONDS`].
 /// - If the MION responded with invalid data.
 pub async fn get_parameters(
@@ -122,7 +122,7 @@ where
 /// ## Errors
 ///
 /// - If we fail to connect, send, or receive data from the MION IP Address
-///   on the [`MION_PARAMETER_PORT`].
+///   on the [`DEFAULT_MION_PARAMETER_PORT`].
 /// - If we do not get a response within [`MION_PARAMETER_TIMEOUT_SECONDS`].
 /// - If the MION responded with invalid data.
 /// - If the MION responds with a non successful status code.
