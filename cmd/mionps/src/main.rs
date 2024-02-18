@@ -111,6 +111,7 @@ fn main() {
 	} else {
 		let Ok(parameters) = runtime.block_on(get_parameters_with_logging_hooks(
 			ip,
+			None,
 			opts.timeout_ms.map(Duration::from_millis),
 			create_session_logging_hook(opts.verbose),
 			create_connection_established_logging_hook(opts.verbose),
@@ -138,6 +139,7 @@ async fn do_set(ip: Ipv4Addr, timeout: Option<Duration>, offset: u16, value: u8,
 	let (result, old_values) = match set_parameters_with_logging_hooks(
 		vec![(ParameterLocationSpecification::Index(offset), value)].into_iter(),
 		ip,
+		None,
 		timeout,
 		create_session_logging_hook(verbose),
 		create_connection_established_logging_hook(verbose),

@@ -42,7 +42,7 @@ async fn main() {
 	let (argv, use_json) = bootstrap_cli();
 
 	if argv.help || argv.commands.is_none() || matches!(argv.commands, Some(Subcommands::Help {})) {
-		let should_error = argv.commands.is_none();
+		let should_error = !argv.help && argv.commands.is_none();
 		handle_help(use_json, argv.commands);
 		std::process::exit(if should_error {
 			NO_ARGUMENT_SPECIFIED_FAILURE
@@ -89,12 +89,14 @@ async fn main() {
 			bridge_mac,
 			bridge_name,
 			bridge_name_positional,
+			parameter_space_port,
 		} => {
 			handle_dump_parameters(
 				use_json,
 				default,
 				(bridge_ipaddr, bridge_mac, bridge_name),
 				bridge_name_positional,
+				parameter_space_port,
 				argv.bridge_state_path,
 			)
 			.await;
@@ -124,6 +126,7 @@ async fn main() {
 			bridge_name,
 			bridge_name_positional,
 			parameter_names_positional,
+			parameter_space_port,
 		} => {
 			handle_get_parameters(
 				use_json,
@@ -131,6 +134,7 @@ async fn main() {
 				(bridge_ipaddr, bridge_mac, bridge_name),
 				bridge_name_positional,
 				parameter_names_positional,
+				parameter_space_port,
 				argv.bridge_state_path,
 			)
 			.await;
@@ -182,6 +186,7 @@ async fn main() {
 			bridge_name,
 			bridge_name_positional,
 			parameter_names_positional,
+			parameter_space_port,
 		} => {
 			handle_set_parameters(
 				use_json,
@@ -189,6 +194,7 @@ async fn main() {
 				(bridge_ipaddr, bridge_mac, bridge_name),
 				bridge_name_positional,
 				parameter_names_positional,
+				parameter_space_port,
 				argv.bridge_state_path,
 			)
 			.await;

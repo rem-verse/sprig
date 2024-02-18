@@ -85,6 +85,7 @@ fn do_set(ip: Ipv4Addr, potential_offset: Option<u64>, set_to_value: Option<u64>
 			.into_iter(),
 			ip,
 			None,
+			None,
 		))
 		.map(|(resp, changed)| (resp.get_return_code(), changed))
 	{
@@ -168,7 +169,7 @@ fn do_dump(ip: Ipv4Addr) {
 
 fn do_get_parameters(ip: Ipv4Addr) -> DumpedMionParameters {
 	let runtime = create_runtime_or_exit(ip);
-	match runtime.block_on(get_parameters(ip, None)) {
+	match runtime.block_on(get_parameters(ip, None, None)) {
 		Ok(val) => val,
 		Err(cause) => {
 			let opt_error_code = match cause {

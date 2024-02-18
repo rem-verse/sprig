@@ -5,7 +5,10 @@
 //! specific item.
 
 use bytes::Bytes;
+use hyper::{http::Error as HttpError, Error as HyperError};
+use local_ip_address::Error as LocalIpAddressError;
 use miette::Diagnostic;
+use serde_urlencoded::ser::Error as SerdeUrlEncodeError;
 use std::string::FromUtf8Error;
 use thiserror::Error;
 use tokio::{io::Error as IoError, task::JoinError};
@@ -113,6 +116,9 @@ pub enum APIError {
 	#[error("The MION Parameter body you passed in was: {0} bytes long, but must be exactly 512 bytes long!")]
 	#[diagnostic(code(cat_dev::api::parameter::body_incorrect_length))]
 	MIONParameterBodyNotCorrectLength(usize),
+	#[error("Unknown operation for `control.cgi`: [{0}]")]
+	#[diagnostic(code(cat_dev::api::control::unknown_operation))]
+	UnknownControlOperation(String),
 }
 
 /// Trying to interact with the filesystem has resulted in an error.
@@ -188,6 +194,18 @@ pub enum NetworkError {
 	)]
 	#[diagnostic(code(cat_dev::net::timeout))]
 	TimeoutError,
+	/// See [`hyper::http::Error`] for details.
+	#[error("Underlying HTTP error: {0}")]
+	#[diagnostic(code(cat_dev::net::proto::http_failure))]
+	HttpError(#[from] HttpError),
+	/// See [`hyper::Error`] for details.
+	#[error("Underlying HTTP client error: {0}")]
+	#[diagnostic(code(cat_dev::net::http_failure))]
+	HyperError(#[from] HyperError),
+	/// See [`local_ip_address::Error`] for details.
+	#[error("Failure fetching local ip address: {0}")]
+	#[diagnostic(code(cat_dev::net::local_ip_failure))]
+	LocalIpError(#[from] LocalIpAddressError),
 }
 
 /// We tried parsing some data from the network, but failed to do so, someone
@@ -232,4 +250,21 @@ pub enum NetworkParseError {
 	#[error("Error code received from MION Params: `{0}`")]
 	#[diagnostic(code(cat_dev::net::parse::params::error_code))]
 	ParamsPacketErrorCode(i32),
+	/// See [`serde_urlencoded::ser::Error`] for details.
+	#[error("Failed to encode data as form data: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::http::encode::form_data_error))]
+	FormDataEncodeError(#[from] SerdeUrlEncodeError),
+	/// We got an unexpected status code from the CAT-DEV.
+	#[error("Got an unexpected status code that wasn't successful over HTTP: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::http::bad_status_code_without_body))]
+	UnexpectedStatusCodeNoBody(u16),
+	#[error("Got an unexpected status code that wasn't successful over HTTP: {0}, Body: {1:02x?}")]
+	UnexpectedStatusCode(u16, Bytes),
+	/// We expected to read UTF-8 data from the network, but it wasn't UTF-8.
+	#[error("Data read from the network was expected to be UTF-8, but was not: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::utf8_expected))]
+	InvalidDataNeedsUTF8(#[from] FromUtf8Error),
+	#[error("Could not parse HTML response could not find one of the body tags: `<body>`, or `</body>`: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::html::no_body_tag))]
+	HtmlResponseMissingBody(String),
 }

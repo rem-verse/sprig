@@ -1,6 +1,10 @@
 use crate::{
 	commands::argv_helpers::{coalesce_bridge_arguments, get_default_bridge},
-	exit_codes::{DUMP_PARAMS_FAILED_TO_GET_PARAMS, DUMP_PARAMS_NO_AVAILABLE_BRIDGE},
+	exit_codes::{
+		DUMP_PARAMS_FAILED_TO_GET_PARAMS, DUMP_PARAMS_NO_AVAILABLE_BRIDGE,
+		DUMP_PARAMS_NO_BRIDGE_FILTERS,
+	},
+	knobs::env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	utils::add_context_to,
 };
 use cat_dev::mion::{
@@ -18,6 +22,7 @@ pub async fn handle_dump_parameters(
 	just_fetch_default: bool,
 	bridge_flag_arguments: (Option<Ipv4Addr>, Option<String>, Option<String>),
 	bridge_argv: Option<String>,
+	parameter_space_port: Option<u16>,
 	host_state_path: Option<PathBuf>,
 ) {
 	let had_arg = bridge_argv.is_some();
@@ -30,7 +35,11 @@ pub async fn handle_dump_parameters(
 		host_state_path,
 	)
 	.await;
-	print_parameters(use_json, &fetch_parameters(use_json, bridge_ip).await);
+
+	print_parameters(
+		use_json,
+		&fetch_parameters(use_json, bridge_ip, parameter_space_port).await,
+	);
 }
 
 fn print_parameters(use_json: bool, parameters: &DumpedMionParameters) {
@@ -75,8 +84,12 @@ fn print_parameters(use_json: bool, parameters: &DumpedMionParameters) {
 	}
 }
 
-async fn fetch_parameters(use_json: bool, bridge_ip: Ipv4Addr) -> DumpedMionParameters {
-	match get_parameters(bridge_ip, None).await {
+async fn fetch_parameters(
+	use_json: bool,
+	bridge_ip: Ipv4Addr,
+	bridge_port: Option<u16>,
+) -> DumpedMionParameters {
+	match get_parameters(bridge_ip, bridge_port, None).await {
 		Ok(params) => params,
 		Err(cause) => {
 			if use_json {
@@ -100,6 +113,10 @@ async fn fetch_parameters(use_json: bool, bridge_ip: Ipv4Addr) -> DumpedMionPara
 	}
 }
 
+#[allow(
+	// This is barely over, and I don't think it's worth it to lower the count.
+	clippy::too_many_lines,
+)]
 async fn get_a_bridge_ip(
 	use_json: bool,
 	just_fetch_default: bool,
@@ -115,6 +132,29 @@ async fn get_a_bridge_ip(
 		bridge_or_params_argument,
 		had_params_arg,
 	) {
+		if filter_ip.is_none() && filter_mac.is_none() && filter_name.is_none() {
+			if let Some(ip_address) = *BRIDGE_CURRENT_IP_ADDRESS {
+				return ip_address;
+			} else if let Some(name) = BRIDGE_CURRENT_NAME.as_deref() {
+				return get_mochiato_bridge_ip(use_json, name).await;
+			} else if use_json {
+				error!(
+					id = "bridgectl::dump_parameters::no_bridge_filters",
+					help = "You didn't specify any bridge to dump the parameters of!",
+				);
+				std::process::exit(DUMP_PARAMS_NO_BRIDGE_FILTERS);
+			} else {
+				error!(
+					"\n{:?}",
+					miette!(
+						help = "See `bridgectl dump-params --help` for more information!",
+						"You didn't specify any bridge to dump the parameters of!",
+					),
+				);
+				std::process::exit(DUMP_PARAMS_NO_BRIDGE_FILTERS);
+			}
+		}
+
 		if let Some(ip) = filter_ip {
 			return ip;
 		}
@@ -134,7 +174,7 @@ async fn get_a_bridge_ip(
 			Ok(None) => {
 				if use_json {
 					error!(
-					  id = "bridgectl::dump_parameters::get_failed_to_find_a_device",
+					  id = "bridgectl::dump_parameters::dump_failed_to_find_a_device",
 					  filter.ip = ?filter_ip,
 					  filter.mac = ?filter_mac,
 					  filter.name = ?filter_name,
@@ -150,7 +190,7 @@ async fn get_a_bridge_ip(
 						"\n{:?}",
 						add_context_to(
 							miette!(
-								"Failed to find bridge that matched the series of filters, cannot get parameters.",
+								"Failed to find bridge that matched the series of filters, cannot dump parameters.",
 							),
 							[
 								miette!("Please ensure the CAT-DEV you're trying to find is powered on, and running."),
@@ -191,6 +231,61 @@ async fn get_a_bridge_ip(
 	}
 }
 
+async fn get_mochiato_bridge_ip(use_json: bool, bridge_name: &str) -> Ipv4Addr {
+	match find_mion(MIONFindBy::Name(bridge_name.to_owned()), false, None).await {
+		Ok(Some(identity)) => identity.ip_address(),
+		Ok(None) => {
+			if use_json {
+				error!(
+					  id = "bridgectl::dump_parameters::failed_to_find_ip_of_mochiato_bridge",
+					  bridge.name = bridge_name,
+					  suggestions = valuable(&[
+						  "Please ensure the default CAT-DEV you're trying to find is powered on, and running.",
+						  "Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+						  "If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+						  "Ensure `cafe`/`cafex`/`mochiato` has been loaded with the latest information.",
+					  ]),
+					);
+			} else {
+				error!(
+						"\n{:?}",
+						add_context_to(
+							miette!(
+								"Failed to find the `cafe`/`cafex`/`mochiato` bridge's ip by broadcasting, and was not specified, cannot dump parameters.",
+							),
+							[
+								miette!("Please ensure the default CAT-DEV you're trying to find is powered on, and running."),
+								miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
+								miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
+								miette!("Ensure `cafe`/`cafex`/`mochiato` has been loaded with the latest information."),
+							].into_iter(),
+						),
+					);
+			}
+			std::process::exit(DUMP_PARAMS_NO_AVAILABLE_BRIDGE);
+		}
+		Err(cause) => {
+			if use_json {
+				error!(
+						id = "bridgectl::dump_parameters::failed_to_execute_broadcast",
+						?cause,
+						help = "Could not setup sockets to broadcast and search for the default MION; perhaps another program is already using the single MION port?",
+					);
+			} else {
+				error!(
+					"\n{:?}",
+					miette!(
+						help = "Perhaps another program is already using the single MION port?",
+						"Could not setup sockets to broadcast and search for the default MION.",
+					)
+					.wrap_err(cause),
+				);
+			}
+			std::process::exit(DUMP_PARAMS_NO_AVAILABLE_BRIDGE);
+		}
+	}
+}
+
 async fn get_default_bridge_ip(use_json: bool, host_state_path: Option<PathBuf>) -> Ipv4Addr {
 	let (default_bridge_name, opt_ip) = get_default_bridge(use_json, host_state_path.clone()).await;
 	if let Some(ip) = opt_ip {
@@ -215,7 +310,7 @@ async fn get_default_bridge_ip(use_json: bool, host_state_path: Option<PathBuf>)
 						"\n{:?}",
 						add_context_to(
 							miette!(
-								"Failed to find the default bridge's ip since the configuration file did not have it, cannot get parameters.",
+								"Failed to find the default bridge's ip since the configuration file did not have it, cannot dump parameters.",
 							),
 							[
 								miette!("Please ensure the default CAT-DEV you're trying to find is powered on, and running."),

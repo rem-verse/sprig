@@ -10,17 +10,22 @@
 //!
 //! - port 7974 is the "control" port, which can be used for discovery. So for
 //!   communicating on that port you access: [`crate::mion::proto::control`].
+//!
 //! - port 7978 on the other hand is used by `mionps` to look up parameters,
 //!   so we call it the "parameter" port, so you can access types for
 //!   communicating on that port under: [`crate::mion::proto::parameter`].
+//!   The official tools don't have a way of specifying this port, but it is
+//!   actually configurable in `http://<mionip>/setup.cgi`. Specifically you
+//!   can change it under "Parameter Space".
 
+pub mod cgis;
 pub mod control;
 pub mod parameter;
 
 /// The port the MION uses for 'control' commands.
 pub const MION_CONTROL_PORT: u16 = 7974;
 /// The port the MION uses for parameter commands.
-pub const MION_PARAMETER_PORT: u16 = 7978;
+pub const DEFAULT_MION_PARAMETER_PORT: u16 = 7978;
 
 /// The amount of seconds we'll wait for a MION Control board to respond to a
 /// ping.

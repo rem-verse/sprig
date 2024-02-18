@@ -2,7 +2,10 @@
 
 use crate::{
 	commands::argv_helpers::{coalesce_bridge_arguments, get_default_bridge, get_padded_string},
-	exit_codes::{GET_FAILED_TO_FIND_SPECIFIC_DEVICE, GET_FAILED_TO_SEARCH_FOR_DEVICE},
+	exit_codes::{
+		GET_FAILED_TO_FIND_SPECIFIC_DEVICE, GET_FAILED_TO_SEARCH_FOR_DEVICE, GET_NO_BRIDGE_FILTERS,
+	},
+	knobs::env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	utils::{add_context_to, bridge_state_from_path, get_bridge_state_path},
 };
 use cat_dev::{
@@ -18,6 +21,15 @@ use std::{net::Ipv4Addr, path::PathBuf};
 use terminal_size::{terminal_size, Width as TermWidth};
 use tracing::{debug, error, field::valuable, info, warn};
 use valuable::Value as ValuableValue;
+
+const DEFAULT_HEADER: &str = "Bridge Name                    | IP Address      ";
+const DEFAULT_HEADER_LINE: &str = "-------------------------------------------------";
+
+const FALLBACK_HEADER: &str = "Bridge Name                    | IP Address      | Is Default";
+const FALLBACK_HEADER_LINE: &str = "-------------------------------------------------------------";
+
+const DETAILED_HEADER: &str =      "Bridge Name                    | IP Address      | MAC Address        | FPGA image version | Firmware Version | SDK Version | Boot Mode | Power Status";
+const DETAILED_HEADER_LINE: &str = "------------------------------------------------------------------------------------------------------------------------------------------------------";
 
 /// Actual command handler for the `get` command.
 pub async fn handle_get(
@@ -36,24 +48,141 @@ pub async fn handle_get(
 		cli_arguments,
 		did_specify_cli_arg,
 	) {
-		print_bridge(
-			use_json,
-			use_table,
-			filter_ip,
-			filter_mac,
-			filter_name,
-			host_state_path,
-		)
-		.await;
+		if filter_ip.is_none() && filter_mac.is_none() && filter_name.is_none() {
+			if BRIDGE_CURRENT_NAME.is_some() || BRIDGE_CURRENT_IP_ADDRESS.is_some() {
+				print_mochiato_bridge(
+					use_json,
+					use_table,
+					BRIDGE_CURRENT_NAME.clone(),
+					*BRIDGE_CURRENT_IP_ADDRESS,
+				)
+				.await;
+			} else if use_json {
+				error!(
+					id = "bridgectl::get::no_bridge_filters",
+					help = "You didn't specify any bridge to get the information of!",
+				);
+				std::process::exit(GET_NO_BRIDGE_FILTERS);
+			} else {
+				error!(
+					"\n{:?}",
+					miette!(
+						help = "See `bridgectl get --help` for more information!",
+						"You didn't specify any bridge to get the information of!",
+					),
+				);
+				std::process::exit(GET_NO_BRIDGE_FILTERS);
+			}
+		} else {
+			print_bridge(
+				use_json,
+				use_table,
+				filter_ip,
+				filter_mac,
+				filter_name,
+				host_state_path,
+			)
+			.await;
+		}
 	} else {
 		print_default_bridge(use_json, use_table, host_state_path).await;
 	}
 }
 
-async fn print_default_bridge(use_json: bool, use_table: bool, host_state_path: Option<PathBuf>) {
-	const TABLE_HEADER: &str = "Bridge Name                    | IP Address      ";
-	const TABLE_HEADER_LINE: &str = "-------------------------------------------------";
+async fn print_mochiato_bridge(
+	use_json: bool,
+	use_table: bool,
+	env_name: Option<String>,
+	env_ip: Option<Ipv4Addr>,
+) {
+	if use_json {
+		info!(
+			id   = "bridgectl::get::mochiato_bridge_detailed_lookup",
+			line = "Found `cafe`/`cafex`/`mochiato` environment variables for bridge, attempting to lookup detailed information to print.",
+		);
+	} else {
+		info!(
+			"Found `cafe`/`cafex`/`mochiato` environment variables for bridge, attempting to lookup detailed information..."
+		);
+	}
 
+	match find_identity_from_network(env_ip, None, env_name.as_deref()).await {
+		Ok(Some(identity)) => {
+			print_detailed_bridge(use_json, use_table, &identity);
+		}
+		Ok(None) => {
+			if use_json {
+				warn!(
+					id = "bridgectl::get::find_mochiato_bridge_failed",
+					line = "find_identity_from_network returned Ok(None) for cafe/cafex/mochiato environment-variable bridge.",
+				);
+			} else {
+				warn!("Could not find the bridge specified in the environment by `cafe`/`cafex`/`mochiato`, perhaps it is not running, or `cafe` has bugged? Printing out known static information.");
+			}
+		}
+		Err(cause) => {
+			if use_json {
+				warn!(
+					id = "bridgectl::get::failed_to_execute_broadcast",
+					?cause,
+					help = "Could not setup sockets to broadcast and search for detailed information; perhaps another program is already using the single MION port? Trying to find MION from config file (will be less detailed).",
+				);
+			} else {
+				warn!(
+				"\n{:?}",
+				miette!(
+					help = "Perhaps another program is already using the single MION port?",
+					"Could not setup sockets to broadcast and search for detailed information on the default MION (trying to search config file, will be less detailed).",
+				).wrap_err(cause),
+			);
+			}
+		}
+	}
+
+	if use_table {
+		let rendered_name = get_padded_string(env_name.as_deref().unwrap_or("<missing data>"), 30);
+		let rendered_ip = get_padded_string(
+			env_ip.map_or("<missing data>".to_owned(), |bip| format!("{bip}")),
+			15,
+		);
+		let full_line = format!("{rendered_name} | {rendered_ip}");
+
+		if use_json {
+			info!(
+				id = "bridgectl::get::mochiato_bridge_table",
+				line = DEFAULT_HEADER
+			);
+			info!(
+				id = "bridgectl::get::mochiato_bridge_table",
+				line = DEFAULT_HEADER_LINE
+			);
+			info!(
+			  id = "bridgectl::get::mochiato_bridge_table",
+			  line = full_line,
+			  bridge.name = ?env_name,
+			  bridge.ip = ?env_ip,
+			);
+		} else {
+			println!("{DEFAULT_HEADER}");
+			println!("{DEFAULT_HEADER_LINE}");
+			println!("{full_line}");
+		}
+	} else if use_json {
+		info!(
+			id = "bridgectl::get::mochiato_bridge",
+			bridge.ip = env_ip.map_or(String::new(), |ip| format!("{ip}")),
+			bridge.name = env_name,
+		);
+	} else {
+		info!(
+			bridge.ip = env_ip.map_or(String::new(), |ip| format!("{ip}")),
+			bridge.name = env_name,
+			"Found bridge specified by `cafe`/`cafex`/`mochiato`!",
+		);
+	}
+}
+
+async fn print_default_bridge(use_json: bool, use_table: bool, host_state_path: Option<PathBuf>) {
 	let (default_bridge_name, opt_bridge_ip) = get_default_bridge(use_json, host_state_path).await;
 	if use_json {
 		info!(
@@ -111,11 +240,11 @@ async fn print_default_bridge(use_json: bool, use_table: bool, host_state_path: 
 		if use_json {
 			info!(
 				id = "bridgectl::get::default_bridge_table",
-				line = TABLE_HEADER
+				line = DEFAULT_HEADER
 			);
 			info!(
 				id = "bridgectl::get::default_bridge_table",
-				line = TABLE_HEADER_LINE
+				line = DEFAULT_HEADER_LINE
 			);
 			info!(
 			  id = "bridgectl::get::default_bridge_table",
@@ -124,8 +253,8 @@ async fn print_default_bridge(use_json: bool, use_table: bool, host_state_path: 
 			  bridge.ip = ?opt_bridge_ip,
 			);
 		} else {
-			println!("{TABLE_HEADER}");
-			println!("{TABLE_HEADER_LINE}");
+			println!("{DEFAULT_HEADER}");
+			println!("{DEFAULT_HEADER_LINE}");
 			println!("{full_line}");
 		}
 	} else if use_json {
@@ -254,9 +383,6 @@ async fn fallback_to_config_file(
 	filters: (Option<Ipv4Addr>, Option<MacAddress>, Option<String>),
 	exit_code: i32,
 ) {
-	const TABLE_HEADER: &str = "Bridge Name                    | IP Address      | Is Default";
-	const TABLE_HEADER_LINE: &str = "-------------------------------------------------------------";
-
 	let bridge_state = bridge_state_from_path(
 		get_bridge_state_path(&bridge_host_state_path, use_json),
 		use_json,
@@ -267,15 +393,15 @@ async fn fallback_to_config_file(
 		if use_json {
 			info!(
 				id = "bridgectl::get::fallback_table_print",
-				line = TABLE_HEADER
+				line = FALLBACK_HEADER
 			);
 			info!(
 				id = "bridgectl::get::fallback_table_print",
-				line = TABLE_HEADER_LINE
+				line = FALLBACK_HEADER_LINE
 			);
 		} else {
-			println!("{TABLE_HEADER}");
-			println!("{TABLE_HEADER_LINE}");
+			println!("{FALLBACK_HEADER}");
+			println!("{FALLBACK_HEADER_LINE}");
 		}
 	}
 
@@ -388,9 +514,6 @@ async fn find_identity_from_network(
 }
 
 fn print_detailed_bridge(use_json: bool, use_table: bool, bridge: &MionIdentity) {
-	const TABLE_HEADER: &str =      "Bridge Name                    | IP Address      | MAC Address        | FPGA image version | Firmware Version | SDK Version | Boot Mode | Power Status";
-	const TABLE_HEADER_LINE: &str = "------------------------------------------------------------------------------------------------------------------------------------------------------";
-
 	if use_table {
 		if let Some((TermWidth(characters_wide), _)) = terminal_size() {
 			if characters_wide < 150 {
@@ -431,11 +554,11 @@ fn print_detailed_bridge(use_json: bool, use_table: bool, bridge: &MionIdentity)
 		if use_json {
 			info!(
 				id = "bridgectl::get::found_requested_bridge_network_table",
-				line = TABLE_HEADER
+				line = DETAILED_HEADER
 			);
 			info!(
 				id = "bridgectl::get::found_requested_bridge_network_table",
-				line = TABLE_HEADER_LINE
+				line = DETAILED_HEADER_LINE
 			);
 			info!(
 				id = "bridgectl::get::found_requested_bridge_network_table",
@@ -443,8 +566,8 @@ fn print_detailed_bridge(use_json: bool, use_table: bool, bridge: &MionIdentity)
 				bridge = valuable(bridge)
 			);
 		} else {
-			println!("{TABLE_HEADER}");
-			println!("{TABLE_HEADER_LINE}");
+			println!("{DETAILED_HEADER}");
+			println!("{DETAILED_HEADER_LINE}");
 			println!("{full_table_line}");
 		}
 	} else if use_json {

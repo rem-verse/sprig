@@ -7,7 +7,7 @@ use crate::{
 			well_known::{index_from_parameter_name, ParameterLocationSpecification},
 			DumpedMionParameters, MionDumpParameters, SetMionParameters, SetMionParametersResponse,
 		},
-		MION_PARAMETER_PORT, MION_PARAMETER_TIMEOUT_SECONDS,
+		DEFAULT_MION_PARAMETER_PORT, MION_PARAMETER_TIMEOUT_SECONDS,
 	},
 };
 use bytes::{Bytes, BytesMut};
@@ -32,15 +32,17 @@ use tokio::{
 /// ## Errors
 ///
 /// - If we fail to connect, send, or receive data from the MION IP Address
-///   on the [`MION_PARAMETER_PORT`].
+///   on the [`DEFAULT_MION_PARAMETER_PORT`].
 /// - If we do not get a response within [`MION_PARAMETER_TIMEOUT_SECONDS`].
 /// - If the MION responded with invalid data.
 pub async fn get_parameters(
 	mion_addr: Ipv4Addr,
+	parameter_port: Option<u16>,
 	timeout: Option<Duration>,
 ) -> Result<DumpedMionParameters, CatBridgeError> {
 	get_parameters_with_logging_hooks(
 		mion_addr,
+		parameter_port,
 		timeout,
 		noop_tcp_session_made,
 		noop_connection_established,
@@ -76,6 +78,7 @@ pub async fn get_parameters_with_logging_hooks<
 	ReadFinishedHook,
 >(
 	mion_addr: Ipv4Addr,
+	parameter_port: Option<u16>,
 	timeout: Option<Duration>,
 	tcp_session_logging_hook: TcpSessionHook,
 	connection_established_logging_hook: ConnectionEstablishedHook,
@@ -95,6 +98,7 @@ where
 	tokio::select! {
 	  res = get_parameters_without_timeout(
 			mion_addr,
+			parameter_port,
 			connection_established_logging_hook,
 			write_finished_hook,
 			read_finished_hook,
@@ -118,13 +122,14 @@ where
 /// ## Errors
 ///
 /// - If we fail to connect, send, or receive data from the MION IP Address
-///   on the [`MION_PARAMETER_PORT`].
+///   on the [`DEFAULT_MION_PARAMETER_PORT`].
 /// - If we do not get a response within [`MION_PARAMETER_TIMEOUT_SECONDS`].
 /// - If the MION responded with invalid data.
 /// - If the MION responds with a non successful status code.
 pub async fn set_parameters<IterTy>(
 	parameters_to_set: IterTy,
 	mion_addr: Ipv4Addr,
+	parameter_port: Option<u16>,
 	timeout: Option<Duration>,
 ) -> Result<SetMionParametersResponse, CatBridgeError>
 where
@@ -133,6 +138,7 @@ where
 	set_parameters_with_logging_hooks(
 		parameters_to_set,
 		mion_addr,
+		parameter_port,
 		timeout,
 		noop_tcp_session_made,
 		noop_connection_established,
@@ -165,6 +171,7 @@ where
 pub async fn set_parameters_and_get_changed_values<IterTy>(
 	parameters_to_set: IterTy,
 	mion_addr: Ipv4Addr,
+	parameter_port: Option<u16>,
 	timeout: Option<Duration>,
 ) -> Result<(SetMionParametersResponse, FnvHashMap<usize, u8>), CatBridgeError>
 where
@@ -173,6 +180,7 @@ where
 	set_parameters_with_logging_hooks(
 		parameters_to_set,
 		mion_addr,
+		parameter_port,
 		timeout,
 		noop_tcp_session_made,
 		noop_connection_established,
@@ -218,6 +226,7 @@ pub async fn set_parameters_with_logging_hooks<
 >(
 	parameters_to_set: IterTy,
 	mion_addr: Ipv4Addr,
+	parameter_port: Option<u16>,
 	timeout: Option<Duration>,
 	tcp_session_logging_hook: TcpSessionHook,
 	connection_established_logging_hook: ConnectionEstablishedHook,
@@ -242,6 +251,7 @@ where
 	let (got_parameters, stream) = tokio::select! {
 	  res = get_parameters_without_timeout(
 			mion_addr,
+			parameter_port,
 			connection_established_logging_hook,
 			write_finished_hook,
 			read_finished_hook,
@@ -286,6 +296,7 @@ async fn get_parameters_without_timeout<
 	ReadFinishedHook,
 >(
 	mion_addr: Ipv4Addr,
+	parameter_port: Option<u16>,
 	connection_established_hook: ConnectionEstablishedHook,
 	write_finished_hook: WriteFinishedHook,
 	read_finished_hook: ReadFinishedHook,
@@ -295,9 +306,12 @@ where
 	WriteFinishedHook: Fn(usize) + Clone + Send + 'static,
 	ReadFinishedHook: Fn(usize) + Clone + Send + 'static,
 {
-	let mut stream = TcpStream::connect((mion_addr, MION_PARAMETER_PORT))
-		.await
-		.map_err(NetworkError::IOError)?;
+	let mut stream = TcpStream::connect((
+		mion_addr,
+		parameter_port.unwrap_or(DEFAULT_MION_PARAMETER_PORT),
+	))
+	.await
+	.map_err(NetworkError::IOError)?;
 	connection_established_hook(mion_addr);
 	stream.writable().await.map_err(NetworkError::IOError)?;
 	stream
