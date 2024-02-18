@@ -37,7 +37,7 @@ pub async fn handle_get_parameters(
 				id = "bridgectl::get_params::no_params",
 				suggestions = valuable(&[
 					"You can run `bridgectl get-params <bridge> <params>`, `bridgectl gp --default <params>`, etc.",
-					"If running in a mochiato/cafe/cafex environment you can run: `bridgectl get-params <parms>`.",
+					"If running in a mochiato/cafe/cafex environment you can run: `bridgectl get-params <params>`.",
 					"You can run `bridgectl get-params --help` to get more information.",
 				]),
 				"No parameter arguments passed to `bridgectl get-params`, but we need a list of parameters to fetch!",
