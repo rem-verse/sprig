@@ -208,12 +208,12 @@ checksum = "ed570934406eb16438a4e976b1b4500774099c13b8cb96eec99f620f05090ddf"
 
 [[package]]
 name = "bridgectl"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "cat-dev",
  "clap",
  "fnv",
- "log 0.0.3",
+ "log 0.0.4",
  "mac_address",
  "miette",
  "once_cell",
@@ -237,7 +237,7 @@ checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
 name = "cat-dev"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "bytes",
  "configparser",
@@ -429,7 +429,7 @@ checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
 
 [[package]]
 name = "findbridge"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "cat-dev",
  "mac_address",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "getbridgeconfig"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "cat-dev",
  "tokio",
@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "console-subscriber",
  "miette",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "mionparamspace"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "cat-dev",
  "time",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "mionps"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "cat-dev",
  "time",
@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "setbridgeconfig"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "cat-dev",
  "tokio",

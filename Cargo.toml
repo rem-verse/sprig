@@ -28,7 +28,7 @@ authors = ["Cynthia <cynthia@coan.dev>"]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/rem-verse/sprig"
-version = "0.0.3"
+version = "0.0.4"
 
 [profile.release]
 codegen-units = 1
