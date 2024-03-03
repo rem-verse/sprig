@@ -14,6 +14,13 @@ pub struct CliArguments {
 		long_help = "The path to the `bridge_env.ini` file to use if it's not in the default location."
 	)]
 	pub bridge_state_path: Option<PathBuf>,
+	#[arg(
+		global = true,
+		long = "bridge-control-port-override",
+		help = "A way to override the control port which should never be needed.",
+		long_help = "Allow overriding the scanning port aka CONTROL port for finding cat-dev bridges."
+	)]
+	pub control_port_override: Option<u16>,
 	#[command(subcommand)]
 	pub commands: Option<Subcommands>,
 	#[arg(
@@ -32,6 +39,13 @@ pub struct CliArguments {
 		long_help = "Switch all logging and output to JSON for machine parsable output. NOTE: there is no necissarily guaranteed structure, though we will not break it unnecissarily."
 	)]
 	pub json: bool,
+	#[arg(
+		global = true,
+		long = "scan-early-timeout-seconds",
+		help = "The amount of seconds to wait before bailing early when scanning for a bridge (by default this is 3).",
+		long_help = "CAT-DEV's MUST respond to broadcasts within 10 seconds, but in reality most folks only have one cat-dev / non busy networks were they will respond faster, in this case it's generally better to exit early. How early we decide to exit is controlled by this variable."
+	)]
+	pub scan_timeout: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -226,13 +240,6 @@ pub enum Subcommands {
 		)]
 		use_cache: bool,
 		#[arg(
-			short = 'e',
-			long = "early-timeout-seconds",
-			help = "The amount of seconds to wait before bailing early (by default this is 3).",
-			long_help = "CAT-DEV's MUST respond to broadcasts within 10 seconds, but in reality most folks only have one cat-dev / non busy networks were they will respond faster, in this case it's generally better to exit early. How early we decide to exit is controlled by this variable."
-		)]
-		scan_timeout: Option<u64>,
-		#[arg(
 			short = 't',
 			long = "table-output",
 			help = "Output the list of bridges as a particular table.",
@@ -366,7 +373,6 @@ impl Subcommands {
 			Self::Help {} => name == "help",
 			Self::List {
 				use_cache,
-				scan_timeout,
 				output_as_table,
 			} => name == "list" || name == "ls",
 			Self::Remove {

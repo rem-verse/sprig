@@ -3,7 +3,7 @@
 
 use crate::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::proto::cgis::ControlOperation,
+	mion::{cgis::AUTHZ_HEADER, proto::cgis::ControlOperation},
 };
 use fnv::FnvHashMap;
 use hyper::{
@@ -15,18 +15,6 @@ use local_ip_address::local_ip;
 use serde::Serialize;
 use std::net::Ipv4Addr;
 use tracing::warn;
-
-/// HTTP Basic authorization header.
-///
-/// This gets passed as the header:
-/// `Authorization: Basic bWlvbjovTXVsdGlfSS9PX05ldHdvcmsv`
-///
-/// Given this is http basic auth, you can decode this string as:
-/// `mion:/Multi_I/O_Network/`
-///
-/// Which means the username is: `mion`, and the password is:
-/// `/Multi_I/O_Network/`.
-const AUTHZ_HEADER: &str = "bWlvbjovTXVsdGlfSS9PX05ldHdvcmsv";
 
 /// Perform a `get_info` request given a host, and a name.
 ///

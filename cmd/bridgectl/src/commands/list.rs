@@ -23,7 +23,7 @@ pub async fn handle_list(
 	use_json: bool,
 	use_cache: bool,
 	output_as_table: bool,
-	scan_timeout: Option<u64>,
+	scan_args: (Duration, u16),
 	argv_host_state_path: Option<PathBuf>,
 ) {
 	if use_cache {
@@ -37,16 +37,16 @@ pub async fn handle_list(
 			.await,
 		);
 	} else {
-		list_from_network(use_json, output_as_table, scan_timeout).await;
+		list_from_network(use_json, output_as_table, scan_args).await;
 	}
 }
 
 /// List all of the devices that are actively on the network.
-async fn list_from_network(use_json: bool, use_table: bool, scan_timeout: Option<u64>) {
+async fn list_from_network(use_json: bool, use_table: bool, scan_args: (Duration, u16)) {
 	const TABLE_HEADER: &str =      "Bridge Name                    | IP Address      | MAC Address        | FPGA image version | Firmware Version | SDK Version | Boot Mode | Power Status";
 	const TABLE_HEADER_LINE: &str = "------------------------------------------------------------------------------------------------------------------------------------------------------";
 
-	let mut recv_channel = match discover_bridges(true).await {
+	let mut recv_channel = match discover_bridges(true, Some(scan_args.1)).await {
 		Ok(channel) => channel,
 		Err(cause) => {
 			if use_json {
@@ -105,7 +105,7 @@ async fn list_from_network(use_json: bool, use_table: bool, scan_timeout: Option
 				}
 				found_bridges.push(bridge);
 		  }
-		  () = sleep(Duration::from_secs(scan_timeout.unwrap_or(DEFAULT_EARLY_TIMEOUT))) => {
+		  () = sleep(scan_args.0) => {
 				had_early_timeout = true;
 			  break;
 		  }
@@ -113,7 +113,7 @@ async fn list_from_network(use_json: bool, use_table: bool, scan_timeout: Option
 	}
 
 	if found_bridges.is_empty() {
-		print_no_bridge_found_warning(use_json, had_early_timeout, scan_timeout);
+		print_no_bridge_found_warning(use_json, had_early_timeout, Some(scan_args.0.as_secs()));
 	}
 }
 

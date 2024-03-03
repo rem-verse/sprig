@@ -64,9 +64,10 @@ use cat_dev::mion::discovery::discover_bridges;
 /// These all return options that will only be populated if
 /// `fetch_detailed_fields` is marked as true.
 async fn stream_bridges(fetch_detailed_fields: bool) {
-  let mut channel_to_stream_bridges = discover_bridges(fetch_detailed_fields)
-    .await
-    .expect("Failed to discover bridges!");
+  let mut channel_to_stream_bridges = discover_bridges(
+    fetch_detailed_fields,
+    None,
+  ).await.expect("Failed to discover bridges!");
 
   // This will block for a potentially "long-ish" (like 10 seconds) time.
   //
@@ -104,6 +105,7 @@ async fn find_a_mion_by_name(
     // wanna wait the full 10 seconds you can specify an optional early
     // timeout.
     early_search_timeout,
+    None,
   ).await.expect("could not conduct a search for a mion.") {
     println!("Found bridge: {bridge}");
   } else {

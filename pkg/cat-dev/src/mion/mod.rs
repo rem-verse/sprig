@@ -7,7 +7,7 @@
 //! In general if you're trying to look for things relating to the bridge as a
 //! whole, you're _probably_ really actually talking to the MION.
 
-pub mod control;
+pub mod cgis;
 pub mod discovery;
 pub mod parameter;
 pub mod proto;
