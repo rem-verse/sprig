@@ -47,6 +47,42 @@ impl TryFrom<&str> for ControlOperation {
 	}
 }
 
+/// The type of parameters you can set on the control page.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub enum SetParameter {
+	/// Set the ATAPI Port to use.
+	AtapiPort(u16),
+}
+
+impl SetParameter {
+	/// Get the value regardless of what it is as a string.
+	#[must_use]
+	pub fn get_value_as_string(&self) -> String {
+		match self {
+			Self::AtapiPort(ref port) => format!("{port}"),
+		}
+	}
+}
+
+impl Display for SetParameter {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(fmt, "{}", Into::<&str>::into(self))
+	}
+}
+
+impl From<&SetParameter> for &str {
+	fn from(value: &SetParameter) -> Self {
+		match *value {
+			SetParameter::AtapiPort(_) => "atapi_port",
+		}
+	}
+}
+impl From<SetParameter> for &str {
+	fn from(value: SetParameter) -> Self {
+		Self::from(&value)
+	}
+}
+
 #[cfg(test)]
 mod unit_tests {
 	use super::*;

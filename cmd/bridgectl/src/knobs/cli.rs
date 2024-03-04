@@ -87,6 +87,49 @@ pub enum Subcommands {
 		)]
 		set_default: bool,
 	},
+	#[command(name = "boot", visible_alias = "power-on")]
+	Boot {
+		#[arg(
+			short = 'd',
+			long = "default",
+			help = "Set the parameters on the default bridge.",
+			long_help = "A shortcut to set parameters on the default bridge, not needing to specify any other lookup fields."
+		)]
+		default: bool,
+		#[arg(
+			short = 'i',
+			long = "ip",
+			help = "The IP of the bridge to set the parameters on.",
+			long_help = "Set the parameters of the bridge located at this IP address."
+		)]
+		bridge_ipaddr: Option<Ipv4Addr>,
+		#[arg(
+			short = 'm',
+			long = "mac-address",
+			help = "The Mac Address of the bridge to set the parameters on.",
+			long_help = "Set the parameters of the bridge found by searching for the bridge with this MAC Address."
+		)]
+		bridge_mac: Option<String>,
+		#[arg(
+			short = 'n',
+			long = "name",
+			help = "The Name of the bridge to set the parameters on.",
+			long_help = "Set the parameters of the bridge found by searching for the bridge with this Name."
+		)]
+		bridge_name: Option<String>,
+		#[arg(
+			index = 1,
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what bridge you want to set parameters on with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
+		)]
+		bridge_name_positional: Option<String>,
+		#[arg(
+			long = "boot-without-pcfs",
+			help = "Just boot the device without PCFS",
+			long_help = "Disable almost all other options, and just boot the device without any connection to the PC."
+		)]
+		without_pcfs: bool,
+	},
 	#[command(name = "dump-parameters", visible_alias = "dp")]
 	DumpParameters {
 		#[arg(
@@ -375,6 +418,14 @@ impl Subcommands {
 				use_cache,
 				output_as_table,
 			} => name == "list" || name == "ls",
+			Self::Boot {
+				default,
+				bridge_ipaddr,
+				bridge_mac,
+				bridge_name,
+				bridge_name_positional,
+				without_pcfs,
+			} => name == "boot" || name == "power-on",
 			Self::Remove {
 				bridge_name,
 				bridge_name_positional,

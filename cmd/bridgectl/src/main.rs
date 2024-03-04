@@ -14,9 +14,9 @@ pub mod utils;
 
 use crate::{
 	commands::{
-		handle_add_or_update, handle_dump_parameters, handle_get, handle_get_parameters,
-		handle_help, handle_list, handle_remove_bridge, handle_set_default_bridge,
-		handle_set_parameters,
+		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
+		handle_get_parameters, handle_help, handle_list, handle_remove_bridge,
+		handle_set_default_bridge, handle_set_parameters,
 	},
 	exit_codes::{
 		ARGUMENT_PARSING_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE, NO_ARGUMENT_SPECIFIED_FAILURE,
@@ -84,6 +84,25 @@ async fn main() {
 				(scan_timeout, control_port),
 				get_bridge_state_path(&argv.bridge_state_path, use_json),
 				set_default,
+			)
+			.await;
+		}
+		Subcommands::Boot {
+			default,
+			bridge_ipaddr,
+			bridge_mac,
+			bridge_name,
+			bridge_name_positional,
+			without_pcfs,
+		} => {
+			handle_boot(
+				use_json,
+				default,
+				(bridge_ipaddr, bridge_mac, bridge_name),
+				bridge_name_positional,
+				(scan_timeout, control_port),
+				argv.bridge_state_path,
+				without_pcfs,
 			)
 			.await;
 		}

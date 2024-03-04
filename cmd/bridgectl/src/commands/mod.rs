@@ -4,6 +4,7 @@
 mod argv_helpers;
 
 mod add;
+mod boot;
 mod dump_parameters;
 mod get;
 mod get_parameters;
@@ -14,6 +15,7 @@ mod set_default;
 mod set_parameters;
 
 pub use add::*;
+pub use boot::*;
 pub use dump_parameters::*;
 pub use get::*;
 pub use get_parameters::*;

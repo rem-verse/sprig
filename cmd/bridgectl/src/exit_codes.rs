@@ -1,5 +1,6 @@
 //! Just a list of all the exit codes in our process.
 
+pub const NOT_YET_IMPLEMENTED: i32 = -1;
 pub const LOGGING_HANDLER_INSTALL_FAILURE: i32 = 1;
 pub const ARGUMENT_PARSING_FAILURE: i32 = 2;
 pub const NO_ARGUMENT_SPECIFIED_FAILURE: i32 = 3;
@@ -40,3 +41,6 @@ pub const GET_NO_BRIDGE_FILTERS: i32 = 37;
 pub const GET_PARAMS_NO_BRIDGE_FILTERS: i32 = 38;
 pub const SET_PARAMS_NO_BRIDGE_FILTERS: i32 = 39;
 pub const DUMP_PARAMS_NO_BRIDGE_FILTERS: i32 = 40;
+pub const BOOT_NO_BRIDGE_FILTERS: i32 = 41;
+pub const BOOT_NO_AVAILABLE_BRIDGE: i32 = 42;
+pub const BOOT_CGI_FAILURE: i32 = 43;
