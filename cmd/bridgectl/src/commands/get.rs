@@ -11,13 +11,13 @@ use crate::{
 use cat_dev::{
 	errors::CatBridgeError,
 	mion::{
-		discovery::{discover_bridges, find_mion, MIONFindBy},
+		discovery::{find_mion, MIONFindBy},
 		proto::control::MionIdentity,
 	},
 };
 use mac_address::MacAddress;
 use miette::miette;
-use std::{net::Ipv4Addr, path::PathBuf};
+use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 use terminal_size::{terminal_size, Width as TermWidth};
 use tracing::{debug, error, field::valuable, info, warn};
 use valuable::Value as ValuableValue;
@@ -38,6 +38,7 @@ pub async fn handle_get(
 	just_fetch_default: bool,
 	flag_arguments: (Option<Ipv4Addr>, Option<String>, Option<String>),
 	cli_arguments: Option<String>,
+	find_by_args: (Duration, u16),
 	host_state_path: Option<PathBuf>,
 ) {
 	let did_specify_cli_arg = cli_arguments.is_some();
@@ -55,6 +56,7 @@ pub async fn handle_get(
 					use_table,
 					BRIDGE_CURRENT_NAME.clone(),
 					*BRIDGE_CURRENT_IP_ADDRESS,
+					find_by_args,
 				)
 				.await;
 			} else if use_json {
@@ -80,12 +82,13 @@ pub async fn handle_get(
 				filter_ip,
 				filter_mac,
 				filter_name,
+				find_by_args,
 				host_state_path,
 			)
 			.await;
 		}
 	} else {
-		print_default_bridge(use_json, use_table, host_state_path).await;
+		print_default_bridge(use_json, use_table, host_state_path, find_by_args).await;
 	}
 }
 
@@ -94,6 +97,7 @@ async fn print_mochiato_bridge(
 	use_table: bool,
 	env_name: Option<String>,
 	env_ip: Option<Ipv4Addr>,
+	find_by_args: (Duration, u16),
 ) {
 	if use_json {
 		info!(
@@ -106,7 +110,7 @@ async fn print_mochiato_bridge(
 		);
 	}
 
-	match find_identity_from_network(env_ip, None, env_name.as_deref()).await {
+	match find_identity_from_network(env_ip, None, env_name.as_deref(), find_by_args).await {
 		Ok(Some(identity)) => {
 			print_detailed_bridge(use_json, use_table, &identity);
 		}
@@ -182,7 +186,12 @@ async fn print_mochiato_bridge(
 	}
 }
 
-async fn print_default_bridge(use_json: bool, use_table: bool, host_state_path: Option<PathBuf>) {
+async fn print_default_bridge(
+	use_json: bool,
+	use_table: bool,
+	host_state_path: Option<PathBuf>,
+	find_by_args: (Duration, u16),
+) {
 	let (default_bridge_name, opt_bridge_ip) = get_default_bridge(use_json, host_state_path).await;
 	if use_json {
 		info!(
@@ -195,7 +204,13 @@ async fn print_default_bridge(use_json: bool, use_table: bool, host_state_path: 
 		);
 	}
 
-	match find_identity_from_network(opt_bridge_ip, None, Some(default_bridge_name.as_str())).await
+	match find_identity_from_network(
+		opt_bridge_ip,
+		None,
+		Some(default_bridge_name.as_str()),
+		find_by_args,
+	)
+	.await
 	{
 		Ok(Some(identity)) => {
 			print_detailed_bridge(use_json, use_table, &identity);
@@ -278,11 +293,14 @@ async fn print_bridge(
 	filter_ip: Option<Ipv4Addr>,
 	filter_mac: Option<MacAddress>,
 	filter_name: Option<String>,
+	find_by_args: (Duration, u16),
 	bridge_host_state_path: Option<PathBuf>,
 ) {
 	// If we have an IP we can send a find request directly, otherwise we do a broadcast.
 	let mion_identity_opt_res =
-		find_identity_from_network(filter_ip, filter_mac, filter_name.as_deref()).await;
+		find_identity_from_network(filter_ip, filter_mac, filter_name.as_deref(), find_by_args)
+			.await;
+
 	let mion_identity_opt = match mion_identity_opt_res {
 		Ok(opt) => opt,
 		Err(cause) => {
@@ -475,41 +493,32 @@ async fn find_identity_from_network(
 	filter_ip: Option<Ipv4Addr>,
 	filter_mac: Option<MacAddress>,
 	filter_name: Option<&str>,
+	find_by_args: (Duration, u16),
 ) -> Result<Option<MionIdentity>, CatBridgeError> {
 	// If we have an IP we can send a find request directly, otherwise we do a broadcast.
-	if let Some(ip) = filter_ip {
-		match find_mion(MIONFindBy::Ip(ip), true, None).await {
-			Ok(Some(identity)) => {
-				if (filter_mac.is_none() || filter_mac == Some(identity.mac_address()))
-					&& (filter_name.is_none() || filter_name == Some(identity.name()))
-				{
-					Ok(Some(identity))
-				} else {
-					Ok(None)
-				}
-			}
-			Ok(None) => Ok(None),
-			Err(cause) => Err(cause),
+	let found_by = match (filter_ip, filter_name, filter_mac) {
+		(Some(ip_to_filter), _, _) => MIONFindBy::Ip(ip_to_filter),
+		(None, Some(name_to_filter), _) => MIONFindBy::Name(name_to_filter.to_owned()),
+		(None, None, Some(mac)) => MIONFindBy::MacAddress(mac),
+		(None, None, None) => {
+			// No filter parameters.
+			return Ok(None);
 		}
-	} else {
-		match discover_bridges(true).await {
-			Ok(mut recv_channel) => {
-				let mut value = None;
+	};
 
-				while let Some(identity) = recv_channel.recv().await {
-					if (filter_ip.is_none() || filter_ip == Some(identity.ip_address()))
-						&& (filter_mac.is_none() || filter_mac == Some(identity.mac_address()))
-						&& (filter_name.is_none() || filter_name == Some(identity.name()))
-					{
-						value = Some(identity);
-						break;
-					}
-				}
-
-				Ok(value)
+	match find_mion(found_by, true, Some(find_by_args.0), Some(find_by_args.1)).await {
+		Ok(Some(identity)) => {
+			if (filter_ip.is_some() && filter_ip != Some(identity.ip_address()))
+				|| (filter_mac.is_some() && filter_mac != Some(identity.mac_address()))
+				|| (filter_name.is_some() && filter_name != Some(identity.name()))
+			{
+				Ok(None)
+			} else {
+				Ok(Some(identity))
 			}
-			Err(cause) => Err(cause),
 		}
+		Ok(None) => Ok(None),
+		Err(cause) => Err(cause),
 	}
 }
 

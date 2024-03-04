@@ -14,9 +14,9 @@ pub mod utils;
 
 use crate::{
 	commands::{
-		handle_add_or_update, handle_dump_parameters, handle_get, handle_get_parameters,
-		handle_help, handle_list, handle_remove_bridge, handle_set_default_bridge,
-		handle_set_parameters,
+		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
+		handle_get_parameters, handle_help, handle_list, handle_remove_bridge,
+		handle_set_default_bridge, handle_set_parameters,
 	},
 	exit_codes::{
 		ARGUMENT_PARSING_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE, NO_ARGUMENT_SPECIFIED_FAILURE,
@@ -25,6 +25,7 @@ use crate::{
 	knobs::{
 		cli::{CliArguments, Subcommands},
 		env::USE_JSON_OUTPUT,
+		get_control_port, get_scan_timeout,
 	},
 	utils::get_bridge_state_path,
 };
@@ -50,6 +51,8 @@ async fn main() {
 			0
 		});
 	}
+	let scan_timeout = get_scan_timeout(&argv);
+	let control_port = get_control_port(&argv);
 
 	let Some(sub_command) = argv.commands else {
 		if use_json {
@@ -78,8 +81,28 @@ async fn main() {
 				use_json,
 				(bridge_name, bridge_ipaddr),
 				(bridge_name_positional, bridge_ip_positional),
+				(scan_timeout, control_port),
 				get_bridge_state_path(&argv.bridge_state_path, use_json),
 				set_default,
+			)
+			.await;
+		}
+		Subcommands::Boot {
+			default,
+			bridge_ipaddr,
+			bridge_mac,
+			bridge_name,
+			bridge_name_positional,
+			without_pcfs,
+		} => {
+			handle_boot(
+				use_json,
+				default,
+				(bridge_ipaddr, bridge_mac, bridge_name),
+				bridge_name_positional,
+				(scan_timeout, control_port),
+				argv.bridge_state_path,
+				without_pcfs,
 			)
 			.await;
 		}
@@ -96,25 +119,8 @@ async fn main() {
 				default,
 				(bridge_ipaddr, bridge_mac, bridge_name),
 				bridge_name_positional,
+				(scan_timeout, control_port),
 				parameter_space_port,
-				argv.bridge_state_path,
-			)
-			.await;
-		}
-		Subcommands::Get {
-			default,
-			bridge_ipaddr,
-			bridge_mac,
-			bridge_name,
-			bridge_name_positional,
-			output_as_table,
-		} => {
-			handle_get(
-				use_json,
-				output_as_table,
-				default,
-				(bridge_ipaddr, bridge_mac, bridge_name),
-				bridge_name_positional,
 				argv.bridge_state_path,
 			)
 			.await;
@@ -134,7 +140,27 @@ async fn main() {
 				(bridge_ipaddr, bridge_mac, bridge_name),
 				bridge_name_positional,
 				parameter_names_positional,
+				(scan_timeout, control_port),
 				parameter_space_port,
+				argv.bridge_state_path,
+			)
+			.await;
+		}
+		Subcommands::Get {
+			default,
+			bridge_ipaddr,
+			bridge_mac,
+			bridge_name,
+			bridge_name_positional,
+			output_as_table,
+		} => {
+			handle_get(
+				use_json,
+				output_as_table,
+				default,
+				(bridge_ipaddr, bridge_mac, bridge_name),
+				bridge_name_positional,
+				(scan_timeout, control_port),
 				argv.bridge_state_path,
 			)
 			.await;
@@ -143,14 +169,13 @@ async fn main() {
 		Subcommands::Help {} => unreachable!(),
 		Subcommands::List {
 			use_cache,
-			scan_timeout,
 			output_as_table,
 		} => {
 			handle_list(
 				use_json,
 				use_cache,
 				output_as_table,
-				scan_timeout,
+				(scan_timeout, control_port),
 				argv.bridge_state_path,
 			)
 			.await;
@@ -194,6 +219,7 @@ async fn main() {
 				(bridge_ipaddr, bridge_mac, bridge_name),
 				bridge_name_positional,
 				parameter_names_positional,
+				(scan_timeout, control_port),
 				parameter_space_port,
 				argv.bridge_state_path,
 			)

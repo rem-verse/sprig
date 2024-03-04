@@ -13,7 +13,7 @@ use cat_dev::mion::{
 	proto::parameter::DumpedMionParameters,
 };
 use miette::miette;
-use std::{net::Ipv4Addr, path::PathBuf};
+use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 use tracing::{error, field::valuable, info};
 
 /// Actual command handler for the `dump-parameters`, or `dp` command.
@@ -22,6 +22,7 @@ pub async fn handle_dump_parameters(
 	just_fetch_default: bool,
 	bridge_flag_arguments: (Option<Ipv4Addr>, Option<String>, Option<String>),
 	bridge_argv: Option<String>,
+	find_by_args: (Duration, u16),
 	parameter_space_port: Option<u16>,
 	host_state_path: Option<PathBuf>,
 ) {
@@ -32,6 +33,7 @@ pub async fn handle_dump_parameters(
 		bridge_flag_arguments,
 		bridge_argv,
 		had_arg,
+		find_by_args,
 		host_state_path,
 	)
 	.await;
@@ -123,6 +125,7 @@ async fn get_a_bridge_ip(
 	bridge_flag_arguments: (Option<Ipv4Addr>, Option<String>, Option<String>),
 	bridge_or_params_argument: Option<String>,
 	had_params_arg: bool,
+	find_by_args: (Duration, u16),
 	host_state_path: Option<PathBuf>,
 ) -> Ipv4Addr {
 	if let Some((filter_ip, filter_mac, filter_name)) = coalesce_bridge_arguments(
@@ -136,7 +139,7 @@ async fn get_a_bridge_ip(
 			if let Some(ip_address) = *BRIDGE_CURRENT_IP_ADDRESS {
 				return ip_address;
 			} else if let Some(name) = BRIDGE_CURRENT_NAME.as_deref() {
-				return get_mochiato_bridge_ip(use_json, name).await;
+				return get_mochiato_bridge_ip(use_json, name, find_by_args).await;
 			} else if use_json {
 				error!(
 					id = "bridgectl::dump_parameters::no_bridge_filters",
@@ -166,7 +169,8 @@ async fn get_a_bridge_ip(
 				MIONFindBy::Name(filter_name.clone().unwrap_or_default())
 			},
 			false,
-			None,
+			Some(find_by_args.0),
+			Some(find_by_args.1),
 		)
 		.await
 		{
@@ -227,12 +231,23 @@ async fn get_a_bridge_ip(
 			}
 		}
 	} else {
-		get_default_bridge_ip(use_json, host_state_path).await
+		get_default_bridge_ip(use_json, host_state_path, find_by_args).await
 	}
 }
 
-async fn get_mochiato_bridge_ip(use_json: bool, bridge_name: &str) -> Ipv4Addr {
-	match find_mion(MIONFindBy::Name(bridge_name.to_owned()), false, None).await {
+async fn get_mochiato_bridge_ip(
+	use_json: bool,
+	bridge_name: &str,
+	find_by_args: (Duration, u16),
+) -> Ipv4Addr {
+	match find_mion(
+		MIONFindBy::Name(bridge_name.to_owned()),
+		false,
+		Some(find_by_args.0),
+		Some(find_by_args.1),
+	)
+	.await
+	{
 		Ok(Some(identity)) => identity.ip_address(),
 		Ok(None) => {
 			if use_json {
@@ -286,12 +301,23 @@ async fn get_mochiato_bridge_ip(use_json: bool, bridge_name: &str) -> Ipv4Addr {
 	}
 }
 
-async fn get_default_bridge_ip(use_json: bool, host_state_path: Option<PathBuf>) -> Ipv4Addr {
+async fn get_default_bridge_ip(
+	use_json: bool,
+	host_state_path: Option<PathBuf>,
+	find_by_args: (Duration, u16),
+) -> Ipv4Addr {
 	let (default_bridge_name, opt_ip) = get_default_bridge(use_json, host_state_path.clone()).await;
 	if let Some(ip) = opt_ip {
 		ip
 	} else {
-		match find_mion(MIONFindBy::Name(default_bridge_name.clone()), false, None).await {
+		match find_mion(
+			MIONFindBy::Name(default_bridge_name.clone()),
+			false,
+			Some(find_by_args.0),
+			Some(find_by_args.1),
+		)
+		.await
+		{
 			Ok(Some(identity)) => identity.ip_address(),
 			Ok(None) => {
 				if use_json {

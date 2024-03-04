@@ -8,12 +8,16 @@
 //!
 //! Each of these roughly correlate to one MION service, e.g.:
 //!
-//! - port 7974 is the "control" port, which can be used for discovery. So for
-//!   communicating on that port you access: [`crate::mion::proto::control`].
+//! - port 7974 UDP is the "control" port, which can be used for discovery. So
+//!   for communicating on that port you access:
+//!   [`crate::mion::proto::control`].
+//!   *note: some tools using session manager improperly use the ATAPI port
+//!   which while normally being shared just for the TCP side, can in theory
+//!   be configured differently.*
 //!
-//! - port 7978 on the other hand is used by `mionps` to look up parameters,
-//!   so we call it the "parameter" port, so you can access types for
-//!   communicating on that port under: [`crate::mion::proto::parameter`].
+//! - port 7978 TCP on the other hand is used by `mionps` to look up
+//!   parameters, so we call it the "parameter" port, so you can access types
+//!   for communicating on that port under: [`crate::mion::proto::parameter`].
 //!   The official tools don't have a way of specifying this port, but it is
 //!   actually configurable in `http://<mionip>/setup.cgi`. Specifically you
 //!   can change it under "Parameter Space".
@@ -23,7 +27,7 @@ pub mod control;
 pub mod parameter;
 
 /// The port the MION uses for 'control' commands.
-pub const MION_CONTROL_PORT: u16 = 7974;
+pub const DEFAULT_MION_CONTROL_PORT: u16 = 7974;
 /// The port the MION uses for parameter commands.
 pub const DEFAULT_MION_PARAMETER_PORT: u16 = 7978;
 

@@ -94,6 +94,7 @@ async fn find_one(find_arg: String, opts: &CliOpts) -> bool {
 			opts.detail
 		},
 		Some(Duration::from_secs(3)),
+		None,
 		create_interface_logging_hook(opts.verbose),
 	)
 	.await
@@ -125,6 +126,7 @@ async fn find_one(find_arg: String, opts: &CliOpts) -> bool {
 async fn scan_all(opts: &CliOpts) {
 	let Ok(mut recv_channel) = discover_bridges_with_logging_hooks(
 		opts.detail,
+		None,
 		create_interface_logging_hook(opts.verbose),
 	)
 	.await

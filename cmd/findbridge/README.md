@@ -64,7 +64,9 @@ Some kernels can automatically forward packets, other times you might be able
 to use a tool like: <https://github.com/udp-redux/udp-broadcast-relay-redux>
 to relay between the two. If you were using udp-broadcast-relay-redux you'd
 ensure your pc connected to both networks is running the following two
-commands:
+commands (note: you may need to add more/change the port being used if you are
+not using a standard setup, some things may try to use the ATAPI configured
+port, which is also by default 7974, but can be changed):
 
 ```sh
 ./udp-broadcast-relay-redux --id 1 --port 7974 --dev <network-one-interface> --dev <network-two-interface>

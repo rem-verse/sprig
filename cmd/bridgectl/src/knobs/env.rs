@@ -5,6 +5,7 @@ use std::{
 	env::{var as env_var, var_os as env_var_os},
 	net::Ipv4Addr,
 	path::PathBuf,
+	time::Duration,
 };
 use tracing::warn;
 
@@ -46,6 +47,47 @@ pub static BRIDGE_CURRENT_IP_ADDRESS: Lazy<Option<Ipv4Addr>> = Lazy::new(|| {
 			Ok(val) => Some(val),
 			Err(cause) => {
 				warn!(?cause, "Not Honoring `cafe`/`cafex`/`mochiato` set environment variable of `BRIDGE_CURRENT_IP_ADDRESS`, not a valid IPv4 address.");
+				None
+			}
+		}
+	})
+});
+
+/// A way of configuring the scan timeout rather than needing to manually
+/// specify over the CLI. This value is specifically in seconds.
+///
+/// Environment Variable Name: `BRIDGE_SCAN_TIMEOUT_SECONDS`
+/// Expected Values: Empty, or a number of seconds.
+/// Type: [`u64`]
+pub static BRIDGE_SCAN_TIMEOUT: Lazy<Option<Duration>> = Lazy::new(|| {
+	env_var("BRIDGE_SCAN_TIMEOUT_SECONDS").ok().and_then(|val| {
+		match val.parse::<u64>() {
+			Ok(val) => Some(Duration::from_secs(val)),
+			Err(cause) => {
+				warn!(?cause, "Not honoring environment variable `BRIDGE_SCAN_TIMEOUT_SECONDS`, not a valid number.");
+				None
+			}
+		}
+	})
+});
+
+/// A way of configuring the port to reach out to a control port.
+///
+/// *note: we believe this port will ALWAYS be 7974, however, due to what we
+/// believe is a buggy case there are some cases where official tools can
+/// reach out to separate ports. AGAIN WE BELIEVE THIS IS A BUG, AND THUS YOU
+/// SHOULD NEVER NEED TO CHANGE THIS. IF YOU DO, PLEASE CONTACT US SO WE CAN
+/// DIG IN.*
+///
+/// Environment Variable Name: `BRIDGE_CONTROL_PORT_OVERRIDE`
+/// Expected Values: Empty, or a port number (0-65536).
+/// Type: [`u16`]
+pub static BRIDGE_CONTROL_PORT: Lazy<Option<u16>> = Lazy::new(|| {
+	env_var("BRIDGE_CONTROL_PORT_OVERRIDE").ok().and_then(|val| {
+		match val.parse::<u16>() {
+			Ok(val) => Some(val),
+			Err(cause) => {
+				warn!(?cause, "Not honoring environment variable `BRIDGE_CONTROL_PORT_OVERRIDE`, not a valid port number.");
 				None
 			}
 		}

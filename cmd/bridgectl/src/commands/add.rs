@@ -8,11 +8,11 @@ use crate::{
 	utils::{add_context_to, bridge_state_from_path},
 };
 use cat_dev::{
-	mion::discovery::{discover_bridges, find_mion, MIONFindBy},
+	mion::discovery::{find_mion, MIONFindBy},
 	BridgeHostState,
 };
 use miette::miette;
-use std::{net::Ipv4Addr, path::PathBuf};
+use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 use tracing::{error, field::valuable, info};
 
 /// Handle adding a bridge, or updating a bridge.
@@ -20,6 +20,7 @@ pub async fn handle_add_or_update(
 	use_json: bool,
 	cli_arguments: (Option<String>, Option<Ipv4Addr>),
 	positional_arguments: (Option<String>, Option<Ipv4Addr>),
+	find_by_args: (Duration, u16),
 	host_state_path: PathBuf,
 	set_default: bool,
 ) {
@@ -57,10 +58,13 @@ pub async fn handle_add_or_update(
 			(bn_arg, bi_arg)
 		} else {
 			// This could be a name or an IP techincally. we try matching on both.
-			mion_find_by_name_or_ip(use_json, bn_arg).await
+			mion_find_by_name_or_ip(use_json, bn_arg, find_by_args).await
 		}
 	} else if let Some(bi_arg) = ip_arg {
-		(mion_find_name_from_ip(use_json, bi_arg).await, bi_arg)
+		(
+			mion_find_name_from_ip(use_json, bi_arg, find_by_args).await,
+			bi_arg,
+		)
 	} else {
 		// double non check above.
 		unreachable!()
@@ -146,17 +150,57 @@ async fn upsert_bridge(
 		%bridge_name,
 		%bridge_ip,
 		"Successfully added a bridge to your host state file!{}",
-		if set_default {
-			" And successfully set it as your default bridge."
-		} else { "" }
+		if set_default { " And successfully set it as your default bridge." } else { "" }
 	);
 }
 
 /// Given a name (or potentially an IP) find the appropriate information.
-async fn mion_find_by_name_or_ip(use_json: bool, bridge_name_or_ip: String) -> (String, Ipv4Addr) {
-	let potential_ip_arg = bridge_name_or_ip.parse::<Ipv4Addr>().ok();
-	let mut recv_channel = match discover_bridges(false).await {
-		Ok(channel) => channel,
+async fn mion_find_by_name_or_ip(
+	use_json: bool,
+	bridge_name_or_ip: String,
+	find_by_args: (Duration, u16),
+) -> (String, Ipv4Addr) {
+	match find_mion(
+		MIONFindBy::from_name_or_ip(bridge_name_or_ip.clone()),
+		false,
+		Some(find_by_args.0),
+		Some(find_by_args.1),
+	)
+	.await
+	{
+		Ok(Some(identity)) => (identity.name().to_owned(), identity.ip_address()),
+		Ok(None) => {
+			// Didn't find one that matches your args.
+			if use_json {
+				error!(
+					id = "bridgectl::add::failed_to_find_a_device",
+					search_for.name_or_ip = bridge_name_or_ip,
+					suggestions = valuable(&[
+						"Please ensure the CAT-DEV is powered on, and running.",
+						"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+						"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+					]),
+					"Could not find a bridge searching by the name, or by ip."
+				);
+			} else {
+				error!(
+					"\n{:?}",
+					add_context_to(
+						miette!("Could not find a bridge by the name, or potentially an ip."),
+						[
+							miette!("Please ensure the CAT-DEV is powered on, and running."),
+							miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
+							miette!(
+								help = format!("Searching for Name/IP: {bridge_name_or_ip}"),
+								"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the two VLANs/Subnets.",
+							),
+						].into_iter(),
+					),
+				);
+			}
+
+			std::process::exit(ADD_COULD_NOT_FIND);
+		}
 		Err(cause) => {
 			if use_json {
 				error!(
@@ -175,52 +219,23 @@ async fn mion_find_by_name_or_ip(use_json: bool, bridge_name_or_ip: String) -> (
 
 			std::process::exit(ADD_COULD_NOT_SEARCH);
 		}
-	};
-
-	while let Some(identity) = recv_channel.recv().await {
-		if identity.name() == bridge_name_or_ip.as_str()
-			|| Some(identity.ip_address()) == potential_ip_arg
-		{
-			return (identity.name().to_owned(), identity.ip_address());
-		}
 	}
-
-	// Didn't find one that matches your args.
-	if use_json {
-		error!(
-			id = "bridgectl::add::failed_to_find_a_device",
-			search_for.name = bridge_name_or_ip,
-			search_for.ip = ?potential_ip_arg,
-			suggestions = valuable(&[
-				"Please ensure the CAT-DEV is powered on, and running.",
-				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
-				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
-			]),
-			"Could not find a bridge searching by the name, or by ip."
-		);
-	} else {
-		error!(
-			"\n{:?}",
-			add_context_to(
-				miette!("Could not find a bridge by the name, or potentially an ip."),
-				[
-					miette!("Please ensure the CAT-DEV is powered on, and running."),
-					miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
-					miette!(
-						help = format!("Searching for Name: {bridge_name_or_ip} / searched for ip: {potential_ip_arg:?}"),
-						"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the two VLANs/Subnets.",
-					),
-				].into_iter(),
-			),
-		);
-	}
-
-	std::process::exit(ADD_COULD_NOT_FIND);
 }
 
 /// Given a guaranteed IP Argument, find the bridges name.
-async fn mion_find_name_from_ip(use_json: bool, bridge_ip: Ipv4Addr) -> String {
-	match find_mion(MIONFindBy::Ip(bridge_ip), false, None).await {
+async fn mion_find_name_from_ip(
+	use_json: bool,
+	bridge_ip: Ipv4Addr,
+	find_by_args: (Duration, u16),
+) -> String {
+	match find_mion(
+		MIONFindBy::Ip(bridge_ip),
+		false,
+		Some(find_by_args.0),
+		Some(find_by_args.1),
+	)
+	.await
+	{
 		Ok(Some(bridge)) => bridge.name().to_owned(),
 		Ok(None) => {
 			if use_json {

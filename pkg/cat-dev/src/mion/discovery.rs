@@ -20,14 +20,15 @@
 //! If you are in different VLANs/Subnets and you do have the ability to run
 //! a repeater heading in BOTH directions (both are required for all bits of
 //! functionality!), you want to broadcast the port
-//! [`crate::mion::proto::MION_CONTROL_PORT`] aka 7974. Otherwise things will not
-//! work.
+//! [`crate::mion::proto::DEFAULT_MION_CONTROL_PORT`] aka 7974. Otherwise things
+//! will not work. You may also need to broadcast whatever your configured ATAPI
+//! port is (by default this is also 7974, so not a worry.)
 
 use crate::{
 	errors::{CatBridgeError, NetworkError},
 	mion::proto::{
 		control::{MionIdentity, MionIdentityAnnouncement},
-		MION_ANNOUNCE_TIMEOUT_SECONDS, MION_CONTROL_PORT,
+		DEFAULT_MION_CONTROL_PORT, MION_ANNOUNCE_TIMEOUT_SECONDS,
 	},
 };
 use bytes::{Bytes, BytesMut};
@@ -58,16 +59,23 @@ use tracing::{debug, error, warn};
 /// responses on the network. To replicate their speed, and behaviour you can
 /// pass an early timeout of 3 seconds.
 ///
+/// *note: you probably do not want to set `control_port`, we have not seen
+/// a mion respond on a separate port to this day, but certain tools do try
+/// to query other ports (We believe it's an unintentional bug, however, we
+/// expose it, just incase).
+///
 /// ## Errors
 ///
 /// See the error notes for [`discover_bridges`].
 pub async fn discover_and_collect_bridges(
 	fetch_detailed_info: bool,
 	early_timeout: Option<Duration>,
+	override_control_port: Option<u16>,
 ) -> Result<Vec<MionIdentity>, CatBridgeError> {
 	discover_and_collect_bridges_with_logging_hooks(
 		fetch_detailed_info,
 		early_timeout,
+		override_control_port,
 		noop_logger_interface,
 	)
 	.await
@@ -88,19 +96,29 @@ pub async fn discover_and_collect_bridges(
 /// responses on the network. To replicate their speed, and behaviour you can
 /// pass an early timeout of 3 seconds.
 ///
+/// *note: you probably do not want to set `control_port`, we have not seen
+/// a mion respond on a separate port to this day, but certain tools do try
+/// to query other ports (We believe it's an unintentional bug, however, we
+/// expose it, just incase).
+///
 /// ## Errors
 ///
 /// See the error notes for [`discover_bridges`].
 pub async fn discover_and_collect_bridges_with_logging_hooks<InterfaceLoggingHook>(
 	fetch_detailed_info: bool,
 	early_timeout: Option<Duration>,
+	override_control_port: Option<u16>,
 	interface_logging_hook: InterfaceLoggingHook,
 ) -> Result<Vec<MionIdentity>, CatBridgeError>
 where
 	InterfaceLoggingHook: Fn(&'_ Addr) + Clone + Send + 'static,
 {
-	let mut recv_channel =
-		discover_bridges_with_logging_hooks(fetch_detailed_info, interface_logging_hook).await?;
+	let mut recv_channel = discover_bridges_with_logging_hooks(
+		fetch_detailed_info,
+		override_control_port,
+		interface_logging_hook,
+	)
+	.await?;
 
 	let mut results = Vec::new();
 	loop {
@@ -148,6 +166,11 @@ where
 /// original tools EXACTLY. For most users you probably don't want those
 /// logging hooks, as they ALREADY get piped through [`tracing`].
 ///
+/// *note: you probably do not want to set `control_port`, we have not seen
+/// a mion respond on a separate port to this day, but certain tools do try
+/// to query other ports (We believe it's an unintentional bug, however, we
+/// expose it, just incase).
+///
 /// ## Errors
 ///
 /// - If we fail to spawn a task to concurrently look up the MIONs.
@@ -159,8 +182,14 @@ where
 /// finally if the broadcast packet is not a MION Identity response.
 pub async fn discover_bridges(
 	fetch_detailed_info: bool,
+	override_control_port: Option<u16>,
 ) -> Result<UnboundedReceiver<MionIdentity>, CatBridgeError> {
-	discover_bridges_with_logging_hooks(fetch_detailed_info, noop_logger_interface).await
+	discover_bridges_with_logging_hooks(
+		fetch_detailed_info,
+		override_control_port,
+		noop_logger_interface,
+	)
+	.await
 }
 
 /// Discover all the Cat-Dev Bridges actively on the network.
@@ -171,11 +200,17 @@ pub async fn discover_bridges(
 ///
 /// You probably want [`discover_bridges`].
 ///
+/// *note: you probably do not want to set `control_port`, we have not seen
+/// a mion respond on a separate port to this day, but certain tools do try
+/// to query other ports (We believe it's an unintentional bug, however, we
+/// expose it, just incase).
+///
 /// ## Errors
 ///
 /// See the error notes for [`discover_bridges`].
 pub async fn discover_bridges_with_logging_hooks<InterfaceLoggingHook>(
 	fetch_detailed_info: bool,
+	override_control_port: Option<u16>,
 	interface_logging_hook: InterfaceLoggingHook,
 ) -> Result<UnboundedReceiver<MionIdentity>, CatBridgeError>
 where
@@ -192,6 +227,7 @@ where
 			.name(&format!("cat_dev::discover_mion::{interface_ipv4}"))
 			.spawn(async move {
 				broadcast_to_mions_on_interface(
+					override_control_port,
 					broadcast_messaged_cloned,
 					interface_addr,
 					interface_ipv4,
@@ -288,6 +324,11 @@ where
 /// This _may_ cause a full discovery search to run, or may send a direct
 /// packet to the device itself.
 ///
+/// *note: you probably do not want to set `control_port`, we have not seen
+/// a mion respond on a separate port to this day, but certain tools do try
+/// to query other ports (We believe it's an unintentional bug, however, we
+/// expose it, just incase).
+///
 /// ## Errors
 ///
 /// - If we fail to spawn a task to concurrently look up the MIONs, and we need
@@ -297,11 +338,13 @@ pub async fn find_mion(
 	find_by: MIONFindBy,
 	find_detailed: bool,
 	early_scan_timeout: Option<Duration>,
+	override_control_port: Option<u16>,
 ) -> Result<Option<MionIdentity>, CatBridgeError> {
 	find_mion_with_logging_hooks(
 		find_by,
 		find_detailed,
 		early_scan_timeout,
+		override_control_port,
 		noop_logger_interface,
 	)
 	.await
@@ -320,6 +363,11 @@ pub async fn find_mion(
 /// need to do a full scan. You can call [`MIONFindBy::will_cause_full_scan`]
 /// in order to determine if you'll get logging callbacks.
 ///
+/// *note: you probably do not want to set `control_port`, we have not seen
+/// a mion respond on a separate port to this day, but certain tools do try
+/// to query other ports (We believe it's an unintentional bug, however, we
+/// expose it, just incase).
+///
 /// ## Errors
 ///
 /// - If we fail to spawn a task to concurrently look up the MIONs, and we need
@@ -329,19 +377,20 @@ pub async fn find_mion_with_logging_hooks<InterfaceLoggingHook>(
 	find_by: MIONFindBy,
 	find_detailed_info: bool,
 	early_scan_timeout: Option<Duration>,
+	override_control_port: Option<u16>,
 	interface_logging_hook: InterfaceLoggingHook,
 ) -> Result<Option<MionIdentity>, CatBridgeError>
 where
 	InterfaceLoggingHook: Fn(&'_ Addr) + Clone + Send + 'static,
 {
+	let port = override_control_port.unwrap_or(DEFAULT_MION_CONTROL_PORT);
 	let (find_by_mac, find_by_name) = match find_by {
 		MIONFindBy::Ip(ipv4) => {
-			let local_socket =
-				UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MION_CONTROL_PORT))
-					.await
-					.map_err(|_| NetworkError::BindAddressError)?;
+			let local_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
+				.await
+				.map_err(|_| NetworkError::BindAddressError)?;
 			local_socket
-				.connect(SocketAddrV4::new(ipv4, MION_CONTROL_PORT))
+				.connect(SocketAddrV4::new(ipv4, port))
 				.await
 				.map_err(NetworkError::IOError)?;
 			local_socket
@@ -367,8 +416,12 @@ where
 		MIONFindBy::Name(name) => (None, Some(name)),
 	};
 
-	let mut recv_channel =
-		discover_bridges_with_logging_hooks(find_detailed_info, interface_logging_hook).await?;
+	let mut recv_channel = discover_bridges_with_logging_hooks(
+		find_detailed_info,
+		override_control_port,
+		interface_logging_hook,
+	)
+	.await?;
 	loop {
 		tokio::select! {
 			opt = recv_channel.recv() => {
@@ -428,7 +481,7 @@ pub enum MIONFindBy {
 	MacAddress(MacAddress),
 	/// Search by the name of a Cat-Dev Bridge.
 	///
-	/// This searching t ype will cause a FULL Broadcast to happen. Meaning we
+	/// This searching type will cause a FULL Broadcast to happen. Meaning we
 	/// will receive potentially many broadcast responses that we might have to
 	/// ignore. There isn't really a way to avoid this without keeping a cache
 	/// somewhere. In theory a user could still this, and just pass in find by
@@ -533,6 +586,7 @@ pub fn get_all_broadcast_addresses() -> Result<Vec<(Addr, Ipv4Addr)>, CatBridgeE
 /// so we can read from them all concurrently with a timeout that applies to
 /// all of them).
 async fn broadcast_to_mions_on_interface<InterfaceLoggingHook>(
+	override_control_port: Option<u16>,
 	body_to_broadcast: Bytes,
 	interface_addr: Addr,
 	interface_ipv4: Ipv4Addr,
@@ -561,7 +615,7 @@ where
 
 	let local_socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
 		interface_ipv4,
-		MION_CONTROL_PORT,
+		override_control_port.unwrap_or(DEFAULT_MION_CONTROL_PORT),
 	)))
 	.await
 	.map_err(|_| NetworkError::BindAddressError)?;
@@ -571,7 +625,10 @@ where
 	local_socket
 		.send_to(
 			&body_to_broadcast,
-			SocketAddr::new(broadcast_address, MION_CONTROL_PORT),
+			SocketAddr::new(
+				broadcast_address,
+				override_control_port.unwrap_or(DEFAULT_MION_CONTROL_PORT),
+			),
 		)
 		.await
 		.map_err(NetworkError::IOError)?;
@@ -617,14 +674,14 @@ mod unit_tests {
 	#[tokio::test]
 	pub async fn cant_find_nonexisting_device() {
 		assert!(
-			find_mion(MIONFindBy::Name("𩸽".to_owned()), false, None)
+			find_mion(MIONFindBy::Name("𩸽".to_owned()), false, None, None)
 				.await
 				.expect("Failed to scan to find a specific mion")
 				.is_none(),
 			"Somehow found a MION that can't exist?"
 		);
 		assert!(
-			find_mion(MIONFindBy::Name("𩸽".to_owned()), true, None)
+			find_mion(MIONFindBy::Name("𩸽".to_owned()), true, None, None)
 				.await
 				.expect("Failed to scan to find a specific mion")
 				.is_none(),
@@ -634,7 +691,8 @@ mod unit_tests {
 			find_mion(
 				MIONFindBy::Name("𩸽".to_owned()),
 				true,
-				Some(Duration::from_secs(3))
+				Some(Duration::from_secs(3)),
+				None,
 			)
 			.await
 			.expect("Failed to scan to find a specific mion")
