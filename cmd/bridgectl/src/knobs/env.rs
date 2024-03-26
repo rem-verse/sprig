@@ -22,9 +22,18 @@ pub static USE_JSON_OUTPUT: Lazy<bool> =
 ///
 /// Environment Variable Name: `BRIDGECTL_BRIDGE_ENV_PATH`
 /// Expected Values: A Path
-/// Type: [`PathBuf`].
+/// Type: [`PathBuf`]
 pub static BRIDGE_HOST_STATE_PATH: Lazy<Option<PathBuf>> =
 	Lazy::new(|| env_var_os("BRIDGECTL_BRIDGE_ENV_PATH").map(PathBuf::from));
+
+/// A way of specifying the serial port to read logs from so you don't have to
+/// pass it in over a CLI flag.
+///
+/// Environment Variable Name: `BRIDGECTL_SERIAL_PORT`
+/// Expected Values: `COM1`/`COM2`/etc. on Windows, `/dev/tty` on Linux.
+/// Type: [`PathBuf`]
+pub static BRIDGECTL_SERIAL_PORT: Lazy<Option<PathBuf>> =
+	Lazy::new(|| env_var_os("BRIDGECTL_SERIAL_PORT").map(PathBuf::from));
 
 /// Set by `cafe`/`cafex`/`mochiato`, a way of specifying the bridge to
 /// connect too.

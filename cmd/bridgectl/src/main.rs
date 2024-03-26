@@ -15,8 +15,8 @@ pub mod utils;
 use crate::{
 	commands::{
 		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
-		handle_get_parameters, handle_help, handle_list, handle_remove_bridge,
-		handle_set_default_bridge, handle_set_parameters,
+		handle_get_parameters, handle_help, handle_list, handle_list_serial_ports,
+		handle_remove_bridge, handle_set_default_bridge, handle_set_parameters, handle_tail,
 	},
 	exit_codes::{
 		ARGUMENT_PARSING_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE, NO_ARGUMENT_SPECIFIED_FAILURE,
@@ -94,6 +94,8 @@ async fn main() {
 			bridge_name,
 			bridge_name_positional,
 			without_pcfs,
+			serial_port_flag,
+			serial_port_positional,
 		} => {
 			handle_boot(
 				use_json,
@@ -103,6 +105,7 @@ async fn main() {
 				(scan_timeout, control_port),
 				argv.bridge_state_path,
 				without_pcfs,
+				(serial_port_flag, serial_port_positional),
 			)
 			.await;
 		}
@@ -180,6 +183,9 @@ async fn main() {
 			)
 			.await;
 		}
+		Subcommands::ListSerialPorts {} => {
+			handle_list_serial_ports(use_json);
+		}
 		Subcommands::Remove {
 			bridge_name,
 			bridge_name_positional,
@@ -225,6 +231,12 @@ async fn main() {
 			)
 			.await;
 		}
+		Subcommands::Tail {
+			serial_port_flag,
+			serial_port_positional,
+		} => {
+			handle_tail(use_json, serial_port_flag, serial_port_positional).await;
+		}
 	}
 }
 
@@ -235,7 +247,8 @@ fn bootstrap_cli() -> (CliArguments, bool) {
 		|_error| {
 			let mut use_json = false;
 
-			// Try to identify if the user is wanting to use JSON.
+			// Try to identify if the user is wanting to use JSON, even when argument
+			// parsing itself fails.
 			for arg in std::env::args() {
 				if arg.as_str() == "-j" || arg.as_str() == "--json" {
 					use_json = true;

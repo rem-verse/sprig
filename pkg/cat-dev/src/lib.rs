@@ -7,6 +7,7 @@
 
 pub mod errors;
 pub mod mion;
+pub mod serial;
 
 use crate::errors::{APIError, FSError};
 use configparser::ini::Ini;

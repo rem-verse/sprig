@@ -6,7 +6,7 @@
   <Package Manufacturer="RemVerse"
     Name="Sprig"
     Language="1033"
-    Version="0.0.4"
+    Version="0.0.5"
     UpgradeCode="f25b6ffc-5890-42f2-a1c1-0f7dd4a9ee11">
 
     <ui:WixUI Id="WixUI_Minimal" InstallDirectory="INSTALLFOLDER" />
@@ -46,6 +46,24 @@
           <Component>
             <File Id="getbridgetypeps1" Name="getbridgetype.ps1" Source="cmd/getbridgetype/pwsh/getbridgetype.ps1" KeyPath="yes" />
           </Component>
+          <Component>
+            <File Id="mionps" Name="mionps.exe" Source="target/release/mionps.exe" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="mionparamspace" Name="mionparamspace.exe" Source="target/release/mionparamspace.exe" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="catlog" Name="catlog.exe" Source="target/release/catlog.exe" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="license" Name="LICENSE" Source="LICENSE" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="serial2-apache-license" Name="serial2-tokio-rs-apache.md" Source="pkg/cat-dev/licenses/serial2-tokio-rs-apache.md" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="serial2-bsd-license" Name="serial2-tokio-rs-bsd.md" Source="pkg/cat-dev/licenses/serial2-tokio-rs-bsd.md" KeyPath="yes" />
+          </Component>
         </Directory>
       </Directory>
     </StandardDirectory>
@@ -60,6 +78,12 @@
       <ComponentRef Id="getbridgeps1" />
       <ComponentRef Id="getbridgetypecmd" />
       <ComponentRef Id="getbridgetypeps1" />
+      <ComponentRef Id="mionps" />
+      <ComponentRef Id="mionparamspace" />
+      <ComponentRef Id="catlog" />
+      <ComponentRef Id="license" />
+      <ComponentRef Id="serial2-apache-license" />
+      <ComponentRef Id="serial2-bsd-license" />
     </Feature>
     <util:BroadcastEnvironmentChange />
 
