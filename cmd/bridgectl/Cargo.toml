@@ -11,13 +11,17 @@ publish = false
 
 [dependencies]
 cat-dev = { path = "../../pkg/cat-dev" }
-clap = { version = "^4.5.1", features = ["color", "derive", "env", "error-context", "help", "suggestions", "unicode", "usage", "wrap_help"] }
+clap = { version = "^4.5.3", features = ["color", "derive", "env", "error-context", "help", "suggestions", "unicode", "usage", "wrap_help"] }
 fnv.workspace = true
 log = { path = "../../pkg/log" }
 mac_address.workspace = true
 miette.workspace = true
 once_cell.workspace = true
+pin-project-lite = "^0.2.13"
 terminal_size = "^0.3.0"
 tokio.workspace = true
 tracing.workspace = true
 valuable.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "^0.2"

@@ -3,7 +3,9 @@
 //! TODO(mythra): not fully implemented yet.
 
 use crate::{
-	commands::argv_helpers::{coalesce_bridge_arguments, get_default_bridge},
+	commands::argv_helpers::{
+		coalesce_bridge_arguments, coalesce_serial_ports, get_default_bridge, spawn_serial_log_task,
+	},
 	exit_codes::{
 		BOOT_CGI_FAILURE, BOOT_NO_AVAILABLE_BRIDGE, BOOT_NO_BRIDGE_FILTERS, NOT_YET_IMPLEMENTED,
 	},
@@ -19,6 +21,10 @@ use miette::miette;
 use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 use tracing::{error, field::valuable, info, warn};
 
+#[allow(
+	// It's a CLI parameter, we got a lot of flags.
+	clippy::too_many_arguments,
+)]
 pub async fn handle_boot(
 	use_json: bool,
 	just_fetch_default: bool,
@@ -27,6 +33,7 @@ pub async fn handle_boot(
 	find_by_args: (Duration, u16),
 	host_state_path: Option<PathBuf>,
 	no_pcfs: bool,
+	serial_port_args: (Option<PathBuf>, Option<PathBuf>),
 ) {
 	let bridge_ip = get_bridge_ip(
 		use_json,
@@ -39,42 +46,55 @@ pub async fn handle_boot(
 	.await;
 
 	if no_pcfs {
-		warn!("NOTE: this will work if the cat-dev hasn't been taken control of by another host, but does not have good error handling yet!");
-		match very_hacky_will_break_dont_use_power_on(bridge_ip).await {
-			Ok(result_code) => {
-				if result_code {
-					info!("Successfully powered on MION!");
-				} else {
-					error!("Failed to boot cat-dev bridge! Please reach out for support!");
-					std::process::exit(BOOT_CGI_FAILURE);
-				}
-			}
-			Err(cause) => {
-				if use_json {
-					error!(
-						id = "bridgectl::boot::failed_to_boot_device",
-						bridge.ip = %bridge_ip,
-						?cause,
-						suggestions = valuable(&[
-						  "Please file an issue, and reach out!"
-						]),
-					);
-				} else {
-					error!(
-				  	"\n{:?}",
-				  	miette!(
-				  		help = "PLEASE PLEASE PLEASE FILE AN ISSUE!",
-				  		"Failure to perform hacky non-emulated boot!!! THIS IS STILL EARLY !!! PLEASE FILE AN ISSUE!\n {cause:?}",
-				  	),
-				  );
-				}
-
-				std::process::exit(BOOT_CGI_FAILURE);
-			}
+		let optional_serial_port = coalesce_serial_ports(
+			use_json,
+			serial_port_args.0.as_ref(),
+			serial_port_args.1.as_ref(),
+		);
+		boot_without_pcfs(use_json, bridge_ip).await;
+		if let Some((port, path)) = optional_serial_port {
+			_ = spawn_serial_log_task(use_json, port, path).await;
 		}
 	} else {
 		error!("Sorry! THIS HAS NOT YET BEEN IMPLEMENTED! FSEMUL IS MAKING ME CRY!");
 		std::process::exit(NOT_YET_IMPLEMENTED);
+	}
+}
+
+async fn boot_without_pcfs(use_json: bool, bridge_ip: Ipv4Addr) {
+	warn!("NOTE: this will work if the cat-dev hasn't been taken control of by another host, but does not have good error handling yet!");
+
+	match very_hacky_will_break_dont_use_power_on(bridge_ip).await {
+		Ok(result_code) => {
+			if result_code {
+				info!("Successfully powered on MION!");
+			} else {
+				error!("Failed to boot cat-dev bridge! Please reach out for support!");
+				std::process::exit(BOOT_CGI_FAILURE);
+			}
+		}
+		Err(cause) => {
+			if use_json {
+				error!(
+					id = "bridgectl::boot::failed_to_boot_device",
+					bridge.ip = %bridge_ip,
+					?cause,
+					suggestions = valuable(&[
+					  "Please file an issue, and reach out!"
+					]),
+				);
+			} else {
+				error!(
+			  	"\n{:?}",
+			  	miette!(
+			  		help = "PLEASE PLEASE PLEASE FILE AN ISSUE!",
+			  		"Failure to perform hacky non-emulated boot!!! THIS IS STILL EARLY !!! PLEASE FILE AN ISSUE!\n {cause:?}",
+			  	),
+			  );
+			}
+
+			std::process::exit(BOOT_CGI_FAILURE);
+		}
 	}
 }
 

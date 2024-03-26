@@ -10,6 +10,7 @@ pub struct CliArguments {
 	#[arg(
 		global = true,
 		long = "bridge-state-path",
+		alias = "bridge_state_path",
 		help = "The path to the `bridge_env.ini` file to use.",
 		long_help = "The path to the `bridge_env.ini` file to use if it's not in the default location."
 	)]
@@ -17,6 +18,7 @@ pub struct CliArguments {
 	#[arg(
 		global = true,
 		long = "bridge-control-port-override",
+		alias = "bridge_control_port_override",
 		help = "A way to override the control port which should never be needed.",
 		long_help = "Allow overriding the scanning port aka CONTROL port for finding cat-dev bridges."
 	)]
@@ -42,6 +44,7 @@ pub struct CliArguments {
 	#[arg(
 		global = true,
 		long = "scan-early-timeout-seconds",
+		alias = "scan_early_timeout_seconds",
 		help = "The amount of seconds to wait before bailing early when scanning for a bridge (by default this is 3).",
 		long_help = "CAT-DEV's MUST respond to broadcasts within 10 seconds, but in reality most folks only have one cat-dev / non busy networks were they will respond faster, in this case it's generally better to exit early. How early we decide to exit is controlled by this variable."
 	)]
@@ -64,6 +67,7 @@ pub enum Subcommands {
 		#[arg(
 			short = 'i',
 			long = "bridge-ip",
+			alias = "bridge_ip",
 			help = "The IP Address of the bridge to add as a flag.",
 			long_help = "The IP Address of the bridge to add as a flag, conflicts with the positional argument."
 		)]
@@ -87,7 +91,11 @@ pub enum Subcommands {
 		)]
 		set_default: bool,
 	},
-	#[command(name = "boot", visible_alias = "power-on")]
+	/// Attempt to power on a MION, so you can actually use it.
+	#[command(
+		name = "boot",
+		visible_aliases = ["power-on", "power_on"],
+	)]
 	Boot {
 		#[arg(
 			short = 'd',
@@ -106,6 +114,7 @@ pub enum Subcommands {
 		#[arg(
 			short = 'm',
 			long = "mac-address",
+			alias = "mac_address",
 			help = "The Mac Address of the bridge to set the parameters on.",
 			long_help = "Set the parameters of the bridge found by searching for the bridge with this MAC Address."
 		)]
@@ -125,12 +134,31 @@ pub enum Subcommands {
 		bridge_name_positional: Option<String>,
 		#[arg(
 			long = "boot-without-pcfs",
+			alias = "boot_without_pcfs",
 			help = "Just boot the device without PCFS",
 			long_help = "Disable almost all other options, and just boot the device without any connection to the PC."
 		)]
 		without_pcfs: bool,
+		#[arg(
+			short = 's',
+			long = "serial-port-path",
+			alias = "serial_port_path",
+			help = "The path to the serial port to use (conflicts with the positional argument).",
+			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
+		)]
+		serial_port_flag: Option<PathBuf>,
+		#[arg(
+			index = 2,
+			help = "The path to the serial port to use (conflicts with the flag).",
+			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the flag)."
+		)]
+		serial_port_positional: Option<PathBuf>,
 	},
-	#[command(name = "dump-parameters", visible_alias = "dp")]
+	/// Dump the entire parameter space of a MION.
+	#[command(
+		name = "dump-parameters",
+		visible_aliases = ["dp", "dump_parameters"],
+	)]
 	DumpParameters {
 		#[arg(
 			short = 'd',
@@ -149,6 +177,7 @@ pub enum Subcommands {
 		#[arg(
 			short = 'm',
 			long = "mac-address",
+			alias = "mac_address",
 			help = "The Mac Address of the bridge to get parameters from.",
 			long_help = "Get the parameters of the bridge found by searching for the bridge with this MAC Address."
 		)]
@@ -194,6 +223,7 @@ pub enum Subcommands {
 		#[arg(
 			short = 'm',
 			long = "mac-address",
+			alias = "mac_address",
 			help = "Search for a bridge with a particular MAC Address.",
 			long_help = "Search for a bridge with a particular MAC Address, this will return the first bridge with this MAC as it should be unique, can also be specified as a positional argument."
 		)]
@@ -214,12 +244,17 @@ pub enum Subcommands {
 		#[arg(
 			short = 't',
 			long = "table-output",
+			alias = "table_output",
 			help = "Output the list of bridges as a particular table.",
 			long_help = "Rather than outputting the information as a bunch of log lines, output the information in a table"
 		)]
 		output_as_table: bool,
 	},
-	#[command(name = "get-parameters", visible_alias = "gp")]
+	/// Get the parameters from the parameter space of a MION.
+	#[command(
+		name = "get-parameters",
+		visible_aliases = ["gp", "get_parameters"],
+	)]
 	GetParameters {
 		#[arg(
 			short = 'd',
@@ -238,6 +273,7 @@ pub enum Subcommands {
 		#[arg(
 			short = 'm',
 			long = "mac-address",
+			alias = "mac_address",
 			help = "The Mac Address of the bridge to get parameters from.",
 			long_help = "Get the parameters of the bridge found by searching for the bridge with this MAC Address."
 		)]
@@ -285,11 +321,19 @@ pub enum Subcommands {
 		#[arg(
 			short = 't',
 			long = "table-output",
+			alias = "table_output",
 			help = "Output the list of bridges as a particular table.",
 			long_help = "Rather than outputting the information as a bunch of log lines, output the information in a table"
 		)]
 		output_as_table: bool,
 	},
+	/// List the available serial ports, to try and find the devices you can use
+	/// to tail logs from.
+	#[command(
+		name = "list-serial-ports",
+		visible_aliases = ["ls-serial-ports", "lssp", "list_serial_ports", "ls_serial_ports"],
+	)]
+	ListSerialPorts {},
 	/// Remove a bridge from your local configuration file.
 	#[command(name = "remove", visible_alias = "rm")]
 	Remove {
@@ -324,7 +368,11 @@ pub enum Subcommands {
 		)]
 		bridge_name_positional: Option<String>,
 	},
-	#[command(name = "set-parameters", visible_alias = "sp")]
+	/// Set bytes in the parameter space of a MION.
+	#[command(
+		name = "set-parameters",
+		visible_aliases = ["sp", "set_parameters"],
+	)]
 	SetParameters {
 		#[arg(
 			short = 'd',
@@ -343,6 +391,7 @@ pub enum Subcommands {
 		#[arg(
 			short = 'm',
 			long = "mac-address",
+			alias = "mac_address",
 			help = "The Mac Address of the bridge to set the parameters on.",
 			long_help = "Set the parameters of the bridge found by searching for the bridge with this MAC Address."
 		)]
@@ -374,6 +423,27 @@ pub enum Subcommands {
 		)]
 		parameter_space_port: Option<u16>,
 	},
+	/// Tail the logs of a serial port.
+	#[command(
+		name = "tail",
+		visible_aliases = ["tail-serial-port", "tail_serial_port"],
+	)]
+	Tail {
+		#[arg(
+			short = 's',
+			long = "serial-port-path",
+			alias = "serial_port_path",
+			help = "The path to the serial port to use (conflicts with the positional argument).",
+			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
+		)]
+		serial_port_flag: Option<PathBuf>,
+		#[arg(
+			index = 1,
+			help = "The path to the serial port to use (conflicts with the flag).",
+			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the flag)."
+		)]
+		serial_port_positional: Option<PathBuf>,
+	},
 }
 impl Subcommands {
 	/// If this subcommand matches a particular name.
@@ -388,6 +458,16 @@ impl Subcommands {
 				bridge_ip_positional,
 				set_default,
 			} => name == "add" || name == "update",
+			Self::Boot {
+				default,
+				bridge_ipaddr,
+				bridge_mac,
+				bridge_name,
+				bridge_name_positional,
+				without_pcfs,
+				serial_port_flag,
+				serial_port_positional,
+			} => name == "boot" || name == "power-on" || name == "power_on",
 			Self::DumpParameters {
 				default,
 				bridge_ipaddr,
@@ -395,7 +475,7 @@ impl Subcommands {
 				bridge_name,
 				bridge_name_positional,
 				parameter_space_port,
-			} => name == "dump-parameters" || name == "dp",
+			} => name == "dump-parameters" || name == "dump_parameters" || name == "dp",
 			Self::Get {
 				default,
 				bridge_ipaddr,
@@ -412,20 +492,19 @@ impl Subcommands {
 				bridge_name_positional,
 				parameter_names_positional,
 				parameter_space_port,
-			} => name == "get-parameters" || name == "gp",
+			} => name == "get-parameters" || name == "get_parameters" || name == "gp",
 			Self::Help {} => name == "help",
 			Self::List {
 				use_cache,
 				output_as_table,
 			} => name == "list" || name == "ls",
-			Self::Boot {
-				default,
-				bridge_ipaddr,
-				bridge_mac,
-				bridge_name,
-				bridge_name_positional,
-				without_pcfs,
-			} => name == "boot" || name == "power-on",
+			Self::ListSerialPorts {} => {
+				name == "list-serial-ports"
+					|| name == "ls-serial-ports"
+					|| name == "list_serial_ports"
+					|| name == "ls_serial_ports"
+					|| name == "lssp"
+			}
 			Self::Remove {
 				bridge_name,
 				bridge_name_positional,
@@ -442,8 +521,11 @@ impl Subcommands {
 				bridge_name_positional,
 				parameter_names_positional,
 				parameter_space_port,
-			} => name == "set-parameters" || name == "sp",
-			_ => false,
+			} => name == "set-parameters" || name == "set_parameters" || name == "sp",
+			Self::Tail {
+				serial_port_flag,
+				serial_port_positional,
+			} => name == "tail" || name == "tail-serial-port" || name == "tail_serial_port",
 		}
 	}
 }
