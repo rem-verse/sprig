@@ -59,10 +59,10 @@
             <File Id="license" Name="LICENSE" Source="LICENSE" KeyPath="yes" />
           </Component>
           <Component>
-            <File Id="serial2-apache-license" Name="serial2-tokio-rs-apache.md" Source="pkg/cat-dev/licenses/serial2-tokio-rs-apache.md" KeyPath="yes" />
+            <File Id="serial2_apache_license" Name="serial2-tokio-rs-apache.md" Source="pkg/cat-dev/licenses/serial2-tokio-rs-apache.md" KeyPath="yes" />
           </Component>
           <Component>
-            <File Id="serial2-bsd-license" Name="serial2-tokio-rs-bsd.md" Source="pkg/cat-dev/licenses/serial2-tokio-rs-bsd.md" KeyPath="yes" />
+            <File Id="serial2_bsd_license" Name="serial2-tokio-rs-bsd.md" Source="pkg/cat-dev/licenses/serial2-tokio-rs-bsd.md" KeyPath="yes" />
           </Component>
         </Directory>
       </Directory>
@@ -82,8 +82,8 @@
       <ComponentRef Id="mionparamspace" />
       <ComponentRef Id="catlog" />
       <ComponentRef Id="license" />
-      <ComponentRef Id="serial2-apache-license" />
-      <ComponentRef Id="serial2-bsd-license" />
+      <ComponentRef Id="serial2_apache_license" />
+      <ComponentRef Id="serial2_bsd_license" />
     </Feature>
     <util:BroadcastEnvironmentChange />
 
