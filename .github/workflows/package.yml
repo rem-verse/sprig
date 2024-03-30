@@ -19,6 +19,7 @@ jobs:
       - name: Build Packages
         run: |
           cd installer-scripts/win/
+          dotnet --version
           dotnet tool install --global wix
           wix extension add WiXToolset.UI.wixext
           wix extension add WiXToolset.Util.wixext

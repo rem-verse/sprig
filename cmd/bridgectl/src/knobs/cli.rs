@@ -1,28 +1,18 @@
 //! Defines the command line interface a.k.a. all the arguments & flags.
 
-use clap::Parser;
-use std::{net::Ipv4Addr, path::PathBuf};
+use clap::{Args, Parser};
+use mac_address::MacAddress;
+use std::{
+	fmt::{Display, Formatter, Result as FmtResult},
+	net::Ipv4Addr,
+	path::PathBuf,
+};
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[derive(Parser, Debug)]
 #[clap(disable_help_flag = true, disable_help_subcommand = true)]
 #[command(about, author, name = "bridgectl", propagate_version = true, version)]
 pub struct CliArguments {
-	#[arg(
-		global = true,
-		long = "bridge-state-path",
-		alias = "bridge_state_path",
-		help = "The path to the `bridge_env.ini` file to use.",
-		long_help = "The path to the `bridge_env.ini` file to use if it's not in the default location."
-	)]
-	pub bridge_state_path: Option<PathBuf>,
-	#[arg(
-		global = true,
-		long = "bridge-control-port-override",
-		alias = "bridge_control_port_override",
-		help = "A way to override the control port which should never be needed.",
-		long_help = "Allow overriding the scanning port aka CONTROL port for finding cat-dev bridges."
-	)]
-	pub control_port_override: Option<u16>,
 	#[command(subcommand)]
 	pub commands: Option<Subcommands>,
 	#[arg(
@@ -41,14 +31,6 @@ pub struct CliArguments {
 		long_help = "Switch all logging and output to JSON for machine parsable output. NOTE: there is no necissarily guaranteed structure, though we will not break it unnecissarily."
 	)]
 	pub json: bool,
-	#[arg(
-		global = true,
-		long = "scan-early-timeout-seconds",
-		alias = "scan_early_timeout_seconds",
-		help = "The amount of seconds to wait before bailing early when scanning for a bridge (by default this is 3).",
-		long_help = "CAT-DEV's MUST respond to broadcasts within 10 seconds, but in reality most folks only have one cat-dev / non busy networks were they will respond faster, in this case it's generally better to exit early. How early we decide to exit is controlled by this variable."
-	)]
-	pub scan_timeout: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -57,33 +39,24 @@ pub enum Subcommands {
 	/// Add, or update a bridge to your local configuration file so it can be used quickly later on.
 	#[command(name = "add", visible_alias = "update")]
 	AddOrUpdate {
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "The name of the bridge to add as a flag.",
-			long_help = "The name of the bridge to add as a flag, conflicts with the positional argument."
-		)]
-		bridge_name: Option<String>,
-		#[arg(
-			short = 'i',
-			long = "bridge-ip",
-			alias = "bridge_ip",
-			help = "The IP Address of the bridge to add as a flag.",
-			long_help = "The IP Address of the bridge to add as a flag, conflicts with the positional argument."
-		)]
-		bridge_ipaddr: Option<Ipv4Addr>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
 		#[arg(
 			index = 1,
-			help = "The name, or ip address of the bridge as a positional argument.",
-			long_help = "The name, or ip address of the bridge to add as a positional argument. If you've not specified `--name` this will be the bridge name, if you have specified `--name`, but have not specified `--bridge-ip` we will attempt to use this as an ip."
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what bridge you want to set parameters on with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
 		bridge_name_positional: Option<String>,
-		#[arg(
-			index = 2,
-			help = "The IP Address of the bridge to add.",
-			long_help = "The IP Address of the bridge to add as a positional argument, conflicts with the flag version of `--bridge-ip`."
-		)]
-		bridge_ip_positional: Option<Ipv4Addr>,
+		// ///////////////////////////////////////////////////
+		// Add only command arguments.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			long = "default",
 			help = "Makes this bridge the default.",
@@ -97,48 +70,24 @@ pub enum Subcommands {
 		visible_aliases = ["power-on", "power_on"],
 	)]
 	Boot {
-		#[arg(
-			short = 'd',
-			long = "default",
-			help = "Set the parameters on the default bridge.",
-			long_help = "A shortcut to set parameters on the default bridge, not needing to specify any other lookup fields."
-		)]
-		default: bool,
-		#[arg(
-			short = 'i',
-			long = "ip",
-			help = "The IP of the bridge to set the parameters on.",
-			long_help = "Set the parameters of the bridge located at this IP address."
-		)]
-		bridge_ipaddr: Option<Ipv4Addr>,
-		#[arg(
-			short = 'm',
-			long = "mac-address",
-			alias = "mac_address",
-			help = "The Mac Address of the bridge to set the parameters on.",
-			long_help = "Set the parameters of the bridge found by searching for the bridge with this MAC Address."
-		)]
-		bridge_mac: Option<String>,
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "The Name of the bridge to set the parameters on.",
-			long_help = "Set the parameters of the bridge found by searching for the bridge with this Name."
-		)]
-		bridge_name: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
 			help = "Search for a bridge with a particular name/ip/mac address.",
 			long_help = "If you don't want to specify what bridge you want to set parameters on with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
 		bridge_name_positional: Option<String>,
-		#[arg(
-			long = "boot-without-pcfs",
-			alias = "boot_without_pcfs",
-			help = "Just boot the device without PCFS",
-			long_help = "Disable almost all other options, and just boot the device without any connection to the PC."
-		)]
-		without_pcfs: bool,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single Serial Port.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			short = 's',
 			long = "serial-port-path",
@@ -153,6 +102,22 @@ pub enum Subcommands {
 			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the flag)."
 		)]
 		serial_port_positional: Option<PathBuf>,
+		// ///////////////////////////////////////////////////
+		// Boot only command flags.
+		// ///////////////////////////////////////////////////
+		#[arg(
+			long = "boot-without-pcfs",
+			alias = "boot_without_pcfs",
+			help = "Just boot the device without PCFS",
+			long_help = "Disable almost all other options, and just boot the device without any connection to the PC."
+		)]
+		without_pcfs: bool,
+		#[arg(
+			long = "take-ownership",
+			help = "If we should take over managing a MION from another host.",
+			long_help = "This will allow us to start managing a MION 'stealing' control from another host. Without this the boot command will exit with an error if it's currently being managed by another host."
+		)]
+		take_ownership: bool,
 	},
 	/// Dump the entire parameter space of a MION.
 	#[command(
@@ -160,41 +125,24 @@ pub enum Subcommands {
 		visible_aliases = ["dp", "dump_parameters"],
 	)]
 	DumpParameters {
-		#[arg(
-			short = 'd',
-			long = "default",
-			help = "Get the parameters from the default bridge.",
-			long_help = "A shortcut to get parameters from the default bridge, not needing to specify any other lookup fields."
-		)]
-		default: bool,
-		#[arg(
-			short = 'i',
-			long = "ip",
-			help = "The IP Address of the bridge to get parameters from.",
-			long_help = "Get the parameters of the bridge located at this IP address."
-		)]
-		bridge_ipaddr: Option<Ipv4Addr>,
-		#[arg(
-			short = 'm',
-			long = "mac-address",
-			alias = "mac_address",
-			help = "The Mac Address of the bridge to get parameters from.",
-			long_help = "Get the parameters of the bridge found by searching for the bridge with this MAC Address."
-		)]
-		bridge_mac: Option<String>,
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "The Name of the bridge to get parameters from.",
-			long_help = "Get the parameters of the bridge found by searching for the bridge with this Name."
-		)]
-		bridge_name: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
 			help = "Search for a bridge with a particular name/ip/mac address.",
 			long_help = "If you don't want to specify what bridge you want to get parameters from with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
 		bridge_name_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared flags for configuring the parameter space.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			short = 'p',
 			long = "port",
@@ -206,41 +154,24 @@ pub enum Subcommands {
 	/// Get info on a single bridge, using any piece of information we can search for.
 	#[command(name = "get")]
 	Get {
-		#[arg(
-			short = 'd',
-			long = "default",
-			help = "Just fetch the default bridge.",
-			long_help = "A shortcut to fetch the default bridge, cannot specify any other filters."
-		)]
-		default: bool,
-		#[arg(
-			short = 'i',
-			long = "ip",
-			help = "Search for a bridge with a particular IP Address.",
-			long_help = "Search for a bridge that's located at a particular IPv4 address (can also be specified as a positional argument)."
-		)]
-		bridge_ipaddr: Option<Ipv4Addr>,
-		#[arg(
-			short = 'm',
-			long = "mac-address",
-			alias = "mac_address",
-			help = "Search for a bridge with a particular MAC Address.",
-			long_help = "Search for a bridge with a particular MAC Address, this will return the first bridge with this MAC as it should be unique, can also be specified as a positional argument."
-		)]
-		bridge_mac: Option<String>,
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "Search for a bridge with a particular name.",
-			long_help = "Search for a bridge with a particular name, this will return the first bridge with this name as it should be unique. It can be specified as a positional argument though if it looks like a MAC Address, or IP it may be filtered that way (you may want to use `--bridge-name` for name always)."
-		)]
-		bridge_name: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
 			help = "Search for a bridge with a particular name/ip/mac address.",
 			long_help = "If you don't want to specify what type you're searching for with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess"
 		)]
 		bridge_name_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Get only command flags.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			short = 't',
 			long = "table-output",
@@ -256,47 +187,24 @@ pub enum Subcommands {
 		visible_aliases = ["gp", "get_parameters"],
 	)]
 	GetParameters {
-		#[arg(
-			short = 'd',
-			long = "default",
-			help = "Get the parameters from the default bridge.",
-			long_help = "A shortcut to get parameters from the default bridge, not needing to specify any other lookup fields."
-		)]
-		default: bool,
-		#[arg(
-			short = 'i',
-			long = "ip",
-			help = "The IP Address of the bridge to get parameters from.",
-			long_help = "Get the parameters of the bridge located at this IP address."
-		)]
-		bridge_ipaddr: Option<Ipv4Addr>,
-		#[arg(
-			short = 'm',
-			long = "mac-address",
-			alias = "mac_address",
-			help = "The Mac Address of the bridge to get parameters from.",
-			long_help = "Get the parameters of the bridge found by searching for the bridge with this MAC Address."
-		)]
-		bridge_mac: Option<String>,
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "The Name of the bridge to get parameters from.",
-			long_help = "Get the parameters of the bridge found by searching for the bridge with this Name."
-		)]
-		bridge_name: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
 			help = "Search for a bridge with a particular name/ip/mac address.",
 			long_help = "If you don't want to specify what bridge you want to get parameters from with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
 		bridge_name_positional: Option<String>,
-		#[arg(
-			index = 2,
-			help = "The list of bridge parameters to fetch by name or index (separated by comma).",
-			long_help = "The list of parameters you want to fetch separated by comma, this can be the name of the field, or the index of the field."
-		)]
-		parameter_names_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared flags for configuring the parameter space.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			short = 'p',
 			long = "port",
@@ -304,6 +212,15 @@ pub enum Subcommands {
 			long_help = "The 'parameter space' port to use. Official tools don't support changing this, but it is configurable in `setup.cgi`."
 		)]
 		parameter_space_port: Option<u16>,
+		// ///////////////////////////////////////////////////
+		// Get Parameters only flags.
+		// ///////////////////////////////////////////////////
+		#[arg(
+			index = 2,
+			help = "The list of bridge parameters to fetch by name or index (separated by comma).",
+			long_help = "The list of parameters you want to fetch separated by comma, this can be the name of the field, or the index of the field."
+		)]
+		parameter_names_positional: Option<String>,
 	},
 	/// An alternative to `-h`, or `--help` to show the help for the top level CLI.
 	#[command(name = "help")]
@@ -311,6 +228,16 @@ pub enum Subcommands {
 	/// List all the bridges on your network or all the bridges you've connected to in the past.
 	#[command(name = "list", visible_alias = "ls")]
 	List {
+		// ///////////////////////////////////////////////////
+		// Shared Flags for scanning for a bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		// ///////////////////////////////////////////////////
+		// List only flags.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			short = 'c',
 			long = "cached",
@@ -337,13 +264,15 @@ pub enum Subcommands {
 	/// Remove a bridge from your local configuration file.
 	#[command(name = "remove", visible_alias = "rm")]
 	Remove {
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "The bridge name to remove.",
-			long_help = "The bridge name to remove, you can also specify this as a positional argument, but you cannot specify both."
-		)]
-		bridge_name: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
 			help = "The bridge name to remove as a positional argument as opposed to a flag.",
@@ -354,13 +283,15 @@ pub enum Subcommands {
 	/// Used to change the default bridge we load up automatically.
 	#[command(name = "set-default", visible_alias = "set_default")]
 	SetDefault {
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "The bridge name to remove.",
-			long_help = "The bridge name to remove, you can also specify this as a positional argument, but you cannot specify both."
-		)]
-		bridge_name: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
 			help = "The bridge name to remove as a positional argument as opposed to a flag.",
@@ -374,47 +305,24 @@ pub enum Subcommands {
 		visible_aliases = ["sp", "set_parameters"],
 	)]
 	SetParameters {
-		#[arg(
-			short = 'd',
-			long = "default",
-			help = "Set the parameters on the default bridge.",
-			long_help = "A shortcut to set parameters on the default bridge, not needing to specify any other lookup fields."
-		)]
-		default: bool,
-		#[arg(
-			short = 'i',
-			long = "ip",
-			help = "The IP of the bridge to set the parameters on.",
-			long_help = "Set the parameters of the bridge located at this IP address."
-		)]
-		bridge_ipaddr: Option<Ipv4Addr>,
-		#[arg(
-			short = 'm',
-			long = "mac-address",
-			alias = "mac_address",
-			help = "The Mac Address of the bridge to set the parameters on.",
-			long_help = "Set the parameters of the bridge found by searching for the bridge with this MAC Address."
-		)]
-		bridge_mac: Option<String>,
-		#[arg(
-			short = 'n',
-			long = "name",
-			help = "The Name of the bridge to set the parameters on.",
-			long_help = "Set the parameters of the bridge found by searching for the bridge with this Name."
-		)]
-		bridge_name: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
 			help = "Search for a bridge with a particular name/ip/mac address.",
 			long_help = "If you don't want to specify what bridge you want to set parameters on with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
 		bridge_name_positional: Option<String>,
-		#[arg(
-			index = 2,
-			help = "The list of bridge parameters to set in the form of `(name or index)=(value)`.",
-			long_help = "The list of bridge parameters to set in the form of `(name or index)=(value)`. You can specify multiple parameters to set by using ',',"
-		)]
-		parameter_names_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared flags for configuring the parameter space.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			short = 'p',
 			long = "port",
@@ -422,6 +330,15 @@ pub enum Subcommands {
 			long_help = "The 'parameter space' port to use. Official tools don't support changing this, but it is configurable in `setup.cgi`."
 		)]
 		parameter_space_port: Option<u16>,
+		// ///////////////////////////////////////////////////
+		// Set parameter only flags.
+		// ///////////////////////////////////////////////////
+		#[arg(
+			index = 2,
+			help = "The list of bridge parameters to set in the form of `(name or index)=(value)`.",
+			long_help = "The list of bridge parameters to set in the form of `(name or index)=(value)`. You can specify multiple parameters to set by using ',',"
+		)]
+		parameter_names_positional: Option<String>,
 	},
 	/// Tail the logs of a serial port.
 	#[command(
@@ -429,6 +346,9 @@ pub enum Subcommands {
 		visible_aliases = ["tail-serial-port", "tail_serial_port"],
 	)]
 	Tail {
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single Serial Port.
+		// ///////////////////////////////////////////////////
 		#[arg(
 			short = 's',
 			long = "serial-port-path",
@@ -452,49 +372,48 @@ impl Subcommands {
 	pub fn name_matches(&self, name: &str) -> bool {
 		match self {
 			Self::AddOrUpdate {
-				bridge_name,
-				bridge_ipaddr,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
-				bridge_ip_positional,
 				set_default,
 			} => name == "add" || name == "update",
 			Self::Boot {
-				default,
-				bridge_ipaddr,
-				bridge_mac,
-				bridge_name,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
-				without_pcfs,
 				serial_port_flag,
 				serial_port_positional,
+				without_pcfs,
+				take_ownership,
 			} => name == "boot" || name == "power-on" || name == "power_on",
 			Self::DumpParameters {
-				default,
-				bridge_ipaddr,
-				bridge_mac,
-				bridge_name,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
 				parameter_space_port,
 			} => name == "dump-parameters" || name == "dump_parameters" || name == "dp",
 			Self::Get {
-				default,
-				bridge_ipaddr,
-				bridge_mac,
-				bridge_name,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
 				output_as_table,
 			} => name == "get",
 			Self::GetParameters {
-				default,
-				bridge_ipaddr,
-				bridge_mac,
-				bridge_name,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
-				parameter_names_positional,
 				parameter_space_port,
+				parameter_names_positional,
 			} => name == "get-parameters" || name == "get_parameters" || name == "gp",
 			Self::Help {} => name == "help",
 			Self::List {
+				bridge_config_flags,
+				scan_flags,
 				use_cache,
 				output_as_table,
 			} => name == "list" || name == "ls",
@@ -506,26 +425,284 @@ impl Subcommands {
 					|| name == "lssp"
 			}
 			Self::Remove {
-				bridge_name,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
 			} => name == "remove" || name == "rm",
 			Self::SetDefault {
-				bridge_name,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
 			} => name == "set-default" || name == "set_default",
 			Self::SetParameters {
-				default,
-				bridge_ipaddr,
-				bridge_mac,
-				bridge_name,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
 				bridge_name_positional,
-				parameter_names_positional,
 				parameter_space_port,
+				parameter_names_positional,
 			} => name == "set-parameters" || name == "set_parameters" || name == "sp",
 			Self::Tail {
 				serial_port_flag,
 				serial_port_positional,
 			} => name == "tail" || name == "tail-serial-port" || name == "tail_serial_port",
 		}
+	}
+}
+
+/// Arguments specific to targeting just a single bridge to lookup.
+#[derive(Args, Debug)]
+pub struct TargetBridgeFlags {
+	#[arg(
+		short = 'd',
+		long = "default",
+		help = "Target the default bridge in your configuration file.",
+		long_help = "A way to tell us you just want to use the default bridge in your configuration file, regardless of anything else."
+	)]
+	default: bool,
+	#[arg(
+		long = "bridge-from-env",
+		help = "Target the bridge specified in your environment variables.",
+		long_help = "A way to tell us you just want to use the bridge specified from the environment variables, regardless of anything else."
+	)]
+	mochiato: bool,
+	#[arg(
+		short = 'i',
+		long = "ip",
+		help = "Target the bridge located at this IP.",
+		long_help = "A way to tell us you want to use the bridge that is located at the IP that matches the value of this flag."
+	)]
+	search_ip: Option<Ipv4Addr>,
+	#[arg(
+		short = 'm',
+		long = "mac-address",
+		alias = "mac_address",
+		help = "Target the bridge with this MAC Address.",
+		long_help = "A way to tell us you want to use the bridge that has the mac address that matches the value of this flag.."
+	)]
+	search_mac: Option<String>,
+	#[arg(
+		short = 'n',
+		long = "name",
+		help = "Target the bridge with this name.",
+		long_help = "A way to tell us you want to use the bridge that has the name that matches the value of this flag."
+	)]
+	search_name: Option<String>,
+}
+impl TargetBridgeFlags {
+	/// If the user specified a non search style flag (use the default, or use
+	/// mochiato).
+	#[must_use]
+	pub const fn not_search_flag_specified(&self) -> bool {
+		self.default || self.mochiato
+	}
+	#[must_use]
+	pub const fn target_default(&self) -> bool {
+		self.default
+	}
+	#[must_use]
+	pub const fn target_mochiato(&self) -> bool {
+		self.mochiato
+	}
+
+	/// If a "search" style targeting was specified.
+	#[must_use]
+	pub const fn specified_bridge_search_flag(&self) -> bool {
+		self.search_ip.is_some() || self.search_mac.is_some() || self.search_name.is_some()
+	}
+	#[must_use]
+	pub const fn search_for_ip(&self) -> Option<Ipv4Addr> {
+		self.search_ip
+	}
+	#[must_use]
+	pub const fn search_for_mac_specified(&self) -> bool {
+		self.search_mac.is_some()
+	}
+	#[must_use]
+	pub fn search_for_mac(&self) -> Option<MacAddress> {
+		self.search_mac
+			.as_deref()
+			.and_then(|data: &str| MacAddress::try_from(data).ok())
+	}
+	#[must_use]
+	pub fn search_for_mac_raw(&self) -> Option<&str> {
+		self.search_mac.as_deref()
+	}
+	#[must_use]
+	pub fn search_for_name(&self) -> Option<&str> {
+		self.search_name.as_deref()
+	}
+}
+impl Display for TargetBridgeFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"Search Flags (--ip: `{:?}`, --mac: `{:?}`, --name: `{:?}`), Non-Search Flags: (--default: `{}`, --bridge-from-env: `{}`)",
+			self.search_ip,
+			self.search_mac,
+			self.search_name,
+			self.default,
+			self.mochiato,
+		)
+	}
+}
+const TARGET_BRIDGE_FLAG_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("search_for_ip"),
+	NamedField::new("search_for_mac"),
+	NamedField::new("search_for_name"),
+	NamedField::new("dont_search_use_default"),
+	NamedField::new("dont_search_use_env"),
+];
+impl Structable for TargetBridgeFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"TargetBridgeFlags",
+			Fields::Named(TARGET_BRIDGE_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for TargetBridgeFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			TARGET_BRIDGE_FLAG_FIELDS,
+			&[
+				Valuable::as_value(&self.search_ip.as_ref().map(|ip| format!("{ip}"))),
+				Valuable::as_value(&self.search_mac),
+				Valuable::as_value(&self.search_name),
+				Valuable::as_value(&self.default),
+				Valuable::as_value(&self.mochiato),
+			],
+		));
+	}
+}
+
+/// Common flags that are present on multiple subcommands for managing the
+/// bridge configuration.
+///
+/// For now this is just the single flag, but we keep it in here incase it
+/// expands in the future.
+#[derive(Args, Debug)]
+pub struct BridgeConfigurationFlags {
+	#[arg(
+		long = "bridge-state-path",
+		alias = "bridge_state_path",
+		help = "The path to your bridge configuration, a.k.a. `bridge_env.ini`.",
+		long_help = "If you do not wish to use the default location, the explicit path to your `bridge_env.ini` file that we should use."
+	)]
+	bridge_state_path: Option<PathBuf>,
+}
+impl BridgeConfigurationFlags {
+	/// The location to the bridge state we should use.
+	#[must_use]
+	pub fn bridge_state_path(&self) -> Option<&PathBuf> {
+		self.bridge_state_path.as_ref()
+	}
+}
+impl Display for BridgeConfigurationFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"Config Location Override Flag --bridge-state-path: `{:?}`",
+			self.bridge_state_path,
+		)
+	}
+}
+const BRIDGE_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] =
+	&[NamedField::new("config_location_override")];
+impl Structable for BridgeConfigurationFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"BridgeConfigurationFlags",
+			Fields::Named(BRIDGE_CONFIGURATION_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for BridgeConfigurationFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			BRIDGE_CONFIGURATION_FLAG_FIELDS,
+			&[Valuable::as_value(
+				&self
+					.bridge_state_path
+					.as_ref()
+					.map(|pb| format!("{}", pb.display())),
+			)],
+		));
+	}
+}
+
+/// Flags used for searching for a bridge either just a single one, or
+/// multiple.
+#[derive(Args, Debug)]
+pub struct BridgeScanFlags {
+	#[arg(
+		global = true,
+		long = "bridge-control-port-override",
+		alias = "bridge_control_port_override",
+		help = "A way to override the control port which should never be needed.",
+		long_help = "Allow overriding the scanning port aka CONTROL port for finding cat-dev bridges."
+	)]
+	control_port_override: Option<u16>,
+	#[arg(
+		global = true,
+		long = "scan-early-timeout-seconds",
+		alias = "scan_early_timeout_seconds",
+		help = "The amount of seconds to wait before bailing early when scanning for a bridge (by default this is 3).",
+		long_help = "CAT-DEV's MUST respond to broadcasts within 10 seconds, but in reality most folks only have one cat-dev / non busy networks were they will respond faster, in this case it's generally better to exit early. How early we decide to exit is controlled by this variable."
+	)]
+	scan_timeout: Option<u64>,
+}
+impl BridgeScanFlags {
+	#[must_use]
+	pub const fn control_port_override(&self) -> Option<u16> {
+		self.control_port_override
+	}
+	#[must_use]
+	pub const fn scan_timeout_override(&self) -> Option<u64> {
+		self.scan_timeout
+	}
+}
+impl Display for BridgeScanFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"Scan Flags: (`--bridge-control-port-override`: {:?}, `--scan-early-timeout-seconds`: {:?})",
+			self.control_port_override,
+			self.scan_timeout,
+		)
+	}
+}
+const BRIDGE_SCAN_FLAGS: &[NamedField<'static>] = &[
+	NamedField::new("bridge_control_port_override"),
+	NamedField::new("scan_early_timeout_seconds"),
+];
+impl Structable for BridgeScanFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static("BridgeScanFlags", Fields::Named(BRIDGE_SCAN_FLAGS))
+	}
+}
+impl Valuable for BridgeScanFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			BRIDGE_SCAN_FLAGS,
+			&[
+				Valuable::as_value(&self.control_port_override),
+				Valuable::as_value(&self.scan_timeout),
+			],
+		));
 	}
 }

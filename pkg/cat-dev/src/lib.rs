@@ -7,6 +7,7 @@
 
 pub mod errors;
 pub mod mion;
+#[macro_use]
 pub mod serial;
 
 use crate::errors::{APIError, FSError};

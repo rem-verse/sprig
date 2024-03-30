@@ -1,7 +1,7 @@
 //! A thin module wrapper that contains all the different files that each
 //! handle one command.
 
-mod argv_helpers;
+pub(crate) mod argv_helpers;
 
 mod add;
 mod boot;

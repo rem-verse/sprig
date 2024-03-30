@@ -4,7 +4,10 @@
 //! We have to handle `help` ourselves, as opposed to FULLY relying on [`clap`]
 //! so we can do things like printing the output in JSON.
 
-use crate::knobs::cli::{CliArguments, Subcommands};
+use crate::{
+	knobs::cli::{CliArguments, Subcommands},
+	SHOULD_LOG_JSON,
+};
 use clap::{Arg, Command, CommandFactory};
 use tracing::{field::valuable, info};
 use valuable::Valuable;
@@ -15,11 +18,11 @@ use valuable::Valuable;
 ///
 /// - Techincally this function could panic if a subcommand could not be
 ///   matched on name alone, which should never happen.
-pub fn handle_help(output_json: bool, opt_sub_command: Option<Subcommands>) {
+pub fn handle_help(opt_sub_command: Option<Subcommands>) {
 	let mut top_level_command = CliArguments::command();
 	let mut subcommands_as_command = Subcommands::command();
 
-	if !output_json {
+	if !SHOULD_LOG_JSON() {
 		if let Some(sub_command) = opt_sub_command {
 			let mut subcommands_as_command = Subcommands::command();
 			let my_command = subcommands_as_command

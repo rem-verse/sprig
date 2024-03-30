@@ -18,6 +18,7 @@ local-ip-address = "^0.6.1"
 mac_address.workspace = true
 miette.workspace = true
 network-interface.workspace = true
+pin-project-lite = "^0.2.14"
 serde = "^1.0.197"
 serde_urlencoded = "^0.7.1"
 thiserror = "^1.0.58"
@@ -34,3 +35,7 @@ windows = { version = "^0.54.0", default-features = false, features=["Win32_Devi
 [dev-dependencies]
 once_cell.workspace = true
 tempfile = "^3.10.1"
+
+[package.metadata.docs.rs]
+rustc-args = ["--cfg", "tokio_unstable", "--cfg", "tracing_unstable"]
+rustdoc-args = ["--cfg", "tokio_unstable", "--cfg", "tracing_unstable"]
