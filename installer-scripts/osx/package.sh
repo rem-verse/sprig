@@ -21,5 +21,5 @@ cp ../../../pkg/cat-dev/licenses/serial2-tokio-rs-apache.md ./
 cp ../../../pkg/cat-dev/licenses/serial2-tokio-rs-bsd.md ./
 cp ../../../LICENSE ./
 cd ../
-pkgbuild --root ./working-dir/ --identifier "dev.rem-verse.sprig" --version "0.0.5" --install-location "/usr/local/bin" sprig.pkg
+pkgbuild --root ./working-dir/ --identifier "dev.rem-verse.sprig" --version "0.0.6" --install-location "/usr/local/bin" sprig.pkg
 productbuild --synthesize --package "sprig.pkg" sprig.dist
