@@ -17,11 +17,11 @@ bytes = "^1.6.0"
 fnv = "^1.0.7"
 mac_address = "^1.1.5"
 miette = { version = "^7.2.0", features = ["fancy"] }
-network-interface = "^1.1.1"
+network-interface = "^1.1.2"
 once_cell = "^1.19.0"
 time = "^0.3.34"
 tracing = { version = "^0.1.40", features = ["valuable"] }
-tokio = { version = "^1.36.0", features = ["full", "tracing"] }
+tokio = { version = "^1.37.0", features = ["full", "tracing"] }
 valuable = { version = "^0.1.0", features = ["derive"] }
 
 [workspace.package]
@@ -29,7 +29,7 @@ authors = ["Cynthia <cynthia@coan.dev>"]
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/rem-verse/sprig"
-version = "0.0.5"
+version = "0.0.6"
 
 [profile.release]
 codegen-units = 1

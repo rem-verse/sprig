@@ -19,6 +19,7 @@ jobs:
       - name: Build Packages
         run: |
           cd installer-scripts/win/
+          dotnet --version
           dotnet tool install --global wix
           wix extension add WiXToolset.UI.wixext
           wix extension add WiXToolset.Util.wixext
@@ -96,19 +97,19 @@ jobs:
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.deb
-          path: installer-scripts/unix/sprig_0.0.5_amd64.deb
+          path: installer-scripts/unix/sprig_0.0.6_amd64.deb
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.rpm
-          path: installer-scripts/unix/sprig-0.0.5-1.x86_64.rpm
+          path: installer-scripts/unix/sprig-0.0.6-1.x86_64.rpm
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.apk
-          path: installer-scripts/unix/sprig_0.0.5_x86_64.apk
+          path: installer-scripts/unix/sprig_0.0.6_x86_64.apk
       - uses: actions/upload-artifact@v3
         with:
           name: sprig_amd64.pkg.tar.zst
-          path: installer-scripts/unix/sprig-0.0.5-1-x86_64.pkg.tar.zst
+          path: installer-scripts/unix/sprig-0.0.6-1-x86_64.pkg.tar.zst
       - uses: actions/upload-artifact@v3
         with:
           name: sprig-target-directory-unix

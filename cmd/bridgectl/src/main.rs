@@ -14,25 +14,39 @@ pub mod utils;
 
 use crate::{
 	commands::{
+		argv_helpers::{initialize_host_bridge, initialize_scan_flags, target_bridge},
 		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
 		handle_get_parameters, handle_help, handle_list, handle_list_serial_ports,
 		handle_remove_bridge, handle_set_default_bridge, handle_set_parameters, handle_tail,
 	},
 	exit_codes::{
-		ARGUMENT_PARSING_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE, NO_ARGUMENT_SPECIFIED_FAILURE,
+		ARGV_NO_COMMAND_SPECIFIED, ARGV_PARSE_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE,
 		SHOULD_NEVER_HAPPEN_FAILURE,
 	},
 	knobs::{
 		cli::{CliArguments, Subcommands},
 		env::USE_JSON_OUTPUT,
-		get_control_port, get_scan_timeout,
 	},
-	utils::get_bridge_state_path,
 };
 use clap::Parser;
 use log::install_logging_handlers;
 use miette::miette;
 use tracing::error;
+
+/// Whether or not we're logging in JSON.
+static mut USE_JSON: bool = false;
+
+/// Whether or not we should log in JSON.
+///
+/// Wrapper around the "unsafe" static mutable. This is guaranteed to be
+/// safe as it's initialized as the very first thing to be used in the
+/// program, and guaranteed to not change after that.
+#[allow(non_snake_case)]
+#[inline]
+#[must_use]
+pub fn SHOULD_LOG_JSON() -> bool {
+	unsafe { USE_JSON }
+}
 
 #[allow(
 	// Most of this is just farming out to subcommands which can't be shorter.
@@ -41,18 +55,19 @@ use tracing::error;
 #[tokio::main]
 async fn main() {
 	let (argv, use_json) = bootstrap_cli();
+	unsafe {
+		USE_JSON = use_json;
+	}
 
 	if argv.help || argv.commands.is_none() || matches!(argv.commands, Some(Subcommands::Help {})) {
 		let should_error = !argv.help && argv.commands.is_none();
-		handle_help(use_json, argv.commands);
+		handle_help(argv.commands);
 		std::process::exit(if should_error {
-			NO_ARGUMENT_SPECIFIED_FAILURE
+			ARGV_NO_COMMAND_SPECIFIED
 		} else {
 			0
 		});
 	}
-	let scan_timeout = get_scan_timeout(&argv);
-	let control_port = get_control_port(&argv);
 
 	let Some(sub_command) = argv.commands else {
 		if use_json {
@@ -71,163 +86,151 @@ async fn main() {
 
 	match sub_command {
 		Subcommands::AddOrUpdate {
-			bridge_name,
-			bridge_ipaddr,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
 			bridge_name_positional,
-			bridge_ip_positional,
 			set_default,
 		} => {
-			handle_add_or_update(
-				use_json,
-				(bridge_name, bridge_ipaddr),
-				(bridge_name_positional, bridge_ip_positional),
-				(scan_timeout, control_port),
-				get_bridge_state_path(&argv.bridge_state_path, use_json),
-				set_default,
-			)
-			.await;
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
+			handle_add_or_update(set_default).await;
 		}
 		Subcommands::Boot {
-			default,
-			bridge_ipaddr,
-			bridge_mac,
-			bridge_name,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
 			bridge_name_positional,
-			without_pcfs,
 			serial_port_flag,
 			serial_port_positional,
+			without_pcfs,
+			take_ownership,
 		} => {
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
 			handle_boot(
-				use_json,
-				default,
-				(bridge_ipaddr, bridge_mac, bridge_name),
-				bridge_name_positional,
-				(scan_timeout, control_port),
-				argv.bridge_state_path,
 				without_pcfs,
 				(serial_port_flag, serial_port_positional),
+				take_ownership,
 			)
 			.await;
 		}
 		Subcommands::DumpParameters {
-			default,
-			bridge_ipaddr,
-			bridge_mac,
-			bridge_name,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
 			bridge_name_positional,
 			parameter_space_port,
 		} => {
-			handle_dump_parameters(
-				use_json,
-				default,
-				(bridge_ipaddr, bridge_mac, bridge_name),
-				bridge_name_positional,
-				(scan_timeout, control_port),
-				parameter_space_port,
-				argv.bridge_state_path,
-			)
-			.await;
-		}
-		Subcommands::GetParameters {
-			default,
-			bridge_ipaddr,
-			bridge_mac,
-			bridge_name,
-			bridge_name_positional,
-			parameter_names_positional,
-			parameter_space_port,
-		} => {
-			handle_get_parameters(
-				use_json,
-				default,
-				(bridge_ipaddr, bridge_mac, bridge_name),
-				bridge_name_positional,
-				parameter_names_positional,
-				(scan_timeout, control_port),
-				parameter_space_port,
-				argv.bridge_state_path,
-			)
-			.await;
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
+			handle_dump_parameters(parameter_space_port).await;
 		}
 		Subcommands::Get {
-			default,
-			bridge_ipaddr,
-			bridge_mac,
-			bridge_name,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
 			bridge_name_positional,
 			output_as_table,
 		} => {
-			handle_get(
-				use_json,
-				output_as_table,
-				default,
-				(bridge_ipaddr, bridge_mac, bridge_name),
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
+			handle_get(output_as_table).await;
+		}
+		Subcommands::GetParameters {
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
+			bridge_name_positional,
+			parameter_space_port,
+			parameter_names_positional,
+		} => {
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			let used_first_arg = target_bridge(
+				target_flags,
+				bridge_name_positional.as_deref(),
+				parameter_names_positional.is_some(),
+			)
+			.await;
+
+			handle_get_parameters(
 				bridge_name_positional,
-				(scan_timeout, control_port),
-				argv.bridge_state_path,
+				parameter_names_positional,
+				parameter_space_port,
+				used_first_arg,
 			)
 			.await;
 		}
 		// Help is handled above.
 		Subcommands::Help {} => unreachable!(),
 		Subcommands::List {
+			bridge_config_flags,
+			scan_flags,
 			use_cache,
 			output_as_table,
 		} => {
-			handle_list(
-				use_json,
-				use_cache,
-				output_as_table,
-				(scan_timeout, control_port),
-				argv.bridge_state_path,
-			)
-			.await;
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			handle_list(use_cache, output_as_table).await;
 		}
 		Subcommands::ListSerialPorts {} => {
-			handle_list_serial_ports(use_json);
+			handle_list_serial_ports();
 		}
 		Subcommands::Remove {
-			bridge_name,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
 			bridge_name_positional,
 		} => {
-			handle_remove_bridge(
-				use_json,
-				bridge_name,
-				bridge_name_positional,
-				argv.bridge_state_path,
-			)
-			.await;
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
+			handle_remove_bridge().await;
 		}
 		Subcommands::SetDefault {
-			bridge_name,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
 			bridge_name_positional,
 		} => {
-			handle_set_default_bridge(
-				use_json,
-				bridge_name,
-				bridge_name_positional,
-				argv.bridge_state_path,
-			)
-			.await;
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
+			handle_set_default_bridge().await;
 		}
 		Subcommands::SetParameters {
-			default,
-			bridge_ipaddr,
-			bridge_mac,
-			bridge_name,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
 			bridge_name_positional,
-			parameter_names_positional,
 			parameter_space_port,
+			parameter_names_positional,
 		} => {
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			let used_first_arg = target_bridge(
+				target_flags,
+				bridge_name_positional.as_deref(),
+				parameter_names_positional.is_some(),
+			)
+			.await;
+
 			handle_set_parameters(
-				use_json,
-				default,
-				(bridge_ipaddr, bridge_mac, bridge_name),
 				bridge_name_positional,
 				parameter_names_positional,
-				(scan_timeout, control_port),
 				parameter_space_port,
-				argv.bridge_state_path,
+				used_first_arg,
 			)
 			.await;
 		}
@@ -235,7 +238,7 @@ async fn main() {
 			serial_port_flag,
 			serial_port_positional,
 		} => {
-			handle_tail(use_json, serial_port_flag, serial_port_positional).await;
+			handle_tail(serial_port_flag, serial_port_positional).await;
 		}
 	}
 }
@@ -293,7 +296,7 @@ fn bootstrap_cli() -> (CliArguments, bool) {
 				);
 			}
 
-			std::process::exit(ARGUMENT_PARSING_FAILURE);
+			std::process::exit(ARGV_PARSE_FAILURE);
 		}
 	}
 }

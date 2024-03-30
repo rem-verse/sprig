@@ -163,23 +163,99 @@ where
 	)
 }
 
-#[doc(hidden)]
-pub async fn very_hacky_will_break_dont_use_power_on(
+/// Initiate a power-on request to turn on the CAT-DEV machine.
+///
+/// Note: This request just starts the actual power on, by the time you get to
+/// powering on the device, if you are using things like emulation you should
+/// already be connected to the SDIO ports, and be listening for ATAPI
+/// requests.
+///
+/// This can also override some pre-existing configurations, e.g. if you send
+/// a POST with emulation set to off even if PCFS is set to on, the cat-dev
+/// will techincally still boot.
+///
+/// Power ON V2 is the power on API that the actual tools nintendo built use.
+///
+/// ## Errors
+///
+/// - If we cannot encode the parameters as a form url encoded.
+/// - If we cannot make the HTTP request.
+/// - If the server does not respond with a 200.
+/// - If we cannot read the body from HTTP.
+/// - If we cannot parse the HTML response.
+pub async fn power_on_v2(
 	mion_ip: Ipv4Addr,
+	atapi_port: Option<u16>,
+	pcfs_port: Option<u16>,
+	emulate_fs: bool,
 ) -> Result<bool, CatBridgeError> {
-	let response = do_raw_control_request(
+	power_on_v2_with_raw_client(
 		&Client::default(),
 		mion_ip,
-		&[
-			("operation", Into::<&str>::into(ControlOperation::PowerOnV2)),
-			("emulation", "off"),
-			(
-				"host",
-				&format!("{}", local_ip().map_err(NetworkError::LocalIpError)?),
-			),
-		],
+		atapi_port,
+		pcfs_port,
+		emulate_fs,
 	)
-	.await?;
+	.await
+}
+
+/// Initiate a power-on request to turn on the CAT-DEV machine.
+///
+/// Note: This request just starts the actual power on, by the time you get to
+/// powering on the device, if you are using things like emulation you should
+/// already be connected to the SDIO ports, and be listening for ATAPI
+/// requests.
+///
+/// This can also override some pre-existing configurations, e.g. if you send
+/// a POST with emulation set to off even if PCFS is set to on, the cat-dev
+/// will techincally still boot.
+///
+/// Power ON V2 is the power on API that the actual tools nintendo built use.
+///
+/// ## Errors
+///
+/// - If we cannot encode the parameters as a form url encoded.
+/// - If we cannot make the HTTP request.
+/// - If the server does not respond with a 200.
+/// - If we cannot read the body from HTTP.
+/// - If we cannot parse the HTML response.
+pub async fn power_on_v2_with_raw_client<ClientConnectorTy>(
+	client: &Client<ClientConnectorTy>,
+	mion_ip: Ipv4Addr,
+	atapi_port: Option<u16>,
+	pcfs_port: Option<u16>,
+	emulate_fs: bool,
+) -> Result<bool, CatBridgeError>
+where
+	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
+{
+	let mut parameters = vec![
+		(
+			"operation",
+			Into::<&str>::into(ControlOperation::PowerOnV2).to_owned(),
+		),
+		(
+			"emulation",
+			if emulate_fs {
+				"on".to_owned()
+			} else {
+				"off".to_owned()
+			},
+		),
+		(
+			"host",
+			format!("{}", local_ip().map_err(NetworkError::LocalIpError)?),
+		),
+	];
+	if let Some(port) = atapi_port {
+		parameters.push(("atapi_port", format!("{port}")));
+	}
+	if let Some(port) = pcfs_port {
+		parameters.push(("pcfs_port", format!("{port}")));
+	}
+
+	let response = do_raw_control_request(client, mion_ip, &parameters).await?;
+
 	let status = response.status().as_u16();
 	let body_result = read_http_body_bytes(response.into_body())
 		.await
@@ -202,7 +278,7 @@ pub async fn very_hacky_will_break_dont_use_power_on(
 
 	parse_result_from_body(
 		&body_as_string,
-		Into::<&str>::into(ControlOperation::SetParam),
+		Into::<&str>::into(ControlOperation::PowerOnV2),
 	)
 }
 
