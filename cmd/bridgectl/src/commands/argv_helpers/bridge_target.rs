@@ -58,11 +58,9 @@ use crate::{
 	utils::add_context_to,
 	SHOULD_LOG_JSON,
 };
-use cat_dev::{
-	mion::{
-		discovery::{find_mion, MIONFindBy},
-		proto::control::MionIdentity,
-	},
+use cat_dev::mion::{
+	discovery::{find_mion, MIONFindBy},
+	proto::control::MionIdentity,
 	BridgeHostState,
 };
 use miette::miette;

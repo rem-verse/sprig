@@ -8,11 +8,11 @@
 
 use crate::{
 	exit_codes::{ARGV_BRIDGE_STATE_LOAD_FAILURE, ARGV_NO_BRIDGE_STATE_PATH},
-	knobs::cli::BridgeConfigurationFlags,
+	knobs::{cli::BridgeConfigurationFlags, env::BRIDGE_HOST_STATE_PATH},
 	utils::add_context_to,
 	SHOULD_LOG_JSON,
 };
-use cat_dev::BridgeHostState;
+use cat_dev::mion::BridgeHostState;
 use miette::miette;
 use std::path::PathBuf;
 use tokio::sync::{RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
@@ -42,6 +42,9 @@ pub async fn initialize_host_bridge(bridge_config_flags: BridgeConfigurationFlag
 	if let Some(cli_arg) = bridge_config_flags.bridge_state_path() {
 		let mut locked_env_path = BRIDGE_ENV_PATH.write().await;
 		_ = locked_env_path.insert(cli_arg.clone());
+	} else if let Some(env_arg) = BRIDGE_HOST_STATE_PATH.as_ref() {
+		let mut locked_env_path = BRIDGE_ENV_PATH.write().await;
+		_ = locked_env_path.insert(env_arg.clone());
 	} else if let Some(default_path) = system_default_path {
 		let mut locked_env_path = BRIDGE_ENV_PATH.write().await;
 		_ = locked_env_path.insert(default_path);

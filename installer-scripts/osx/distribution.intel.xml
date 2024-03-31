@@ -12,5 +12,5 @@
   <choice id="sprig" title="sprig">
     <pkg-ref id="sprig.pkg"/>
   </choice>
-  <pkg-ref id="sprig.pkg" version="0.0.6" />
+  <pkg-ref id="sprig.pkg" version="0.0.8" />
 </installer-gui-script>

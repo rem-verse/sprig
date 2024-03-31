@@ -10,7 +10,7 @@
 pub mod knobs;
 
 use crate::knobs::cli::CliOpts;
-use cat_dev::BridgeHostState;
+use cat_dev::mion::BridgeHostState;
 use std::net::Ipv4Addr;
 use tokio::runtime::Runtime;
 

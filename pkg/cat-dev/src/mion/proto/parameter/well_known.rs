@@ -1,7 +1,7 @@
 //! Parameters that are well known, and can be referred to by their name
 //! rather than just their index.
 
-use crate::errors::APIError;
+use crate::{errors::APIError, mion::proto::control::MIONBootType};
 use bytes::Bytes;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
@@ -73,6 +73,33 @@ pub fn index_from_parameter_name(name: &str) -> Option<usize> {
 	}
 }
 
+/// Validate the valuue at a particular index against a well known type.
+#[must_use]
+pub fn validate_value_at_index(
+	specification: &ParameterLocationSpecification,
+	byte_value: u8,
+) -> bool {
+	let index = match specification {
+		ParameterLocationSpecification::Index(idx) => usize::from(*idx),
+		ParameterLocationSpecification::NameLike(ref name) => {
+			if let Some(idx) = index_from_parameter_name(name) {
+				idx
+			} else {
+				return false;
+			}
+		}
+	};
+
+	match index {
+		2 => match MIONBootType::from(byte_value) {
+			MIONBootType::NAND | MIONBootType::PCFS | MIONBootType::DUAL => true,
+			MIONBootType::Unk(_) => false,
+		},
+		// Has no specific validation rule we know of.
+		_ => true,
+	}
+}
+
 const PARAMETER_DUMP_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("NandMode"),
 	NamedField::new("SdkMajor"),
@@ -107,7 +134,7 @@ impl<'value> Valuable for ValuableParameterDump<'value> {
 		visitor.visit_named_fields(&NamedValues::new(
 			PARAMETER_DUMP_FIELDS,
 			&[
-				Valuable::as_value(&self.0[KNOWN_INDEXES[0]]),
+				Valuable::as_value(&MIONBootType::from(self.0[KNOWN_INDEXES[0]])),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[1]]),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[2]]),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[3]]),

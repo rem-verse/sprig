@@ -14,7 +14,10 @@ pub mod utils;
 
 use crate::{
 	commands::{
-		argv_helpers::{initialize_host_bridge, initialize_scan_flags, target_bridge},
+		argv_helpers::{
+			initialize_fsemul_config, initialize_host_bridge, initialize_scan_flags,
+			initialize_shared_server_flags, target_bridge,
+		},
 		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
 		handle_get_parameters, handle_help, handle_list, handle_list_serial_ports,
 		handle_remove_bridge, handle_set_default_bridge, handle_set_parameters, handle_tail,
@@ -105,16 +108,22 @@ async fn main() {
 			scan_flags,
 			target_flags,
 			bridge_name_positional,
+			fsemul_flags,
+			shared_server_flags,
 			serial_port_flag,
 			serial_port_positional,
+			disable_sata,
 			without_pcfs,
 			take_ownership,
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
 			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			initialize_fsemul_config(fsemul_flags).await;
+			initialize_shared_server_flags(shared_server_flags).await;
 
 			handle_boot(
+				disable_sata,
 				without_pcfs,
 				(serial_port_flag, serial_port_positional),
 				take_ownership,

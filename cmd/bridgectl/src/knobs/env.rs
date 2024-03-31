@@ -27,6 +27,23 @@ pub static USE_JSON_OUTPUT: LazyLock<bool> = LazyLock::new(|| {
 pub static BRIDGE_HOST_STATE_PATH: LazyLock<Option<PathBuf>> =
 	LazyLock::new(|| env_var_os("BRIDGECTL_BRIDGE_ENV_PATH").map(PathBuf::from));
 
+/// The location of the root Cafe Directory.
+///
+/// Environment Variable Name: `CAFE_ROOT`
+/// Expected Values: A Path
+/// Type: [`PathBuf`]
+pub static CAFE_ROOT: LazyLock<Option<PathBuf>> =
+	LazyLock::new(|| env_var_os("CAFE_ROOT").map(PathBuf::from));
+
+/// A way of specifying the path to the `fsemul.ini` file if it's not in
+/// a standard location.
+///
+/// Environment Variable Name: `BRIDGECTL_FSEMUL_PATH`
+/// Expected Values: A Path
+/// Type: [`PathBuf`]
+pub static FSMEUL_CONFIG_PATH: LazyLock<Option<PathBuf>> =
+	LazyLock::new(|| env_var_os("BRIDGECTL_FSEMUL_PATH").map(PathBuf::from));
+
 /// A way of specifying the serial port to read logs from so you don't have to
 /// pass it in over a CLI flag.
 ///
@@ -103,3 +120,56 @@ pub static BRIDGE_CONTROL_PORT: LazyLock<Option<u16>> = LazyLock::new(|| {
 		}
 	})
 });
+
+/// A way of configuring the timeout for connecting to a bridge.
+///
+/// note: there is always going to be a timeout the default is usually well
+/// higher than we expect to ever see. However, we want folks to be able to
+/// configure it themselves.
+///
+/// Environment Variable Name: `BRIDGECTL_CONNECTION_TIMEOUT_SECONDS`
+/// Expected Values: Empty, or a number of seconds.
+/// Type: [`u64`]
+pub static CONNECTION_TIMEOUT: LazyLock<Option<Duration>> = LazyLock::new(|| {
+	env_var("BRIDGECTL_CONNECTION_TIMEOUT_SECONDS").ok().and_then(|val| {
+		match val.parse::<u64>() {
+			Ok(val) => Some(Duration::from_secs(val)),
+			Err(cause) => {
+				warn!(?cause, "Not honoring environment variable `BRIDGECTL_CONNECTION_TIMEOUT_SECONDS`, not a valid second number.");
+				None
+			}
+		}
+	})
+});
+
+/// A way of configuring the host address to listen on for servers.
+///
+/// note: We will always bind on the first networks IPv4 address unless this
+/// is passed in.
+///
+/// Environment Variable Name: `BRIDGECTL_HOST`
+/// Expected Values: Empty, or An IPV4 address.
+/// Type: [`Ipv4Addr`]
+pub static BRIDGECTL_HOST: LazyLock<Option<Ipv4Addr>> = LazyLock::new(|| {
+	env_var("BRIDGECTL_HOST").ok().and_then(|val| {
+		match val.parse::<Ipv4Addr>() {
+			Ok(val) => Some(val),
+			Err(cause) => {
+				warn!(?cause, "Not honoring environment variable `BRIDGECTL_HOST`, not a valid IPv4 address (cat-dev requires IPv4).");
+				None
+			}
+		}
+	})
+});
+
+/// Determines if we are actively using "SATA" port for serving PCFS.
+///
+/// note: if this is set to false we will have to use SDIO for serving files
+/// over PCFS. The "SDIO" protocol is not exactly great at serving large chunks
+/// of files so we do recommend you keep this on.
+///
+/// Environment Variable Name: `USE_PCFS_OVER_SATA`
+/// Expected Values: `1`, or `0` (`1` meaning true, the default).
+/// Type: [`bool`]
+pub static PCFS_IS_SATA: LazyLock<bool> =
+	LazyLock::new(|| env_var("USE_PCFS_OVER_SATA").ok().as_deref().unwrap_or("1") == "1");

@@ -2,5 +2,7 @@
 //! board.
 
 mod control;
+mod setup;
 
 pub use control::*;
+pub use setup::*;

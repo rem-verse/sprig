@@ -86,6 +86,13 @@ pub enum Subcommands {
 		)]
 		bridge_name_positional: Option<String>,
 		// ///////////////////////////////////////////////////
+		// FS Emulation shared configuration flags..
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		fsemul_flags: FsEmulConfigurationFlags,
+		#[command(flatten)]
+		shared_server_flags: SharedServerFlags,
+		// ///////////////////////////////////////////////////
 		// Shared Flags for targeting a single Serial Port.
 		// ///////////////////////////////////////////////////
 		#[arg(
@@ -105,6 +112,13 @@ pub enum Subcommands {
 		// ///////////////////////////////////////////////////
 		// Boot only command flags.
 		// ///////////////////////////////////////////////////
+		#[arg(
+			long = "disable-pcfs-over-sata",
+			alias = "disable_pcfs_over_sata",
+			help = "Do not serve the device using the 'SATA' port, and use SDIO.",
+			long_help = "Disable the 'SATA' server, and use the SDIO server (a significantly less performant server)."
+		)]
+		disable_sata: bool,
 		#[arg(
 			long = "boot-without-pcfs",
 			alias = "boot_without_pcfs",
@@ -385,8 +399,11 @@ impl Subcommands {
 				scan_flags,
 				target_flags,
 				bridge_name_positional,
+				fsemul_flags,
+				shared_server_flags,
 				serial_port_flag,
 				serial_port_positional,
+				disable_sata,
 				without_pcfs,
 				take_ownership,
 			} => name == "boot" || name == "power-on" || name == "power_on",
@@ -707,13 +724,13 @@ impl Display for BridgeConfigurationFlags {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		write!(
 			fmt,
-			"Config Location Override Flag --bridge-state-path: `{:?}`",
+			"Bridge Config Location Override Flag --bridge-state-path: `{:?}`",
 			self.bridge_state_path,
 		)
 	}
 }
 const BRIDGE_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] =
-	&[NamedField::new("config_location_override")];
+	&[NamedField::new("bridge_config_location_override")];
 impl Structable for BridgeConfigurationFlags {
 	fn definition(&self) -> StructDef<'_> {
 		StructDef::new_static(
@@ -802,6 +819,145 @@ impl Valuable for BridgeScanFlags {
 				Valuable::as_value(&self.control_port_override),
 				Valuable::as_value(&self.scan_timeout),
 			],
+		));
+	}
+}
+
+/// Common flags that are present on multiple subcommands for managing the
+/// fs emulation configuration settings.
+#[derive(Args, Debug)]
+pub struct FsEmulConfigurationFlags {
+	#[arg(
+		long = "cafe-dir",
+		alias = "cafe_dir",
+		help = "The root path to your cafe directory, this is usually `C:\\cafe_sdk`, or `/opt/cafe_sdk`.",
+		long_help = "If you do not wish to use the default location, the explicit path to your cafe sdk directory, which should contains folders named `slc`/`mlc` under the `data` folder."
+	)]
+	cafe_dir: Option<PathBuf>,
+	#[arg(
+		long = "fsemul-config-path",
+		alias = "fsemul_config_path",
+		help = "The path to your fsemul configuration, a.k.a. `fsemul.ini`.",
+		long_help = "If you do not wish to use the default location, the explicit path to your `fsemul.ini` file that we should use."
+	)]
+	fsemul_config_path: Option<PathBuf>,
+	#[arg(
+		long = "prefer-fsemul-over-network",
+		alias = "prefer_fsemul_over_network",
+		help = "If we should prefer the `fsemul.ini` file over the web configuration.",
+		long_help = "If we should prefer the `fsemul.ini` file over the web configuration, this makes us act like nintendo's tools, but also means your configuration needs to be up to date."
+	)]
+	prefer_fsemul_over_network: bool,
+}
+impl FsEmulConfigurationFlags {
+	#[must_use]
+	pub fn cafe_dir(&self) -> Option<&PathBuf> {
+		self.cafe_dir.as_ref()
+	}
+
+	#[must_use]
+	pub fn fsemul_config_path(&self) -> Option<&PathBuf> {
+		self.fsemul_config_path.as_ref()
+	}
+
+	#[must_use]
+	pub const fn prefer_fsemul_over_network(&self) -> bool {
+		self.prefer_fsemul_over_network
+	}
+}
+impl Display for FsEmulConfigurationFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`",
+			self.fsemul_config_path,
+			self.prefer_fsemul_over_network,
+			self.cafe_dir,
+		)
+	}
+}
+const FSEMUL_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("fsemul_config_path"),
+	NamedField::new("prefer_fsemul_over_network"),
+	NamedField::new("cafe_dir"),
+];
+impl Structable for FsEmulConfigurationFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"FsEmulConfigurationFlags",
+			Fields::Named(FSEMUL_CONFIGURATION_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for FsEmulConfigurationFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			FSEMUL_CONFIGURATION_FLAG_FIELDS,
+			&[
+				Valuable::as_value(
+					&self
+						.fsemul_config_path
+						.as_ref()
+						.map(|pb| format!("{}", pb.display())),
+				),
+				Valuable::as_value(&self.prefer_fsemul_over_network),
+				Valuable::as_value(&self.cafe_dir.as_ref().map(|pb| format!("{}", pb.display()))),
+			],
+		));
+	}
+}
+
+/// Common flags that are present on multiple subcommands for managing
+/// shared server variables.
+#[derive(Args, Debug)]
+pub struct SharedServerFlags {
+	#[arg(
+		long = "bind-address",
+		alias = "bind_address",
+		help = "The address to bind too for the cat-dev to connect too.",
+		long_help = "If you do not wish to use your local ip address, the ip address to bind servers too."
+	)]
+	bind_addr: Option<Ipv4Addr>,
+}
+impl SharedServerFlags {
+	#[must_use]
+	pub fn bind_addr(&self) -> Option<&Ipv4Addr> {
+		self.bind_addr.as_ref()
+	}
+}
+impl Display for SharedServerFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"Shared Server Flags --bind-addr: `{:?}`",
+			self.bind_addr,
+		)
+	}
+}
+const SHARED_SERVER_FLAG_FIELDS: &[NamedField<'static>] = &[NamedField::new("bind_addr")];
+impl Structable for SharedServerFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"SharedServerFlags",
+			Fields::Named(SHARED_SERVER_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for SharedServerFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			SHARED_SERVER_FLAG_FIELDS,
+			&[Valuable::as_value(
+				&self.bind_addr.map(|ip| format!("{ip}")),
+			)],
 		));
 	}
 }

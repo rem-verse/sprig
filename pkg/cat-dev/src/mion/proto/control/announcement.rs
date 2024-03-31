@@ -144,17 +144,24 @@ impl From<MionIdentityAnnouncement> for Bytes {
 }
 
 /// The boot type the MION is actively configured to boot into.
-#[derive(Clone, Debug, Hash, PartialEq, Eq, Valuable)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, Valuable)]
 pub enum MIONBootType {
+	/// Boot from the devices own internal NAND.
+	NAND,
 	/// Boot from the PC rather than from it's own internal device nand.
 	PCFS,
+	/// Unsure exactly what this means, presumably something related to
+	/// both PCFS & NAND.
+	DUAL,
 	/// An unknown boot type we don't know how to parse.
 	Unk(u8),
 }
 impl Display for MIONBootType {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		match *self {
+			Self::NAND => write!(fmt, "NAND"),
 			Self::PCFS => write!(fmt, "PCFS"),
+			Self::DUAL => write!(fmt, "DUAL"),
 			Self::Unk(val) => write!(fmt, "Unk({val})"),
 		}
 	}
@@ -162,8 +169,20 @@ impl Display for MIONBootType {
 impl From<u8> for MIONBootType {
 	fn from(value: u8) -> Self {
 		match value {
+			0x1 => MIONBootType::NAND,
 			0x2 => MIONBootType::PCFS,
+			0x3 => MIONBootType::DUAL,
 			num => MIONBootType::Unk(num),
+		}
+	}
+}
+impl From<MIONBootType> for u8 {
+	fn from(value: MIONBootType) -> u8 {
+		match value {
+			MIONBootType::NAND => 0x1,
+			MIONBootType::PCFS => 0x2,
+			MIONBootType::DUAL => 0x3,
+			MIONBootType::Unk(num) => num,
 		}
 	}
 }
@@ -1255,6 +1274,22 @@ mod unit_tests {
 					"Only the static string `enumV1` followed by two NUL Terminators is allowed after `MULTI_I/O_NETWORK_BOARD`.",
 				));
 			}
+		}
+	}
+
+	#[test]
+	pub fn conversion_boot_type() {
+		for boot_type in vec![
+			MIONBootType::NAND,
+			MIONBootType::PCFS,
+			MIONBootType::DUAL,
+			MIONBootType::Unk(0),
+		] {
+			assert_eq!(
+				MIONBootType::from(u8::from(boot_type)),
+				boot_type,
+				"`MIONBootType` : {boot_type} was not converted successfully!"
+			);
 		}
 	}
 }

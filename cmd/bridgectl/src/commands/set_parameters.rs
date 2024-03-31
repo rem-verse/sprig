@@ -8,11 +8,12 @@ use crate::{
 	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
-	parameter::set_parameters, proto::parameter::well_known::ParameterLocationSpecification,
+	parameter::set_parameters,
+	proto::parameter::well_known::{validate_value_at_index, ParameterLocationSpecification},
 };
 use miette::miette;
 use std::net::Ipv4Addr;
-use tracing::{error, field::valuable, info};
+use tracing::{error, field::valuable, info, warn};
 
 /// Actual command handler for the `set-parameters`, or `sp` command.
 pub async fn handle_set_parameters(
@@ -159,6 +160,23 @@ fn parse_parameters_to_set_list(
 
 			std::process::exit(SET_PARAMS_INVALID_PARAMETER_VALUE);
 		};
+
+		if !validate_value_at_index(&specification, value_as_byte) {
+			if SHOULD_LOG_JSON() {
+				warn!(
+					id = "bridgectl::set_parameters::invalid_parameter_value",
+					parameter.name = ?specification,
+					parameter.value = value_as_byte,
+					"this value is not valid for the location",
+				);
+			} else {
+				warn!(
+					parameter.name = ?specification,
+					parameter.value = value_as_byte,
+					"This parameter value is not valid, and may run into various errors.",
+				);
+			}
+		}
 
 		locations.push((specification, value_as_byte));
 	}

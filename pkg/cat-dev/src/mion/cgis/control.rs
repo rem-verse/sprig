@@ -2,15 +2,15 @@
 //! turning the device on & off.
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
+	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
 	mion::{
-		cgis::AUTHZ_HEADER,
+		cgis::do_simple_request,
 		proto::cgis::{ControlOperation, SetParameter},
 	},
 };
 use fnv::FnvHashMap;
 use local_ip_address::local_ip;
-use reqwest::{Client, Response, Version};
+use reqwest::{Client, Method};
 use serde::Serialize;
 use std::net::Ipv4Addr;
 use tracing::{field::valuable, warn};
@@ -45,7 +45,7 @@ pub async fn get_info_with_raw_client(
 	mion_ip: Ipv4Addr,
 	name: &str,
 ) -> Result<FnvHashMap<String, String>, CatBridgeError> {
-	let response = do_raw_control_request(
+	let body_as_string = do_raw_control_request(
 		client,
 		mion_ip,
 		&[
@@ -59,23 +59,6 @@ pub async fn get_info_with_raw_client(
 		],
 	)
 	.await?;
-	let status = response.status().as_u16();
-	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
-	if status != 200 {
-		if let Ok(body) = body_result {
-			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCode(status, body),
-			)));
-		}
-
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::UnexpectedStatusCodeNoBody(status),
-		)));
-	}
-	let read_body_bytes = body_result?;
-	let body_as_string = String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)?;
 
 	extract_body_tags(&body_as_string, ControlOperation::GetInfo.into())
 }
@@ -110,7 +93,7 @@ pub async fn set_param_with_raw_client(
 	mion_ip: Ipv4Addr,
 	parameter_to_set: SetParameter,
 ) -> Result<bool, CatBridgeError> {
-	let response = do_raw_control_request(
+	let body_as_string = do_raw_control_request(
 		client,
 		mion_ip,
 		&[
@@ -125,23 +108,6 @@ pub async fn set_param_with_raw_client(
 		],
 	)
 	.await?;
-	let status = response.status().as_u16();
-	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
-	if status != 200 {
-		if let Ok(body) = body_result {
-			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCode(status, body),
-			)));
-		}
-
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::UnexpectedStatusCodeNoBody(status),
-		)));
-	}
-	let read_body_bytes = body_result?;
-	let body_as_string = String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)?;
 
 	parse_result_from_body(
 		&body_as_string,
@@ -171,6 +137,7 @@ pub async fn set_param_with_raw_client(
 /// - If we cannot parse the HTML response.
 pub async fn power_on_v2(
 	mion_ip: Ipv4Addr,
+	host_ip: Option<Ipv4Addr>,
 	atapi_port: Option<u16>,
 	pcfs_port: Option<u16>,
 	emulate_fs: bool,
@@ -178,6 +145,7 @@ pub async fn power_on_v2(
 	power_on_v2_with_raw_client(
 		&Client::default(),
 		mion_ip,
+		host_ip,
 		atapi_port,
 		pcfs_port,
 		emulate_fs,
@@ -208,10 +176,18 @@ pub async fn power_on_v2(
 pub async fn power_on_v2_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
+	host_ip: Option<Ipv4Addr>,
 	atapi_port: Option<u16>,
 	pcfs_port: Option<u16>,
 	emulate_fs: bool,
 ) -> Result<bool, CatBridgeError> {
+	let host_ip_as_str = if let Some(ip) = host_ip {
+		format!("{ip}")
+	} else {
+		let ip = local_ip().map_err(|_| APIError::NoHostIpFound)?;
+		format!("{ip}")
+	};
+
 	let mut parameters = vec![
 		(
 			"operation",
@@ -225,10 +201,7 @@ pub async fn power_on_v2_with_raw_client(
 				"off".to_owned()
 			},
 		),
-		(
-			"host",
-			format!("{}", local_ip().map_err(NetworkError::LocalIpError)?),
-		),
+		("host", host_ip_as_str),
 	];
 	if let Some(port) = atapi_port {
 		parameters.push(("atapi_port", format!("{port}")));
@@ -237,26 +210,7 @@ pub async fn power_on_v2_with_raw_client(
 		parameters.push(("pcfs_port", format!("{port}")));
 	}
 
-	let response = do_raw_control_request(client, mion_ip, &parameters).await?;
-
-	let status = response.status().as_u16();
-	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
-	if status != 200 {
-		if let Ok(body) = body_result {
-			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCode(status, body),
-			)));
-		}
-
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::UnexpectedStatusCodeNoBody(status),
-		)));
-	}
-	let read_body_bytes = body_result?;
-	let body_as_string = String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)?;
-
+	let body_as_string = do_raw_control_request(client, mion_ip, &parameters).await?;
 	parse_result_from_body(
 		&body_as_string,
 		Into::<&str>::into(ControlOperation::PowerOnV2),
@@ -277,25 +231,21 @@ pub async fn do_raw_control_request<'key, 'value, UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<Response, NetworkError>
+) -> Result<String, CatBridgeError>
 where
 	UrlEncodableType: Serialize,
 {
-	Ok(client
-		.post(format!("http://{mion_ip}/mion/control.cgi"))
-		.version(Version::HTTP_11)
-		.header("authorization", format!("Basic {AUTHZ_HEADER}"))
-		.header("content-type", "application/x-www-form-urlencoded")
-		.header(
-			"user-agent",
-			format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
-		)
-		.body::<String>(
+	do_simple_request::<String>(
+		client,
+		Method::POST,
+		format!("http://{mion_ip}/mion/control.cgi"),
+		Some(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)?,
-		)
-		.send()
-		.await?)
+				.map_err(NetworkParseError::FormDataEncodeError)
+				.map_err(NetworkError::ParseError)?,
+		),
+	)
+	.await
 }
 
 /// Extract tags from body request.

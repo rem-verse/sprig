@@ -237,13 +237,13 @@ dependencies = [
 
 [[package]]
 name = "bridgectl"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "cat-dev",
  "clap",
  "fnv",
  "libc",
- "log 0.0.7",
+ "log 0.0.8",
  "mac_address",
  "miette",
  "terminal_size 0.4.0",
@@ -272,7 +272,7 @@ checksum = "9ac0150caa2ae65ca5bd83f25c7de183dea78d4d366469f148435e2acfbad0da"
 
 [[package]]
 name = "cat-dev"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "aes",
  "bytes",
@@ -293,6 +293,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.3",
  "tokio",
+ "tokio-util",
  "tracing",
  "valuable",
  "windows",
@@ -300,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "catlog"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "tokio",
 ]
@@ -558,7 +559,7 @@ checksum = "486f806e73c5707928240ddc295403b1b93c96a02038563881c4a2fd84b81ac4"
 
 [[package]]
 name = "findbridge"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "cat-dev",
  "mac_address",
@@ -707,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "getbridgeconfig"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "cat-dev",
  "tokio",
@@ -757,9 +758,9 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
-version = "0.15.1"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a9bfc1af68b1726ea47d3d5109de126281def866b33970e10fbab11b5dafab3"
+checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
 
 [[package]]
 name = "hdrhistogram"
@@ -1080,7 +1081,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "707907fe3c25f5424cce2cb7e1cbcafee6bdbe735ca90ef77c29e84591e5b9da"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.1",
+ "hashbrown 0.15.2",
 ]
 
 [[package]]
@@ -1122,9 +1123,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.13"
+version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "540654e97a3f4470a492cd30ff187bc95d89557a903a2bbf112e2fae98104ef2"
+checksum = "d75a2a4b1b190afb6f5425f10f6a8f959d2ea0b9c2b1d79553551850539e4674"
 
 [[package]]
 name = "js-sys"
@@ -1183,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "console-subscriber",
  "miette",
@@ -1304,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "mionparamspace"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "cat-dev",
  "time",
@@ -1313,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "mionps"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "cat-dev",
  "time",
@@ -1920,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "setbridgeconfig"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "cat-dev",
  "tokio",

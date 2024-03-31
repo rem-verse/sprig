@@ -6,12 +6,13 @@
 
 use bytes::Bytes;
 use local_ip_address::Error as LocalIpAddressError;
+use mac_address::MacParseError;
 use miette::Diagnostic;
 use reqwest::Error as ReqwestError;
 use serde_urlencoded::ser::Error as SerdeUrlEncodeError;
-use std::string::FromUtf8Error;
+use std::{net::AddrParseError, num::ParseIntError, string::FromUtf8Error, time::Duration};
 use thiserror::Error;
-use tokio::{io::Error as IoError, task::JoinError};
+use tokio::{io::Error as IoError, sync::mpsc::error::SendError, task::JoinError};
 
 /// The 'top-level' error type for this entire crate, all error types
 /// wrap underneath this.
@@ -57,6 +58,9 @@ pub enum CatBridgeError {
 	#[error("We could not spawn a task (a lightweight thread) to do work on.")]
 	#[diagnostic(code(cat_dev::spawn_failure))]
 	SpawnFailure,
+	#[error("This cat-dev API requires a 32 bit usize, and this machine does not have it, please upgrade.")]
+	#[diagnostic(code(cat_dev::unsupported_bits_per_core))]
+	UnsupportedBitsPerCore,
 }
 
 /// An error that comes from one of our APIs, e.g. passing in a parameter
@@ -151,12 +155,22 @@ pub enum APIError {
 	#[error("The MION Parameter body you passed in was: {0} bytes long, but must be exactly 512 bytes long!")]
 	#[diagnostic(code(cat_dev::api::parameter::body_incorrect_length))]
 	MIONParameterBodyNotCorrectLength(usize),
+	/// We failed to find our own hosts local IP address.
+	///
+	/// This usually means we don't have a network interface we can communicate
+	/// on that has an IPv4 address assigned.
+	#[error("We could not find the local hosts ipv4 address which is needed if an ip isn't explicitly passed in.")]
+	#[diagnostic(code(cat_dev::api::no_host_ip_found))]
+	NoHostIpFound,
 	/// There are a series of operations you can call on `control.cgi`,
 	/// unfortunately the one specified is not an operation we know on
 	/// any firmware version.
 	#[error("Unknown operation for `control.cgi`: [{0}]")]
 	#[diagnostic(code(cat_dev::api::control::unknown_operation))]
 	UnknownControlOperation(String),
+	#[error("Unknown ID for Cat-DEV Bank Sizes: [{0}]")]
+	#[diagnostic(code(cat_dev::api::setup::unknown_bank_size))]
+	UnknownCatDevBankSizeId(u32),
 }
 
 /// Trying to interact with the filesystem has resulted in an error.
@@ -169,8 +183,19 @@ pub enum FSError {
 	/// or manually provide the host bridge path (this can only be done on the
 	/// newer versions of tools).
 	#[error("We can't find the path to store a complete list of host-bridges, please use explicit paths instead.")]
-	#[diagnostic(code(cat_dev::fs::cant_find_path))]
+	#[diagnostic(code(cat_dev::fs::cant_find_hostenv_path))]
 	CantFindHostEnvPath,
+	#[error(
+		"We can't find the path to store fsemul configuration, please use explicit paths instead."
+	)]
+	#[diagnostic(code(cat_dev::fs::cant_find_fsemul_path))]
+	CantFindFsEmulPath,
+	#[error("We can't find the root Cafe SDK directory, please use explicit paths instead.")]
+	#[diagnostic(code(cat_dev::fs::cant_find_cafe_sdk_path))]
+	CantFindCafeSdkPath,
+	#[error("The Cafe SDK Path does not have the appropriate MLC path directories.")]
+	#[diagnostic(code(cat_dev::fs::corrupt_cafe_sdk_path))]
+	CafeSdkPathCorrupt,
 	/// We expected to read UTF-8 data from the filesystem, but it wasn't UTF-8.
 	#[error("Data read from the filesystem was expected to be UTF-8, but was not: {0}")]
 	#[diagnostic(code(cat_dev::fs::utf8_expected))]
@@ -184,6 +209,22 @@ pub enum FSError {
 	#[error("Error writing/reading data from the filesystem: {0}")]
 	#[diagnostic(code(cat_dev::fs::io_failure))]
 	IOError(#[from] IoError),
+	/// File "magic" are generally constants that should always be true.
+	#[error("Expected file magic of: {0}, got {1} as magic bytes")]
+	#[diagnostic(code(cat_dev::fs::file_magic))]
+	InvalidFileMagic(u32, u32),
+	/// Expected a file sized a specific amount of bytes, and it wasn't.
+	#[error("Expected file size of: {0} bytes, got a file sized {1} bytes")]
+	#[diagnostic(code(cat_dev::fs::invalid_file_size))]
+	InvalidFileSize(usize, usize),
+	/// The file needs to be a certain amount of bytes, and it wasn't.
+	#[error("File needs to be at least: {0} bytes, is {1} bytes")]
+	#[diagnostic(code(cat_dev::fs::too_small))]
+	TooSmall(usize, usize),
+	/// The file can't be larger than a certain amount of bytes, and it was.
+	#[error("File cannot be larger than: {0} bytes, is {1} bytes")]
+	#[diagnostic(code(cat_dev::fs::too_large))]
+	TooLarge(usize, usize),
 }
 
 /// Trying to interact with the network has resulted in an error.
@@ -242,6 +283,15 @@ pub enum NetworkError {
 	#[error("Failure fetching local ip address: {0}")]
 	#[diagnostic(code(cat_dev::net::local_ip_failure))]
 	LocalIpError(#[from] LocalIpAddressError),
+	#[error("Error creating a new connection, timed out after: {0:?}, perhaps the device isn't available?")]
+	#[diagnostic(code(cat_dev::net::connection_timeout))]
+	ConnectionTimeout(Duration),
+	#[error("Error looking up PCFS Address: {0} cannot read/write.")]
+	#[diagnostic(code(cat_dev::net::unknown_pcfs_server_address))]
+	UnknownPCFSServerAddress(u32),
+	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
+	#[diagnostic(code(cat_dev::net::send_queue_failure))]
+	SendQueueFailure(#[from] SendError<Bytes>),
 }
 
 /// We tried parsing some data from the network, but failed to do so, someone
@@ -326,4 +376,32 @@ pub enum NetworkParseError {
 	#[error("Could not parse byte from memory dump: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::html::bad_memory_byte))]
 	HtmlResponseBadByte(String),
+	#[error("Could not find input with name: `{0}`, within HTML body: `{1}`")]
+	#[diagnostic(code(cat_dev::net::parse::html::missing_tagged_input))]
+	HtmlResponseMissingTaggedInput(String, String),
+	#[error("Expected HTML Response to have an IP as a string, but could not parse: `{0:?}`")]
+	#[diagnostic(code(cat_dev::net::parse::html::html_response_ip_encoding_error))]
+	HtmlResponseIpExpectedButNotThere(AddrParseError),
+	#[error("Expected HTML Response to have a radio button, could not parse: `{0}`")]
+	HtmlResponseNoRadioChecked(String),
+	#[error("Expected HTML Response to have an number as a string, but could not parse: `{0:?}`")]
+	#[diagnostic(code(cat_dev::net::parse::html::html_response_number_encoding_error))]
+	HtmlResponseNumberExpectedButNotThere(ParseIntError),
+	#[error("Expected HTML Response to have a table item with prefix: {1}, but couldn't find one in: `{0}`")]
+	HtmlResponseNoTableItemWithPrefix(String, String),
+	#[error("Expected HTML Response to have a MAC as a string, but could not parse: `{0:?}`")]
+	#[diagnostic(code(cat_dev::net::parse::html::html_response_mac_encoding_error))]
+	HtmlResponseMacExpectedButNotThere(MacParseError),
+	#[error("Got an unexpected sdio/printf packet type: {0}, not sure how to handle")]
+	#[diagnostic(code(cat_dev::net::parse::sdio::printf::unknown_packet_type))]
+	UnknownSdioPrintfPacketType(u8),
+	#[error("Got an unexpected message fragment from an sdio printf packet type: {0}, not sure how to handle.")]
+	#[diagnostic(code(cat_dev::net::parse::sdio::printf::unknown_message_type))]
+	UnknownSdioPrintfMessageType(u16),
+	#[error("Got an invalid channel to read/write from for sdio/printf, (first byte: {0:02x} should be <0xC), (full channel: {1})")]
+	#[diagnostic(code(cat_dev::net::parse::sdio::printf::invalid_channel))]
+	SdioPrintfInvalidChannel(u8, u32),
+	#[error("Packet headed for SDIO PRINTF/CONTROL was size {0}, but needs to be 512 bytes")]
+	#[diagnostic(code(cat_dev::net::parse::sdio::printf::invalid_sized_packet))]
+	SdioPrintfInvalidSize(usize),
 }
