@@ -24,15 +24,15 @@ jobs:
           wix extension add WiXToolset.UI.wixext/4.0.4
           wix extension add WiXToolset.Util.wixext/4.0.5
           wix build sprig.wxs -ext WiXToolset.Util.wixext -ext WiXToolset.UI.wixext -defaultcompressionlevel high -arch "x64" -bindpath "../../"
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_win_amd64.msi
           path: installer-scripts/win/sprig.msi
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_win_amd64.wixpdb
           path: installer-scripts/win/sprig.wixpdb
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig-target-directory-win
           path: |
@@ -55,15 +55,15 @@ jobs:
         run: |
           cd installer-scripts/osx/
           ./package.sh intel
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_osx_intel.dist
           path: installer-scripts/osx/working-dir-pkg/sprig.dist
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_osx_intel.pkg
           path: installer-scripts/osx/working-dir-pkg/sprig.pkg
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig-target-directory-osx-intel
           path: |
@@ -86,15 +86,15 @@ jobs:
         run: |
           cd installer-scripts/osx/
           ./package.sh arm
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_osx_arm.dist
           path: installer-scripts/osx/working-dir-pkg/sprig.dist
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_osx_arm.pkg
           path: installer-scripts/osx/working-dir-pkg/sprig.pkg
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig-target-directory-osx-arm
           path: |
@@ -125,23 +125,23 @@ jobs:
           nfpm package -p rpm
           nfpm package -p apk
           nfpm package -p archlinux
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.deb
           path: installer-scripts/unix/sprig_0.0.6_amd64.deb
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.rpm
           path: installer-scripts/unix/sprig-0.0.6-1.x86_64.rpm
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.apk
           path: installer-scripts/unix/sprig_0.0.6_x86_64.apk
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.pkg.tar.zst
           path: installer-scripts/unix/sprig-0.0.6-1-x86_64.pkg.tar.zst
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: sprig-target-directory-unix
           path: |
