@@ -8,6 +8,7 @@
 
 # Package formats
 /installer-scripts/osx/working-dir/
+/installer-scripts/osx/working-dir-pkg/
 /installer-scripts/win/.wix/
 /installer-scripts/win/*.msi
 /installer-scripts/win/*.wixpdb
