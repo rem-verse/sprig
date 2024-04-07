@@ -21,8 +21,8 @@ jobs:
           cd installer-scripts/win/
           dotnet --version
           dotnet tool install --global wix
-          wix extension add WiXToolset.UI.wixext/4.0.4
-          wix extension add WiXToolset.Util.wixext/4.0.5
+          wix extension add WiXToolset.UI.wixext/5.0.0
+          wix extension add WiXToolset.Util.wixext/5.0.0
           wix build sprig.wxs -ext WiXToolset.Util.wixext -ext WiXToolset.UI.wixext -defaultcompressionlevel high -arch "x64" -bindpath "../../"
       - uses: actions/upload-artifact@v4
         with:
