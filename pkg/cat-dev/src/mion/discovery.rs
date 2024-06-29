@@ -460,7 +460,7 @@ pub enum MIONFindBy {
 	/// Search by a specific IP Address.
 	///
 	/// The IP Address has to be a V4 address, as the MIONs do not actually
-	/// support being on an IPv6 address, and using DHCPv6.
+	/// support being on an IPv6 address, and using `DHCPv6`.
 	///
 	/// This searching type will only send a specific request to the specific
 	/// IPv4 address that you've specified here. IT WILL NOT cause a full
