@@ -11,7 +11,7 @@ v2.12.13 -- you can look at the doc page at
 to find an image explaining this flow).
 
   <picture>
-    <image alt="A photo of a CAT-DEV v3 Console sitting in a makeshift container." width=640 height=480 src="https://c.reml.ink/images/github/sprig/cat-dev.jpg"></image>
+    <image alt="A photo of a CAT-DEV MP2 Console sitting in a makeshift container." width=640 height=480 src="https://c.reml.ink/images/github/sprig/cat-dev.jpg"></image>
   </picture>
 
 </div>
