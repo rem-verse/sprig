@@ -110,6 +110,10 @@ Firmware version   : {}",
 	}
 }
 
+#[allow(
+	// False Positive generates bad code.
+	clippy::assigning_clones,
+)]
 fn print_identity_column_view(identity: &MionIdentity, is_detailed: bool, is_first: bool) {
 	if is_detailed {
 		println!();
@@ -152,6 +156,10 @@ fn print_identity_column_view(identity: &MionIdentity, is_detailed: bool, is_fir
 	}
 }
 
+#[allow(
+	// False Positive generates bad code.
+	clippy::assigning_clones,
+)]
 fn get_detailed_view_minus_extra_fields(identity: &MionIdentity) -> String {
 	let mut name = String::from(identity.name());
 	if name.len() > 32 {

@@ -41,7 +41,7 @@ To enable this simply set the environment variable `SPRIG_TOKIO_CONSOLE_ADDR`
 to the network address you want the console to listen on. From this point on
 tokio-console will automatically be spun up and run.
 
-***If you are setting SPRIG_LOGGING, you must be sure to turn tokio/runtime up
+***If you are setting `SPRIG_LOGGING`, you must be sure to turn tokio/runtime up
 to trace for tokio-console to work! If you don't specify it, it will
 automatically be handled.***
 
