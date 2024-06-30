@@ -516,6 +516,14 @@ pub enum MionSubcommands {
 			long_help = "The path to the file to write the EEPMROM dump."
 		)]
 		output_path: Option<PathBuf>,
+		#[arg(
+			short = 'r',
+			long = "resume-at",
+			alias = "resume_at",
+			help = "The byte offset to resume reading at.",
+			long_help = "The byte offset on the page to resume reading at, use debug logs to see where you are if you intend to resume."
+		)]
+		resume_at: Option<usize>,
 	},
 }
 impl MionSubcommands {
@@ -537,6 +545,7 @@ impl MionSubcommands {
 				target_flags,
 				bridge_name_positional,
 				output_path,
+				resume_at,
 			} => name == "dump-memory" || name == "dump_memory",
 		}
 	}

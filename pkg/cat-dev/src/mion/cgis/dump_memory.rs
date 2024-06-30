@@ -34,8 +34,37 @@ const MAX_RETRIES: usize = 10;
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn dump_memory(mion_ip: Ipv4Addr) -> Result<Bytes, CatBridgeError> {
-	dump_memory_with_raw_client(&Client::default(), mion_ip).await
+pub async fn dump_memory(
+	mion_ip: Ipv4Addr,
+	resume_at: Option<usize>,
+) -> Result<Bytes, CatBridgeError> {
+	let mut memory_buffer = BytesMut::with_capacity(0xFFFF_FFFF);
+	dump_memory_with_raw_client(&Client::default(), mion_ip, resume_at, |byte: u8| {
+		memory_buffer.put_u8(byte);
+	})
+	.await?;
+	Ok(memory_buffer.freeze())
+}
+
+/// Dump the existing memory for a MION allowing you to write as
+/// dumps happen.
+///
+/// ## Errors
+///
+/// - If we cannot encode the parameters as a form url encoded.
+/// - If we cannot make the HTTP request.
+/// - If the server does not respond with a 200.
+/// - If we cannot read the body from HTTP.
+/// - If we cannot parse the HTML response.
+pub async fn dump_memory_with_writer<FnTy>(
+	mion_ip: Ipv4Addr,
+	resume_at: Option<usize>,
+	callback_ty: FnTy,
+) -> Result<(), CatBridgeError>
+where
+	FnTy: FnMut(u8),
+{
+	dump_memory_with_raw_client(&Client::default(), mion_ip, resume_at, callback_ty).await
 }
 
 /// Perform a memory dump request, but with an already existing HTTP client.
@@ -47,20 +76,23 @@ pub async fn dump_memory(mion_ip: Ipv4Addr) -> Result<Bytes, CatBridgeError> {
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn dump_memory_with_raw_client<ClientConnectorTy>(
+pub async fn dump_memory_with_raw_client<ClientConnectorTy, FnTy>(
 	client: &Client<ClientConnectorTy>,
 	mion_ip: Ipv4Addr,
-) -> Result<Bytes, CatBridgeError>
+	resume_at: Option<usize>,
+	mut buff_callback: FnTy,
+) -> Result<(), CatBridgeError>
 where
 	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
+	FnTy: FnMut(u8),
 {
-	let mut memory_buffer = BytesMut::with_capacity(0xFFFF_FFFF);
-
+	let mut bytes_read = resume_at.unwrap_or(0);
 	let mut retry_counter = 0;
-	while memory_buffer.len() <= MEMORY_MAX_ADDRESS {
+
+	while bytes_read <= MEMORY_MAX_ADDRESS {
 		debug!(
 		  bridge.ip = %mion_ip,
-		  address = %format!("{:08X}", memory_buffer.len()),
+		  address = %format!("{bytes_read:08X}"),
 		  "Dumping memory area",
 		);
 
@@ -69,7 +101,7 @@ where
 			do_raw_memory_request(
 				client,
 				mion_ip,
-				&[("start_addr", format!("{:08X}", memory_buffer.len()))],
+				&[("start_addr", format!("{bytes_read:08X}"))],
 			),
 		)
 		.await;
@@ -145,18 +177,17 @@ where
 						NetworkParseError::HtmlResponseBadByte(table_column.to_owned()),
 					)));
 				}
-				memory_buffer.put_u8(u8::from_str_radix(table_column.trim(), 16).map_err(
-					|_| {
-						NetworkError::ParseError(NetworkParseError::HtmlResponseBadByte(
-							table_column.to_owned(),
-						))
-					},
-				)?);
+				buff_callback(u8::from_str_radix(table_column.trim(), 16).map_err(|_| {
+					NetworkError::ParseError(NetworkParseError::HtmlResponseBadByte(
+						table_column.to_owned(),
+					))
+				})?);
+				bytes_read += 1;
 			}
 		}
 	}
 
-	Ok(memory_buffer.freeze())
+	Ok(())
 }
 
 fn extract_memory_table_body(body: &str) -> Result<String, CatBridgeError> {

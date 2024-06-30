@@ -207,12 +207,13 @@ async fn main() {
 				target_flags,
 				bridge_name_positional,
 				output_path,
+				resume_at,
 			} => {
 				initialize_host_bridge(bridge_config_flags).await;
 				initialize_scan_flags(scan_flags).await;
 				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
 
-				mion_handle_dump_memory(output_path).await;
+				mion_handle_dump_memory(output_path, resume_at).await;
 			}
 		},
 		Subcommands::Remove {
