@@ -34,6 +34,7 @@ pub async fn handle_dump_memory(output_path: Option<PathBuf>, resume_at: Option<
 	let file_writer = match OpenOptions::new()
 		.write(true)
 		.append(resume_at.is_some())
+		.create(true)
 		.open(&path)
 	{
 		Ok(val) => val,
@@ -59,8 +60,8 @@ pub async fn handle_dump_memory(output_path: Option<PathBuf>, resume_at: Option<
 	};
 	let mut buff_writer = BufWriter::new(file_writer);
 
-	if let Err(cause) = dump_memory_with_writer(bridge_ip, resume_at, |byte: u8| {
-		if let Err(cause) = buff_writer.write(&[byte]) {
+	if let Err(cause) = dump_memory_with_writer(bridge_ip, resume_at, |bytes: Vec<u8>| {
+		if let Err(cause) = buff_writer.write(&bytes) {
 			if SHOULD_LOG_JSON() {
 				error!(
 				  id = "bridgectl::mion::dump_memory::write_failure",
