@@ -94,12 +94,24 @@ where
 				continue;
 			}
 		};
-		retry_counter = 0;
 
 		let status = response.status().as_u16();
-		let body_result = read_http_body_bytes(response.into_body())
-			.await
-			.map_err(NetworkError::HyperError);
+		let timeout_body_result = timeout(
+			Duration::from_secs(30),
+			read_http_body_bytes(response.into_body()),
+		)
+		.await;
+		let Ok(body_result) = timeout_body_result else {
+			retry_counter += 1;
+			if retry_counter > MAX_RETRIES {
+				return Err(NetworkError::TimeoutError.into());
+			}
+			debug!(bridge.ip = %mion_ip, "Slamming Memory dump too hard... backing off for a bit");
+			tokio::time::sleep(Duration::from_secs(10)).await;
+			continue;
+		};
+
+		retry_counter = 0;
 		if status != 200 {
 			if let Ok(body) = body_result {
 				return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
@@ -111,7 +123,7 @@ where
 				NetworkParseError::UnexpectedStatusCodeNoBody(status),
 			)));
 		}
-		let read_body_bytes = body_result?;
+		let read_body_bytes = body_result.map_err(NetworkError::HyperError)?;
 		let body_as_string = String::from_utf8(read_body_bytes.into())
 			.map_err(NetworkParseError::InvalidDataNeedsUTF8)
 			.map_err(NetworkError::ParseError)?;
