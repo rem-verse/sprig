@@ -58,7 +58,7 @@ pub enum Subcommands {
 		// Add only command arguments.
 		// ///////////////////////////////////////////////////
 		#[arg(
-			long = "default",
+			long = "set-default",
 			help = "Makes this bridge the default.",
 			long_help = "Sets the bridge as the default bridge to use when opening new shells, with this you don't need to separately call `set-default`."
 		)]
