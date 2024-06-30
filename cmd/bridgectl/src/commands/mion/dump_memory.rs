@@ -21,12 +21,12 @@ pub async fn handle_dump_memory(output_path: Option<PathBuf>, resume_at: Option<
 		info!(
 			id = "bridgectl::mion::dump_memory::start",
 			%bridge_ip,
-			"Dumping MION Memory...",
+			"Dumping MION Memory, this will take a LONG time...",
 		);
 	} else {
 		info!(
 			%bridge_ip,
-			"Dumping MION Memory...",
+			"Dumping MION Memory, this will take a LONG time...",
 		);
 	}
 
