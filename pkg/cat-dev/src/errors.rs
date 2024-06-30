@@ -267,4 +267,10 @@ pub enum NetworkParseError {
 	#[error("Could not parse HTML response could not find one of the body tags: `<body>`, or `</body>`: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::html::no_body_tag))]
 	HtmlResponseMissingBody(String),
+	#[error("Could not find Memory Dump Table Body, failed to find sigils: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::html::no_mem_dump_sigil))]
+	HtmlResponseMissingMemoryDumpSigil(String),
+	#[error("Could not parse byte from memory dump: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::html::bad_memory_byte))]
+	HtmlResponseBadByte(String),
 }

@@ -18,13 +18,15 @@ use crate::{
 		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
 		handle_get_parameters, handle_help, handle_list, handle_list_serial_ports,
 		handle_remove_bridge, handle_set_default_bridge, handle_set_parameters, handle_tail,
+		mion::handle_dump_eeprom as mion_handle_dump_eeprom,
+		mion::handle_dump_memory as mion_handle_dump_memory,
 	},
 	exit_codes::{
 		ARGV_NO_COMMAND_SPECIFIED, ARGV_PARSE_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE,
 		SHOULD_NEVER_HAPPEN_FAILURE,
 	},
 	knobs::{
-		cli::{CliArguments, Subcommands},
+		cli::{CliArguments, MionSubcommands, Subcommands},
 		env::USE_JSON_OUTPUT,
 	},
 };
@@ -185,6 +187,35 @@ async fn main() {
 		Subcommands::ListSerialPorts {} => {
 			handle_list_serial_ports();
 		}
+		Subcommands::Mion(mion_subcommands) => match mion_subcommands {
+			MionSubcommands::DumpEeprom {
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_positional,
+				output_path,
+			} => {
+				initialize_host_bridge(bridge_config_flags).await;
+				initialize_scan_flags(scan_flags).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
+				mion_handle_dump_eeprom(output_path).await;
+			}
+			MionSubcommands::DumpMemory {
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_positional,
+				output_path,
+				resume_at,
+			} => {
+				initialize_host_bridge(bridge_config_flags).await;
+				initialize_scan_flags(scan_flags).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+
+				mion_handle_dump_memory(output_path, resume_at).await;
+			}
+		},
 		Subcommands::Remove {
 			bridge_config_flags,
 			scan_flags,

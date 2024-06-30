@@ -15,7 +15,11 @@
 const AUTHZ_HEADER: &str = "bWlvbjovTXVsdGlfSS9PX05ldHdvcmsv";
 
 mod control;
+mod dump_eeprom;
+mod dump_memory;
 mod signal_get;
 
 pub use control::*;
+pub use dump_eeprom::*;
+pub use dump_memory::*;
 pub use signal_get::*;

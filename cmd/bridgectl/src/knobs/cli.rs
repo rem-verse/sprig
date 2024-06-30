@@ -1,6 +1,6 @@
 //! Defines the command line interface a.k.a. all the arguments & flags.
 
-use clap::{Args, Parser};
+use clap::{Args, Parser, Subcommand};
 use mac_address::MacAddress;
 use std::{
 	fmt::{Display, Formatter, Result as FmtResult},
@@ -58,7 +58,7 @@ pub enum Subcommands {
 		// Add only command arguments.
 		// ///////////////////////////////////////////////////
 		#[arg(
-			long = "default",
+			long = "set-default",
 			help = "Makes this bridge the default.",
 			long_help = "Sets the bridge as the default bridge to use when opening new shells, with this you don't need to separately call `set-default`."
 		)]
@@ -261,6 +261,8 @@ pub enum Subcommands {
 		visible_aliases = ["ls-serial-ports", "lssp", "list_serial_ports", "ls_serial_ports"],
 	)]
 	ListSerialPorts {},
+	#[clap(subcommand)]
+	Mion(MionSubcommands),
 	/// Remove a bridge from your local configuration file.
 	#[command(name = "remove", visible_alias = "rm")]
 	Remove {
@@ -424,6 +426,7 @@ impl Subcommands {
 					|| name == "ls_serial_ports"
 					|| name == "lssp"
 			}
+			Self::Mion(_) => name == "mion",
 			Self::Remove {
 				bridge_config_flags,
 				scan_flags,
@@ -448,6 +451,102 @@ impl Subcommands {
 				serial_port_flag,
 				serial_port_positional,
 			} => name == "tail" || name == "tail-serial-port" || name == "tail_serial_port",
+		}
+	}
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MionSubcommands {
+	/// Dump the EEPROM on a mion.
+	#[command(name = "dump-eeprom", alias = "dump_eeprom")]
+	DumpEeprom {
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
+		#[arg(
+			index = 1,
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what type you're searching for with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess"
+		)]
+		bridge_name_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Get only command flags.
+		// ///////////////////////////////////////////////////
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the dumped EEPROM.",
+			long_help = "The path to the file to write the EEPMROM dump."
+		)]
+		output_path: Option<PathBuf>,
+	},
+	/// Dump the Memory on a mion.
+	#[command(name = "dump-memory", alias = "dump_memory")]
+	DumpMemory {
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
+		#[arg(
+			index = 1,
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what type you're searching for with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess"
+		)]
+		bridge_name_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Get only command flags.
+		// ///////////////////////////////////////////////////
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the dumped EEPROM.",
+			long_help = "The path to the file to write the EEPMROM dump."
+		)]
+		output_path: Option<PathBuf>,
+		#[arg(
+			short = 'r',
+			long = "resume-at",
+			alias = "resume_at",
+			help = "The byte offset to resume reading at.",
+			long_help = "The byte offset on the page to resume reading at, use debug logs to see where you are if you intend to resume."
+		)]
+		resume_at: Option<usize>,
+	},
+}
+impl MionSubcommands {
+	/// If this subcommand matches a particular name.
+	#[allow(unused)]
+	#[must_use]
+	pub fn name_matches(&self, name: &str) -> bool {
+		match self {
+			Self::DumpEeprom {
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_positional,
+				output_path,
+			} => name == "dump-eeprom" || name == "dump_eeprom",
+			Self::DumpMemory {
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_positional,
+				output_path,
+				resume_at,
+			} => name == "dump-memory" || name == "dump_memory",
 		}
 	}
 }
