@@ -16,12 +16,14 @@ use hyper::{
 	Body, Request, Response, Version,
 };
 use serde::Serialize;
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, time::Duration};
+use tokio::time::timeout;
 use tracing::debug;
 
 const MEMORY_MAX_ADDRESS: usize = 0xFFFF_FE00;
-const TABLE_START_SIGIL: &str = r#"<table border=0 cellspacing=3 cellpadding=3>"#;
+const TABLE_START_SIGIL: &str = "<table border=0 cellspacing=3 cellpadding=3>";
 const TABLE_END_SIGIL: &str = "</table>";
+const MAX_RETRIES: usize = 10;
 
 /// Dump the existing memory for a MION.
 ///
@@ -54,6 +56,7 @@ where
 {
 	let mut memory_buffer = BytesMut::with_capacity(0xFFFF_FFFF);
 
+	let mut retry_counter = 0;
 	while memory_buffer.len() <= MEMORY_MAX_ADDRESS {
 		debug!(
 		  bridge.ip = %mion_ip,
@@ -61,12 +64,37 @@ where
 		  "Dumping memory area",
 		);
 
-		let response = do_raw_memory_request(
-			client,
-			mion_ip,
-			&[("start_addr", format!("{:08X}", memory_buffer.len()))],
+		let timeout_response = timeout(
+			Duration::from_secs(30),
+			do_raw_memory_request(
+				client,
+				mion_ip,
+				&[("start_addr", format!("{:08X}", memory_buffer.len()))],
+			),
 		)
-		.await?;
+		.await;
+		let Ok(potential_response) = timeout_response else {
+			retry_counter += 1;
+			if retry_counter > MAX_RETRIES {
+				return Err(NetworkError::TimeoutError.into());
+			}
+			debug!(bridge.ip = %mion_ip, "Slamming Memory dump too hard... backing off for a bit");
+			tokio::time::sleep(Duration::from_secs(10)).await;
+			continue;
+		};
+		let response = match potential_response {
+			Ok(value) => value,
+			Err(cause) => {
+				retry_counter += 1;
+				if retry_counter > MAX_RETRIES {
+					return Err(cause.into());
+				}
+				debug!(bridge.ip = %mion_ip, "Slamming Memory dump too hard... backing off for a bit");
+				tokio::time::sleep(Duration::from_secs(10)).await;
+				continue;
+			}
+		};
+		retry_counter = 0;
 
 		let status = response.status().as_u16();
 		let body_result = read_http_body_bytes(response.into_body())

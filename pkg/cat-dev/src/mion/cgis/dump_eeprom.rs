@@ -16,7 +16,7 @@ use std::net::Ipv4Addr;
 use tracing::debug;
 
 const EEPROM_MAX_ADDRESS: usize = 0x1E00;
-const TABLE_START_SIGIL: &str = r#"<table border=0 cellspacing=3 cellpadding=3>"#;
+const TABLE_START_SIGIL: &str = "<table border=0 cellspacing=3 cellpadding=3>";
 const TABLE_END_SIGIL: &str = "</table>";
 
 /// Dump the existing EEPROM for a MION.
