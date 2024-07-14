@@ -67,6 +67,10 @@ pub enum CatBridgeError {
 /// modules.
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
 pub enum APIError {
+	/// You attempted to decrypt data that we could not decrypt.
+	#[error("We could not decrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[diagnostic(code(cat_dev::api::bad_encrypted_data_length))]
+	BadEncryptedDataLength(usize),
 	/// You attempted to set the default host bridge to a bridge that does not exist.
 	#[error("You cannot set a default bridge that does not exist.")]
 	#[diagnostic(code(cat_dev::api::default_device_must_exist))]
