@@ -10,9 +10,8 @@ version.workspace = true
 publish = false
 
 [dependencies]
-console-subscriber = { version = "^0.2.0", default-features = false, features = ["env-filter", "parking_lot"] }
+console-subscriber = { version = "^0.4.1", default-features = false, features = ["env-filter", "parking_lot"] }
 miette.workspace = true
-once_cell.workspace = true
 tracing.workspace = true
 tracing-error = "^0.2.0"
 tracing-subscriber = { version = "^0.3.18", features = ["env-filter", "json", "valuable"] }

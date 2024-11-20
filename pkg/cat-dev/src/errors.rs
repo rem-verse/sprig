@@ -5,9 +5,9 @@
 //! specific item.
 
 use bytes::Bytes;
-use hyper::{http::Error as HttpError, Error as HyperError};
 use local_ip_address::Error as LocalIpAddressError;
 use miette::Diagnostic;
+use reqwest::Error as ReqwestError;
 use serde_urlencoded::ser::Error as SerdeUrlEncodeError;
 use std::string::FromUtf8Error;
 use thiserror::Error;
@@ -198,14 +198,10 @@ pub enum NetworkError {
 	)]
 	#[diagnostic(code(cat_dev::net::timeout))]
 	TimeoutError,
-	/// See [`hyper::http::Error`] for details.
-	#[error("Underlying HTTP error: {0}")]
-	#[diagnostic(code(cat_dev::net::proto::http_failure))]
-	HttpError(#[from] HttpError),
 	/// See [`hyper::Error`] for details.
 	#[error("Underlying HTTP client error: {0}")]
 	#[diagnostic(code(cat_dev::net::http_failure))]
-	HyperError(#[from] HyperError),
+	ReqwestError(#[from] ReqwestError),
 	/// See [`local_ip_address::Error`] for details.
 	#[error("Failure fetching local ip address: {0}")]
 	#[diagnostic(code(cat_dev::net::local_ip_failure))]

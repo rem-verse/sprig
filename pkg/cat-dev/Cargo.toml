@@ -10,21 +10,20 @@ version.workspace = true
 [dependencies]
 aes = "^0.8.4"
 bytes.workspace = true
-cipher = { version = "^0.4.2", features = ["alloc", "block-padding"] }
-configparser = "^3.0.4"
+cipher = { version = "^0.4.4", features = ["alloc", "block-padding"] }
+configparser = "^3.1.0"
 ecb = "^0.1.2"
-# Keep us equal with tonic, which is pulled in through tokio console in `log`.
-hyper = { version = "^0.14.28", features = ["http1", "client", "runtime", "stream"] }
 fnv.workspace = true
-futures = "^0.3.30"
-local-ip-address = "^0.6.1"
+futures = "^0.3.31"
+local-ip-address = "^0.6.3"
 mac_address.workspace = true
 miette.workspace = true
 network-interface.workspace = true
-pin-project-lite = "^0.2.14"
-serde = "^1.0.197"
+pin-project-lite = "^0.2.15"
+reqwest = "^0.12.9"
+serde = "^1.0.214"
 serde_urlencoded = "^0.7.1"
-thiserror = "^1.0.58"
+thiserror = "^2.0.3"
 tracing.workspace = true
 tokio.workspace = true
 valuable.workspace = true
@@ -33,11 +32,10 @@ valuable.workspace = true
 libc = "^0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "^0.54.0", default-features = false, features=["Win32_Devices_Communication", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading"] }
+windows = { version = "^0.58.0", default-features = false, features=["Win32_Devices_Communication", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [dev-dependencies]
-once_cell.workspace = true
-tempfile = "^3.10.1"
+tempfile = "^3.14.0"
 
 [package.metadata.docs.rs]
 rustc-args = ["--cfg", "tokio_unstable", "--cfg", "tracing_unstable"]

@@ -12,11 +12,7 @@ use crate::{
 use bytes::{Bytes, BytesMut};
 use fnv::FnvHashMap;
 use futures::{future::Either, StreamExt};
-use hyper::{
-	body::to_bytes as read_http_body_bytes,
-	client::{connect::Connect, Client},
-	Body, Request, Response, Version,
-};
+use reqwest::{Client, Response, Version};
 use serde::Serialize;
 use std::{
 	net::Ipv4Addr,
@@ -90,14 +86,13 @@ where
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn dump_memory_with_raw_client<ClientConnectorTy, FnTy>(
-	client: &Client<ClientConnectorTy>,
+pub async fn dump_memory_with_raw_client<FnTy>(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	resume_at: Option<usize>,
 	buff_callback: FnTy,
 ) -> Result<(), CatBridgeError>
 where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
 	FnTy: FnMut(Vec<u8>) + Send + Sync,
 {
 	let (stop_requests_sender, mut stop_requests_consumer) = bounded_channel(1);
@@ -209,16 +204,13 @@ async fn do_memory_page_ordering<FnTy>(
 	}
 }
 
-async fn do_memory_page_fetch<ClientConnectorTy>(
-	client: &Client<ClientConnectorTy>,
+async fn do_memory_page_fetch(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	page_start: usize,
 	retry_counter: &AtomicU8,
 	result_stream: &BoundedSender<Result<(usize, Vec<u8>), CatBridgeError>>,
-) -> bool
-where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
-{
+) -> bool {
 	let start_addr = format!("{page_start:08X}");
 	debug!(
 		bridge.ip = %mion_ip,
@@ -259,7 +251,7 @@ where
 	let status = response.status().as_u16();
 	let timeout_body_result = timeout(
 		Duration::from_secs(MEMORY_TIMEOUT_SECONDS),
-		read_http_body_bytes(response.into_body()),
+		response.bytes(),
 	)
 	.await;
 	let Ok(body_result) = timeout_body_result else {
@@ -292,7 +284,7 @@ where
 			.await;
 		return false;
 	}
-	let read_body_bytes = match body_result.map_err(NetworkError::HyperError) {
+	let read_body_bytes = match body_result.map_err(NetworkError::ReqwestError) {
 		Ok(value) => value,
 		Err(cause) => {
 			_ = result_stream.send(Err(cause.into())).await;
@@ -390,30 +382,27 @@ fn extract_memory_table_body(body: &str) -> Result<String, CatBridgeError> {
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_memory_request<'key, 'value, ClientConnectorTy, UrlEncodableType>(
-	client: &Client<ClientConnectorTy>,
+pub async fn do_raw_memory_request<'key, 'value, UrlEncodableType>(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<Response<Body>, NetworkError>
+) -> Result<Response, NetworkError>
 where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
 	UrlEncodableType: Serialize,
 {
 	Ok(client
-		.request(
-			Request::post(format!("http://{mion_ip}/dbg/mem_dump.cgi"))
-				.version(Version::HTTP_11)
-				.header("authorization", format!("Basic {AUTHZ_HEADER}"))
-				.header("content-type", "application/x-www-form-urlencoded")
-				.header(
-					"user-agent",
-					format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
-				)
-				.body(
-					serde_urlencoded::to_string(&url_parameters)
-						.map_err(NetworkParseError::FormDataEncodeError)?
-						.into(),
-				)?,
+		.post(format!("http://{mion_ip}/dbg/mem_dump.cgi"))
+		.version(Version::HTTP_11)
+		.header("authorization", format!("Basic {AUTHZ_HEADER}"))
+		.header("content-type", "application/x-www-form-urlencoded")
+		.header(
+			"user-agent",
+			format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
 		)
+		.body::<String>(
+			serde_urlencoded::to_string(&url_parameters)
+				.map_err(NetworkParseError::FormDataEncodeError)?,
+		)
+		.send()
 		.await?)
 }

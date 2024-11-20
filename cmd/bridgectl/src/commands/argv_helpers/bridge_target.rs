@@ -447,76 +447,77 @@ async fn target_search_flags(
 	target_flags: TargetBridgeFlags,
 	positional_argument: Option<&str>,
 ) -> bool {
-	let (find_by, extra_ip_filter, extra_name_filter, used_arg) =
-		if target_flags.specified_bridge_search_flag() {
-			if target_flags.search_for_mac_raw().is_some() {
-				if let Some(mac) = target_flags.search_for_mac() {
-					(
-						MIONFindBy::MacAddress(mac),
-						target_flags.search_for_ip(),
-						target_flags.search_for_name(),
-						false,
-					)
-				} else {
-					if SHOULD_LOG_JSON() {
-						warn!(
-							id = "bridgectl::argv::mac_flag_invalid",
-							mac_flag = ?target_flags.search_for_mac_raw(),
-							"Mac Flag is not a valid MAC Address, will not be used, and will exit if no other filters present."
-						);
-					} else {
-						warn!(
-							mac_flag = ?target_flags.search_for_mac_raw(),
-							"Mac Flag is not a valid MAC Address, will not be used, and will exit if no other filters present."
-						);
-					}
-
-					if target_flags.search_for_ip().is_none()
-						&& target_flags.search_for_name().is_none()
-					{
-						std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
-					} else {
-						if let Some(ip) = target_flags.search_for_ip() {
-							let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
-							_ = static_ip_opt.insert(ip);
-						}
-						if let Some(name) = target_flags.search_for_name() {
-							let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
-							_ = static_name_opt.insert(name.to_owned());
-						}
-						return false;
-					}
-				}
+	let (find_by, extra_ip_filter, extra_name_filter, used_arg) = if target_flags
+		.specified_bridge_search_flag()
+	{
+		if target_flags.search_for_mac_raw().is_some() {
+			if let Some(mac) = target_flags.search_for_mac() {
+				(
+					MIONFindBy::MacAddress(mac),
+					target_flags.search_for_ip(),
+					target_flags.search_for_name(),
+					false,
+				)
 			} else {
-				if let Some(ip) = target_flags.search_for_ip() {
-					let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
-					_ = static_ip_opt.insert(ip);
+				if SHOULD_LOG_JSON() {
+					warn!(
+						id = "bridgectl::argv::mac_flag_invalid",
+						mac_flag = ?target_flags.search_for_mac_raw(),
+						"Mac Flag is not a valid MAC Address, will not be used, and will exit if no other filters present."
+					);
+				} else {
+					warn!(
+						mac_flag = ?target_flags.search_for_mac_raw(),
+						"Mac Flag is not a valid MAC Address, will not be used, and will exit if no other filters present."
+					);
 				}
-				if let Some(name) = target_flags.search_for_name() {
-					let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
-					_ = static_name_opt.insert(name.to_owned());
+
+				if target_flags.search_for_ip().is_none()
+					&& target_flags.search_for_name().is_none()
+				{
+					std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
+				} else {
+					if let Some(ip) = target_flags.search_for_ip() {
+						let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
+						_ = static_ip_opt.insert(ip);
+					}
+					if let Some(name) = target_flags.search_for_name() {
+						let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
+						_ = static_name_opt.insert(name.to_owned());
+					}
+					return false;
 				}
-				return false;
 			}
 		} else {
-			let argument = positional_argument.expect(
-				"internal_error: target_search_flags() called when no search flags were specified",
-			);
-
-			match MIONFindBy::from(argument.to_owned()) {
-				MIONFindBy::Ip(ip) => {
-					let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
-					_ = static_ip_opt.insert(ip);
-					return true;
-				}
-				MIONFindBy::MacAddress(mac) => (MIONFindBy::MacAddress(mac), None, None, true),
-				MIONFindBy::Name(name) => {
-					let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
-					_ = static_name_opt.insert(name);
-					return true;
-				}
+			if let Some(ip) = target_flags.search_for_ip() {
+				let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
+				_ = static_ip_opt.insert(ip);
 			}
-		};
+			if let Some(name) = target_flags.search_for_name() {
+				let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
+				_ = static_name_opt.insert(name.to_owned());
+			}
+			return false;
+		}
+	} else {
+		let argument = positional_argument.expect(
+			"internal_error: target_search_flags() called when no search flags were specified",
+		);
+
+		match MIONFindBy::from(argument.to_owned()) {
+			MIONFindBy::Ip(ip) => {
+				let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
+				_ = static_ip_opt.insert(ip);
+				return true;
+			}
+			MIONFindBy::MacAddress(mac) => (MIONFindBy::MacAddress(mac), None, None, true),
+			MIONFindBy::Name(name) => {
+				let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
+				_ = static_name_opt.insert(name);
+				return true;
+			}
+		}
+	};
 
 	do_scan_initial(find_by, extra_ip_filter, extra_name_filter, used_arg).await
 }

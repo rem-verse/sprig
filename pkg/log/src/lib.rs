@@ -1,8 +1,11 @@
 #![doc = include_str!("../README.md")]
 
 use miette::{miette, Context, IntoDiagnostic, Result};
-use once_cell::sync::Lazy;
-use std::{env::var as env_var, net::SocketAddr, sync::Mutex};
+use std::{
+	env::var as env_var,
+	net::SocketAddr,
+	sync::{LazyLock, Mutex},
+};
 use tracing::debug;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{
@@ -10,7 +13,7 @@ use tracing_subscriber::{
 };
 
 /// Check if we have actually initialized logging before.
-static HAS_INITIALIZED_LOGGING: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
+static HAS_INITIALIZED_LOGGING: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
 
 /// Determine if our logger will use ANSI escape codes.
 ///

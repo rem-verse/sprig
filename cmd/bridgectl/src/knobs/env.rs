@@ -1,10 +1,10 @@
 //! The list of environment variables that influence behavior for `bridgectl`.
 
-use once_cell::sync::Lazy;
 use std::{
 	env::{var as env_var, var_os as env_var_os},
 	net::Ipv4Addr,
 	path::PathBuf,
+	sync::LazyLock,
 	time::Duration,
 };
 use tracing::warn;
@@ -14,8 +14,9 @@ use tracing::warn;
 /// Environment Variable Name: `BRIDGECTL_OUTPUT_JSON`
 /// Expected Values: ("1" or "0"), and ("true" or "false")
 /// Type: Boolean
-pub static USE_JSON_OUTPUT: Lazy<bool> =
-	Lazy::new(|| env_var("BRIDGECTL_OUTPUT_JSON").map_or(false, |var| var == "1" || var == "true"));
+pub static USE_JSON_OUTPUT: LazyLock<bool> = LazyLock::new(|| {
+	env_var("BRIDGECTL_OUTPUT_JSON").map_or(false, |var| var == "1" || var == "true")
+});
 
 /// A way of specifying the path to the `bridge_env.ini` file if it's not in
 /// a standard location.
@@ -23,8 +24,8 @@ pub static USE_JSON_OUTPUT: Lazy<bool> =
 /// Environment Variable Name: `BRIDGECTL_BRIDGE_ENV_PATH`
 /// Expected Values: A Path
 /// Type: [`PathBuf`]
-pub static BRIDGE_HOST_STATE_PATH: Lazy<Option<PathBuf>> =
-	Lazy::new(|| env_var_os("BRIDGECTL_BRIDGE_ENV_PATH").map(PathBuf::from));
+pub static BRIDGE_HOST_STATE_PATH: LazyLock<Option<PathBuf>> =
+	LazyLock::new(|| env_var_os("BRIDGECTL_BRIDGE_ENV_PATH").map(PathBuf::from));
 
 /// A way of specifying the serial port to read logs from so you don't have to
 /// pass it in over a CLI flag.
@@ -32,8 +33,8 @@ pub static BRIDGE_HOST_STATE_PATH: Lazy<Option<PathBuf>> =
 /// Environment Variable Name: `BRIDGECTL_SERIAL_PORT`
 /// Expected Values: `COM1`/`COM2`/etc. on Windows, `/dev/tty` on Linux.
 /// Type: [`PathBuf`]
-pub static BRIDGECTL_SERIAL_PORT: Lazy<Option<PathBuf>> =
-	Lazy::new(|| env_var_os("BRIDGECTL_SERIAL_PORT").map(PathBuf::from));
+pub static BRIDGECTL_SERIAL_PORT: LazyLock<Option<PathBuf>> =
+	LazyLock::new(|| env_var_os("BRIDGECTL_SERIAL_PORT").map(PathBuf::from));
 
 /// Set by `cafe`/`cafex`/`mochiato`, a way of specifying the bridge to
 /// connect too.
@@ -41,8 +42,8 @@ pub static BRIDGECTL_SERIAL_PORT: Lazy<Option<PathBuf>> =
 /// Environment Variable Name: `BRIDGE_CURRENT_NAME`
 /// Expected Values: Empty, or a String of a valid bridge name.
 /// Type: String
-pub static BRIDGE_CURRENT_NAME: Lazy<Option<String>> =
-	Lazy::new(|| env_var("BRIDGE_CURRENT_NAME").ok());
+pub static BRIDGE_CURRENT_NAME: LazyLock<Option<String>> =
+	LazyLock::new(|| env_var("BRIDGE_CURRENT_NAME").ok());
 
 /// Set by `cafe`/`cafex`/`mochiato`, a way of specifying the bridge to
 /// connect too.
@@ -50,7 +51,7 @@ pub static BRIDGE_CURRENT_NAME: Lazy<Option<String>> =
 /// Environment Variable Name: `BRIDGE_CURRENT_IP_ADDRESS`
 /// Expected Values: Empty, or a String of a valid bridge ip address.
 /// Type: [`Ipv4Addr`]
-pub static BRIDGE_CURRENT_IP_ADDRESS: Lazy<Option<Ipv4Addr>> = Lazy::new(|| {
+pub static BRIDGE_CURRENT_IP_ADDRESS: LazyLock<Option<Ipv4Addr>> = LazyLock::new(|| {
 	env_var("BRIDGE_CURRENT_IP_ADDRESS").ok().and_then(|val| {
 		match val.parse::<Ipv4Addr>() {
 			Ok(val) => Some(val),
@@ -68,7 +69,7 @@ pub static BRIDGE_CURRENT_IP_ADDRESS: Lazy<Option<Ipv4Addr>> = Lazy::new(|| {
 /// Environment Variable Name: `BRIDGE_SCAN_TIMEOUT_SECONDS`
 /// Expected Values: Empty, or a number of seconds.
 /// Type: [`u64`]
-pub static BRIDGE_SCAN_TIMEOUT: Lazy<Option<Duration>> = Lazy::new(|| {
+pub static BRIDGE_SCAN_TIMEOUT: LazyLock<Option<Duration>> = LazyLock::new(|| {
 	env_var("BRIDGE_SCAN_TIMEOUT_SECONDS").ok().and_then(|val| {
 		match val.parse::<u64>() {
 			Ok(val) => Some(Duration::from_secs(val)),
@@ -91,7 +92,7 @@ pub static BRIDGE_SCAN_TIMEOUT: Lazy<Option<Duration>> = Lazy::new(|| {
 /// Environment Variable Name: `BRIDGE_CONTROL_PORT_OVERRIDE`
 /// Expected Values: Empty, or a port number (0-65536).
 /// Type: [`u16`]
-pub static BRIDGE_CONTROL_PORT: Lazy<Option<u16>> = Lazy::new(|| {
+pub static BRIDGE_CONTROL_PORT: LazyLock<Option<u16>> = LazyLock::new(|| {
 	env_var("BRIDGE_CONTROL_PORT_OVERRIDE").ok().and_then(|val| {
 		match val.parse::<u16>() {
 			Ok(val) => Some(val),

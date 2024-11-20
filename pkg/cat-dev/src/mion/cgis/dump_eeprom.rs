@@ -6,11 +6,7 @@ use crate::{
 	mion::cgis::AUTHZ_HEADER,
 };
 use bytes::{BufMut, Bytes, BytesMut};
-use hyper::{
-	body::to_bytes as read_http_body_bytes,
-	client::{connect::Connect, Client},
-	Body, Request, Response, Version,
-};
+use reqwest::{Client, Response, Version};
 use serde::Serialize;
 use std::net::Ipv4Addr;
 use tracing::debug;
@@ -41,13 +37,10 @@ pub async fn dump_eeprom(mion_ip: Ipv4Addr) -> Result<Bytes, CatBridgeError> {
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn dump_eeprom_with_raw_client<ClientConnectorTy>(
-	client: &Client<ClientConnectorTy>,
+pub async fn dump_eeprom_with_raw_client(
+	client: &Client,
 	mion_ip: Ipv4Addr,
-) -> Result<Bytes, CatBridgeError>
-where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
-{
+) -> Result<Bytes, CatBridgeError> {
 	let mut memory_buffer = BytesMut::with_capacity(0x2000);
 
 	while memory_buffer.len() <= EEPROM_MAX_ADDRESS {
@@ -65,9 +58,7 @@ where
 		.await?;
 
 		let status = response.status().as_u16();
-		let body_result = read_http_body_bytes(response.into_body())
-			.await
-			.map_err(NetworkError::HyperError);
+		let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
 		if status != 200 {
 			if let Ok(body) = body_result {
 				return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
@@ -141,30 +132,27 @@ fn extract_memory_table_body(body: &str) -> Result<String, CatBridgeError> {
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_eeprom_request<'key, 'value, ClientConnectorTy, UrlEncodableType>(
-	client: &Client<ClientConnectorTy>,
+pub async fn do_raw_eeprom_request<'key, 'value, UrlEncodableType>(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<Response<Body>, NetworkError>
+) -> Result<Response, NetworkError>
 where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
 	UrlEncodableType: Serialize,
 {
 	Ok(client
-		.request(
-			Request::post(format!("http://{mion_ip}/dbg/eeprom_dump.cgi"))
-				.version(Version::HTTP_11)
-				.header("authorization", format!("Basic {AUTHZ_HEADER}"))
-				.header("content-type", "application/x-www-form-urlencoded")
-				.header(
-					"user-agent",
-					format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
-				)
-				.body(
-					serde_urlencoded::to_string(&url_parameters)
-						.map_err(NetworkParseError::FormDataEncodeError)?
-						.into(),
-				)?,
+		.post(format!("http://{mion_ip}/dbg/eeprom_dump.cgi"))
+		.version(Version::HTTP_11)
+		.header("authorization", format!("Basic {AUTHZ_HEADER}"))
+		.header("content-type", "application/x-www-form-urlencoded")
+		.header(
+			"user-agent",
+			format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
 		)
+		.body::<String>(
+			serde_urlencoded::to_string(&url_parameters)
+				.map_err(NetworkParseError::FormDataEncodeError)?,
+		)
+		.send()
 		.await?)
 }
