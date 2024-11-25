@@ -542,7 +542,7 @@ struct RegKey {
 }
 impl RegKey {
 	fn open(parent: HKEY, subpath: &CStr, rights: REG_SAM_FLAGS) -> IoResult<Self> {
-		let mut key: HKEY = HKEY(std::ptr::null_mut::<std::ffi::c_void>() as isize);
+		let mut key: HKEY = HKEY(std::ptr::null_mut::<std::ffi::c_void>());
 
 		unsafe {
 			RegOpenKeyExA(parent, PCSTR(subpath.as_ptr().cast()), 0, rights, &mut key)
