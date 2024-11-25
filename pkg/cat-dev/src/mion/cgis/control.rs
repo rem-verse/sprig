@@ -9,12 +9,8 @@ use crate::{
 	},
 };
 use fnv::FnvHashMap;
-use hyper::{
-	body::to_bytes as read_http_body_bytes,
-	client::{connect::Connect, Client},
-	Body, Request, Response, Version,
-};
 use local_ip_address::local_ip;
+use reqwest::{Client, Response, Version};
 use serde::Serialize;
 use std::net::Ipv4Addr;
 use tracing::{field::valuable, warn};
@@ -44,14 +40,11 @@ pub async fn get_info(
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn get_info_with_raw_client<ClientConnectorTy>(
-	client: &Client<ClientConnectorTy>,
+pub async fn get_info_with_raw_client(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	name: &str,
-) -> Result<FnvHashMap<String, String>, CatBridgeError>
-where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
-{
+) -> Result<FnvHashMap<String, String>, CatBridgeError> {
 	let response = do_raw_control_request(
 		client,
 		mion_ip,
@@ -67,9 +60,7 @@ where
 	)
 	.await?;
 	let status = response.status().as_u16();
-	let body_result = read_http_body_bytes(response.into_body())
-		.await
-		.map_err(NetworkError::HyperError);
+	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
 	if status != 200 {
 		if let Ok(body) = body_result {
 			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
@@ -114,14 +105,11 @@ pub async fn set_param(
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn set_param_with_raw_client<ClientConnectorTy>(
-	client: &Client<ClientConnectorTy>,
+pub async fn set_param_with_raw_client(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	parameter_to_set: SetParameter,
-) -> Result<bool, CatBridgeError>
-where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
-{
+) -> Result<bool, CatBridgeError> {
 	let response = do_raw_control_request(
 		client,
 		mion_ip,
@@ -138,9 +126,7 @@ where
 	)
 	.await?;
 	let status = response.status().as_u16();
-	let body_result = read_http_body_bytes(response.into_body())
-		.await
-		.map_err(NetworkError::HyperError);
+	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
 	if status != 200 {
 		if let Ok(body) = body_result {
 			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
@@ -219,16 +205,13 @@ pub async fn power_on_v2(
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn power_on_v2_with_raw_client<ClientConnectorTy>(
-	client: &Client<ClientConnectorTy>,
+pub async fn power_on_v2_with_raw_client(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	atapi_port: Option<u16>,
 	pcfs_port: Option<u16>,
 	emulate_fs: bool,
-) -> Result<bool, CatBridgeError>
-where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
-{
+) -> Result<bool, CatBridgeError> {
 	let mut parameters = vec![
 		(
 			"operation",
@@ -257,9 +240,7 @@ where
 	let response = do_raw_control_request(client, mion_ip, &parameters).await?;
 
 	let status = response.status().as_u16();
-	let body_result = read_http_body_bytes(response.into_body())
-		.await
-		.map_err(NetworkError::HyperError);
+	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
 	if status != 200 {
 		if let Ok(body) = body_result {
 			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
@@ -292,31 +273,28 @@ where
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_control_request<'key, 'value, ClientConnectorTy, UrlEncodableType>(
-	client: &Client<ClientConnectorTy>,
+pub async fn do_raw_control_request<'key, 'value, UrlEncodableType>(
+	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<Response<Body>, NetworkError>
+) -> Result<Response, NetworkError>
 where
-	ClientConnectorTy: Clone + Connect + Send + Sync + 'static,
 	UrlEncodableType: Serialize,
 {
 	Ok(client
-		.request(
-			Request::post(format!("http://{mion_ip}/mion/control.cgi"))
-				.version(Version::HTTP_11)
-				.header("authorization", format!("Basic {AUTHZ_HEADER}"))
-				.header("content-type", "application/x-www-form-urlencoded")
-				.header(
-					"user-agent",
-					format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
-				)
-				.body(
-					serde_urlencoded::to_string(&url_parameters)
-						.map_err(NetworkParseError::FormDataEncodeError)?
-						.into(),
-				)?,
+		.post(format!("http://{mion_ip}/mion/control.cgi"))
+		.version(Version::HTTP_11)
+		.header("authorization", format!("Basic {AUTHZ_HEADER}"))
+		.header("content-type", "application/x-www-form-urlencoded")
+		.header(
+			"user-agent",
+			format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
 		)
+		.body::<String>(
+			serde_urlencoded::to_string(&url_parameters)
+				.map_err(NetworkParseError::FormDataEncodeError)?,
+		)
+		.send()
 		.await?)
 }
 

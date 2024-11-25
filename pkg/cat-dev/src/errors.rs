@@ -5,9 +5,9 @@
 //! specific item.
 
 use bytes::Bytes;
-use hyper::{http::Error as HttpError, Error as HyperError};
 use local_ip_address::Error as LocalIpAddressError;
 use miette::Diagnostic;
+use reqwest::Error as ReqwestError;
 use serde_urlencoded::ser::Error as SerdeUrlEncodeError;
 use std::string::FromUtf8Error;
 use thiserror::Error;
@@ -67,6 +67,20 @@ pub enum CatBridgeError {
 /// modules.
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
 pub enum APIError {
+	/// You attempted to encrypt data that we could not encrypt.
+	#[error("We could not encrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[diagnostic(code(cat_dev::api::bad_decrypted_data_length))]
+	BadDecryptedDataLength(usize),
+	/// You attempted to decrypt data that we could not decrypt.
+	#[error("We could not decrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[diagnostic(code(cat_dev::api::bad_encrypted_data_length))]
+	BadEncryptedDataLength(usize),
+	/// The MION Firmware files end with a final byte that acts as a checksum
+	/// to validate the content before it was correct. Your checksum was not
+	/// correct.
+	#[error("The MION Firmware file you provided had an invalid checksum, we expected: {1:02x}, but got: {0:02x}")]
+	#[diagnostic(code(cat_dev::api::mion_fw::bad_checksum))]
+	BadMionFWChecksum(u8, u8),
 	/// You attempted to set the default host bridge to a bridge that does not exist.
 	#[error("You cannot set a default bridge that does not exist.")]
 	#[diagnostic(code(cat_dev::api::default_device_must_exist))]
@@ -93,6 +107,27 @@ pub enum APIError {
 	#[error("A Device Name can only be 255 bytes long, but you specified one: {0} bytes long.")]
 	#[diagnostic(code(cat_dev::api::name_too_long))]
 	DeviceNameTooLong(usize),
+	/// All MION Firmware files must be at a minimum 0x26 bytes long.
+	///
+	/// This covers a single AES-256 block (32 bytes), plus the 6 byte footer
+	/// that they contain.
+	#[error("The MION Firmware file provided was too small, it must be at least 0x26 bytes long, was {0:02x}")]
+	#[diagnostic(code(cat_dev::api::mion_fw::too_small))]
+	MionFirmwareTooSmall(usize),
+	/// The MION Firmware version string must end with a `0x00`, as this is a
+	/// load-bearing NUL terminator for many parts of the firmware.
+	#[error("The Version String for MION Firmware Files Typed 'MION', must have their version bytes end with a NUL terminator (0x00) due to an oversight in programming. Your file ended with: ({0:02x})")]
+	#[diagnostic(code(cat_dev::api::mion_fw::missing_nul_terminator))]
+	MionFirmwareMissingNULTerminator(u8),
+	/// All MION FW files must end with:
+	///
+	/// - `PWI-SS_FW_IMAGE` for IPL/MION firmware types
+	/// - `PWI-SS_FP_IMAGE` for FPGA firmware types.
+	///
+	/// If they do not, they are immediately considered invalid.
+	#[error("While validating the decrypted contents of your FW we were not able to identify the required ending bytes, this firmware is corrupt.")]
+	#[diagnostic(code(cat_dev::api::mion_fw::missing_signature))]
+	MionFirmwareMissingSignature,
 	/// You tried asking for a parameter of a specific name, but we could not
 	/// find a parameter with the name you specified.
 	///
@@ -116,6 +151,9 @@ pub enum APIError {
 	#[error("The MION Parameter body you passed in was: {0} bytes long, but must be exactly 512 bytes long!")]
 	#[diagnostic(code(cat_dev::api::parameter::body_incorrect_length))]
 	MIONParameterBodyNotCorrectLength(usize),
+	/// There are a series of operations you can call on `control.cgi`,
+	/// unfortunately the one specified is not an operation we know on
+	/// any firmware version.
 	#[error("Unknown operation for `control.cgi`: [{0}]")]
 	#[diagnostic(code(cat_dev::api::control::unknown_operation))]
 	UnknownControlOperation(String),
@@ -137,7 +175,8 @@ pub enum FSError {
 	#[error("Data read from the filesystem was expected to be UTF-8, but was not: {0}")]
 	#[diagnostic(code(cat_dev::fs::utf8_expected))]
 	InvalidDataNeedsUTF8(#[from] FromUtf8Error),
-	/// We expected to parse file as an INI data.
+	/// We expected to parse file as an INI data, but it did not contain valid
+	/// INI data.
 	#[error("Data read from the filesystem was expected to be a valid INI file: {0}")]
 	#[diagnostic(code(cat_dev::fs::expected_ini))]
 	InvalidDataNeedsToBeINI(String),
@@ -173,9 +212,6 @@ pub enum NetworkError {
 	#[diagnostic(transparent)]
 	ParseError(#[from] NetworkParseError),
 	/// See [`tokio::io::Error`] for details.
-	///
-	/// We just end up formatting this to a string so we can continue to derive
-	/// [`PartialEq`], and [`Eq`].
 	#[error("Error talking to the network could not send/receive data: {0}")]
 	#[diagnostic(code(cat_dev::net::native_failure))]
 	IOError(#[from] IoError),
@@ -189,19 +225,19 @@ pub enum NetworkError {
 	#[error("Failed to set the socket we're bound on as a broadcast address, this is needed to discover CAT devices.")]
 	#[diagnostic(code(cat_dev::net::set_broadcast_failure))]
 	SetBroadcastFailure,
+	/// We waited too long to send/receive data from the network.
+	///
+	/// There may be something wrong with our network connection, or the targets
+	/// network connection.
 	#[error(
 		"Timed out while writing/reading data from the network, failed to send and receive data."
 	)]
 	#[diagnostic(code(cat_dev::net::timeout))]
 	TimeoutError,
-	/// See [`hyper::http::Error`] for details.
-	#[error("Underlying HTTP error: {0}")]
-	#[diagnostic(code(cat_dev::net::proto::http_failure))]
-	HttpError(#[from] HttpError),
-	/// See [`hyper::Error`] for details.
+	/// See [`reqwest::Error`] for details.
 	#[error("Underlying HTTP client error: {0}")]
 	#[diagnostic(code(cat_dev::net::http_failure))]
-	HyperError(#[from] HyperError),
+	ReqwestError(#[from] ReqwestError),
 	/// See [`local_ip_address::Error`] for details.
 	#[error("Failure fetching local ip address: {0}")]
 	#[diagnostic(code(cat_dev::net::local_ip_failure))]
@@ -231,6 +267,8 @@ pub enum NetworkParseError {
 	#[error("Tried to read Packet of type ({0}) from network needs at least {1} bytes, but only got {2} bytes: {3:02x?}")]
 	#[diagnostic(code(cat_dev::net::parse::not_enough_data))]
 	NotEnoughData(&'static str, usize, usize, Bytes),
+	/// We expected to read a packet containing exactly a set of bytes,
+	/// unfortunatley it did not contain those _Exact_ bytes.
 	#[error("Tried to read Packet of type ({0}) from network, must be encoded exactly as [{1:02x?}], but got [{2:02x?}]")]
 	#[diagnostic(code(cat_dev::net::parse::packet_doesnt_match_static_data))]
 	PacketDoesntMatchStaticPayload(&'static str, &'static [u8], Bytes),
@@ -243,10 +281,15 @@ pub enum NetworkParseError {
 	#[error("Unknown Code aka Packet Type: `{0}` received from the network (this may mean your CAT-DEV is doing something we didn't expect)")]
 	#[diagnostic(code(cat_dev::net::parse::unknown_packet_type))]
 	UnknownCommand(u8),
-	/// Unknown packet tpe for the MION Params port.
+	/// Unknown packet type for the MION Params port.
 	#[error("Unknown Packet Type: `{0}` received from the network (this may mean your CAT-DEV is doing something we didn't expect)")]
 	#[diagnostic(code(cat_dev::net::parse::params::unknown_packet_type))]
 	UnknownParamsPacketType(i32),
+	/// We got an error code back from trying to interact with the MION
+	/// paramspace port.
+	///
+	/// We unfortunately do not have these error codes known at this point in
+	/// time.
 	#[error("Error code received from MION Params: `{0}`")]
 	#[diagnostic(code(cat_dev::net::parse::params::error_code))]
 	ParamsPacketErrorCode(i32),
@@ -254,22 +297,32 @@ pub enum NetworkParseError {
 	#[error("Failed to encode data as form data: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::http::encode::form_data_error))]
 	FormDataEncodeError(#[from] SerdeUrlEncodeError),
-	/// We got an unexpected status code from the CAT-DEV.
+	/// We got an unexpected status code from the CAT-DEV, this is only used when
+	/// we did not get an HTTP body back from the CAT-DEV as well.
 	#[error("Got an unexpected status code that wasn't successful over HTTP: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::http::bad_status_code_without_body))]
 	UnexpectedStatusCodeNoBody(u16),
+	/// We got an unexpected status code from the CAT-DEV, it also came with an
+	/// HTTP body that may contain clues to it's error.
 	#[error("Got an unexpected status code that wasn't successful over HTTP: {0}, Body: {1:02x?}")]
 	UnexpectedStatusCode(u16, Bytes),
 	/// We expected to read UTF-8 data from the network, but it wasn't UTF-8.
 	#[error("Data read from the network was expected to be UTF-8, but was not: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::utf8_expected))]
 	InvalidDataNeedsUTF8(#[from] FromUtf8Error),
+	/// We could not find the `<body>` tags in a page that is supposed to return
+	/// HTML.
 	#[error("Could not parse HTML response could not find one of the body tags: `<body>`, or `</body>`: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::html::no_body_tag))]
 	HtmlResponseMissingBody(String),
 	#[error("Could not find Memory Dump Table Body, failed to find sigils: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::html::no_mem_dump_sigil))]
 	HtmlResponseMissingMemoryDumpSigil(String),
+	/// The HTML response we got was expected to contain hexadecimal bytes.
+	///
+	/// We could not parse one of these hexadecimal bytes. Either the device
+	/// responded with an error we didn't properly pick up on, or we got corrupt
+	/// data somehow.,
 	#[error("Could not parse byte from memory dump: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::html::bad_memory_byte))]
 	HtmlResponseBadByte(String),

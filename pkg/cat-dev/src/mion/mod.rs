@@ -9,5 +9,6 @@
 
 pub mod cgis;
 pub mod discovery;
+pub mod firmware;
 pub mod parameter;
 pub mod proto;
