@@ -77,7 +77,7 @@ impl RawSyncSerialPort {
 			WriteTotalTimeoutConstant: DEFAULT_TIMEOUT_MS,
 		};
 		unsafe {
-			SetCommTimeouts(HANDLE(fd.as_raw_handle() as isize), &timeouts)
+			SetCommTimeouts(HANDLE(fd.as_raw_handle()), &timeouts)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 		let dcb = DCB {
@@ -89,7 +89,7 @@ impl RawSyncSerialPort {
 			..Default::default()
 		};
 		unsafe {
-			SetCommState(HANDLE(fd.as_raw_handle() as isize), &dcb)
+			SetCommState(HANDLE(fd.as_raw_handle()), &dcb)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 
@@ -115,7 +115,7 @@ impl RawSyncSerialPort {
 	pub fn get_read_timeout(&self) -> IoResult<Duration> {
 		let mut timeouts = unsafe { std::mem::zeroed() };
 		unsafe {
-			GetCommTimeouts(HANDLE(self.fd.as_raw_handle() as isize), &mut timeouts)
+			GetCommTimeouts(HANDLE(self.fd.as_raw_handle()), &mut timeouts)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 		Ok(Duration::from_millis(
@@ -131,7 +131,7 @@ impl RawSyncSerialPort {
 	pub fn get_write_timeout(&self) -> IoResult<Duration> {
 		let mut timeouts = unsafe { std::mem::zeroed() };
 		unsafe {
-			GetCommTimeouts(HANDLE(self.fd.as_raw_handle() as isize), &mut timeouts)
+			GetCommTimeouts(HANDLE(self.fd.as_raw_handle()), &mut timeouts)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 		Ok(Duration::from_millis(
@@ -156,14 +156,14 @@ impl RawSyncSerialPort {
 
 		let mut timeouts = unsafe { std::mem::zeroed() };
 		unsafe {
-			GetCommTimeouts(HANDLE(self.fd.as_raw_handle() as isize), &mut timeouts)
+			GetCommTimeouts(HANDLE(self.fd.as_raw_handle()), &mut timeouts)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 		timeouts.ReadIntervalTimeout = u32::MAX;
 		timeouts.ReadTotalTimeoutMultiplier = u32::MAX;
 		timeouts.ReadTotalTimeoutConstant = timeout_ms.try_into().unwrap_or(u32::MAX);
 		unsafe {
-			SetCommTimeouts(HANDLE(self.fd.as_raw_handle() as isize), &timeouts)
+			SetCommTimeouts(HANDLE(self.fd.as_raw_handle()), &timeouts)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 
@@ -187,13 +187,13 @@ impl RawSyncSerialPort {
 
 		let mut timeouts = unsafe { std::mem::zeroed() };
 		unsafe {
-			GetCommTimeouts(HANDLE(self.fd.as_raw_handle() as isize), &mut timeouts)
+			GetCommTimeouts(HANDLE(self.fd.as_raw_handle()), &mut timeouts)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 		timeouts.WriteTotalTimeoutMultiplier = u32::MAX;
 		timeouts.WriteTotalTimeoutConstant = timeout_ms.try_into().unwrap_or(u32::MAX);
 		unsafe {
-			SetCommTimeouts(HANDLE(self.fd.as_raw_handle() as isize), &timeouts)
+			SetCommTimeouts(HANDLE(self.fd.as_raw_handle()), &timeouts)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 
@@ -217,7 +217,7 @@ impl RawSyncSerialPort {
 
 		match unsafe {
 			ReadFile(
-				HANDLE(self.fd.as_raw_handle() as isize),
+				HANDLE(self.fd.as_raw_handle()),
 				Some(buff),
 				Some(&mut read_bytes),
 				Some(&mut overlapped),
@@ -291,7 +291,7 @@ impl RawSyncSerialPort {
 
 		match unsafe {
 			WriteFile(
-				HANDLE(self.fd.as_raw_handle() as isize),
+				HANDLE(self.fd.as_raw_handle()),
 				Some(buff),
 				Some(&mut written),
 				Some(&mut overlapped),
@@ -346,7 +346,7 @@ impl RawSyncSerialPort {
 	/// If we cannot call `FlushFileBuffers`, or it returns an error.
 	pub fn flush_output(&self) -> IoResult<()> {
 		unsafe {
-			FlushFileBuffers(HANDLE(self.fd.as_raw_handle() as isize))
+			FlushFileBuffers(HANDLE(self.fd.as_raw_handle()))
 				.map_err(|_| IoError::last_os_error())
 		}
 	}
@@ -367,7 +367,7 @@ impl RawSyncSerialPort {
 
 		unsafe {
 			PurgeComm(
-				HANDLE(self.fd.as_raw_handle() as isize),
+				HANDLE(self.fd.as_raw_handle()),
 				PURGE_COMM_FLAGS(flags),
 			)
 			.map_err(|_| IoError::last_os_error())
@@ -382,7 +382,7 @@ impl RawSyncSerialPort {
 	pub fn set_rts(&self, state: bool) -> IoResult<()> {
 		unsafe {
 			EscapeCommFunction(
-				HANDLE(self.fd.as_raw_handle() as isize),
+				HANDLE(self.fd.as_raw_handle()),
 				if state { SETRTS } else { CLRRTS },
 			)
 			.map_err(|_| IoError::last_os_error())
@@ -406,7 +406,7 @@ impl RawSyncSerialPort {
 	pub fn set_dtr(&self, state: bool) -> IoResult<()> {
 		unsafe {
 			EscapeCommFunction(
-				HANDLE(self.fd.as_raw_handle() as isize),
+				HANDLE(self.fd.as_raw_handle()),
 				if state { SETDTR } else { CLRDTR },
 			)
 			.map_err(|_| IoError::last_os_error())
@@ -488,7 +488,7 @@ impl RawSyncSerialPort {
 	fn read_pin(fd: &File, pin: u32) -> IoResult<bool> {
 		let mut bits: MODEM_STATUS_FLAGS = MODEM_STATUS_FLAGS(0);
 		unsafe {
-			GetCommModemStatus(HANDLE(fd.as_raw_handle() as isize), &mut bits)
+			GetCommModemStatus(HANDLE(fd.as_raw_handle()), &mut bits)
 				.map_err(|_| IoError::last_os_error())?;
 		}
 		Ok(bits.0 & pin != 0)
@@ -499,7 +499,7 @@ impl RawSyncSerialPort {
 			let mut transferred = 0;
 
 			match GetOverlappedResult(
-				HANDLE(file.as_raw_handle() as isize),
+				HANDLE(file.as_raw_handle()),
 				overlapped,
 				&mut transferred,
 				true,
