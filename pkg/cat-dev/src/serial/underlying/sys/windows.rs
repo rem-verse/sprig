@@ -89,8 +89,7 @@ impl RawSyncSerialPort {
 			..Default::default()
 		};
 		unsafe {
-			SetCommState(HANDLE(fd.as_raw_handle()), &dcb)
-				.map_err(|_| IoError::last_os_error())?;
+			SetCommState(HANDLE(fd.as_raw_handle()), &dcb).map_err(|_| IoError::last_os_error())?;
 		}
 
 		Ok(Self { fd })
@@ -346,8 +345,7 @@ impl RawSyncSerialPort {
 	/// If we cannot call `FlushFileBuffers`, or it returns an error.
 	pub fn flush_output(&self) -> IoResult<()> {
 		unsafe {
-			FlushFileBuffers(HANDLE(self.fd.as_raw_handle()))
-				.map_err(|_| IoError::last_os_error())
+			FlushFileBuffers(HANDLE(self.fd.as_raw_handle())).map_err(|_| IoError::last_os_error())
 		}
 	}
 
@@ -366,11 +364,8 @@ impl RawSyncSerialPort {
 		}
 
 		unsafe {
-			PurgeComm(
-				HANDLE(self.fd.as_raw_handle()),
-				PURGE_COMM_FLAGS(flags),
-			)
-			.map_err(|_| IoError::last_os_error())
+			PurgeComm(HANDLE(self.fd.as_raw_handle()), PURGE_COMM_FLAGS(flags))
+				.map_err(|_| IoError::last_os_error())
 		}
 	}
 

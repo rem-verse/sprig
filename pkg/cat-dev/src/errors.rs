@@ -67,10 +67,17 @@ pub enum CatBridgeError {
 /// modules.
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
 pub enum APIError {
+	/// You attempted to encrypt data that we could not encrypt.
+	#[error("We could not encrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[diagnostic(code(cat_dev::api::bad_decrypted_data_length))]
+	BadDecryptedDataLength(usize),
 	/// You attempted to decrypt data that we could not decrypt.
 	#[error("We could not decrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
 	#[diagnostic(code(cat_dev::api::bad_encrypted_data_length))]
 	BadEncryptedDataLength(usize),
+	#[error("The MION Firmware file you provided had an invalid checksum, we expected: {1:02x}, but got: {0:02x}")]
+	#[diagnostic(code(cat_dev::api::mion_fw::bad_checksum))]
+	BadMionFWChecksum(u8, u8),
 	/// You attempted to set the default host bridge to a bridge that does not exist.
 	#[error("You cannot set a default bridge that does not exist.")]
 	#[diagnostic(code(cat_dev::api::default_device_must_exist))]
@@ -97,6 +104,21 @@ pub enum APIError {
 	#[error("A Device Name can only be 255 bytes long, but you specified one: {0} bytes long.")]
 	#[diagnostic(code(cat_dev::api::name_too_long))]
 	DeviceNameTooLong(usize),
+	#[error("The MION Firmware file provided was too small, it must be at least 0x26 bytes long, was {0:02x}")]
+	#[diagnostic(code(cat_dev::api::mion_fw::too_small))]
+	MionFirmwareTooSmall(usize),
+	#[error("The Version String for MION Firmware Files Typed 'MION', must have their version bytes end with a NUL terminator (0x00) due to an oversight in programming. Your file ended with: ({0:02x})")]
+	#[diagnostic(code(cat_dev::api::mion_fw::missing_nul_terminator))]
+	MionFirmwareMissingNULTerminator(u8),
+	/// All MION FW files must end with:
+	///
+	/// - `PWI-SS_FW_IMAGE` for IPL/MION firmware types
+	/// - `PWI-SS_FP_IMAGE` for FPGA firmware types.
+	///
+	/// If they do not, they are immediately considered invalid.
+	#[error("While validating the decrypted contents of your FW we were not able to identify the required ending bytes, this firmware is corrupt.")]
+	#[diagnostic(code(cat_dev::api::mion_fw::missing_signature))]
+	MionFirmwareMissingSignature,
 	/// You tried asking for a parameter of a specific name, but we could not
 	/// find a parameter with the name you specified.
 	///
