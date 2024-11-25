@@ -31,6 +31,18 @@
 //! booted from another machine. I'm not sure how often this was used, and I
 //! don't really recommend it, but it is possible to take ownership of another
 //! host.
+//!
+//! ## Mion FW Differences
+//!
+//! TODO(cynthia): check 0.14.77 Firmware for ability to do `get_info` & `power_on_v2`
+//!
+//! The booting process is pretty heavily impacted by the version of the Mion
+//! FW you are running. For example only the latest firmware we have dumped
+//! `0.00.14.80` has support for "taking over" a MION. Any firmware before that
+//! does not have the capability to do so.
+//!
+//! The raw Power ON APIs are also not as configurable when running versions
+//! pre `0.00.14.80`, where `power_on_v2` exists.
 
 use crate::{
 	commands::argv_helpers::{

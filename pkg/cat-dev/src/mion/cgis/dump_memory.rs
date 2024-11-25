@@ -47,11 +47,18 @@ const MAX_MEMORY_CONCURRENCY: usize = 4;
 pub async fn dump_memory(
 	mion_ip: Ipv4Addr,
 	resume_at: Option<usize>,
+	early_stop_at: Option<usize>,
 ) -> Result<Bytes, CatBridgeError> {
 	let mut memory_buffer = BytesMut::with_capacity(0xFFFF_FFFF);
-	dump_memory_with_raw_client(&Client::default(), mion_ip, resume_at, |bytes: Vec<u8>| {
-		memory_buffer.extend_from_slice(&bytes);
-	})
+	dump_memory_with_raw_client(
+		&Client::default(),
+		mion_ip,
+		resume_at,
+		early_stop_at,
+		|bytes: Vec<u8>| {
+			memory_buffer.extend_from_slice(&bytes);
+		},
+	)
 	.await?;
 	Ok(memory_buffer.freeze())
 }
@@ -69,12 +76,20 @@ pub async fn dump_memory(
 pub async fn dump_memory_with_writer<FnTy>(
 	mion_ip: Ipv4Addr,
 	resume_at: Option<usize>,
+	early_stop_at: Option<usize>,
 	callback: FnTy,
 ) -> Result<(), CatBridgeError>
 where
 	FnTy: FnMut(Vec<u8>) + Send + Sync,
 {
-	dump_memory_with_raw_client(&Client::default(), mion_ip, resume_at, callback).await
+	dump_memory_with_raw_client(
+		&Client::default(),
+		mion_ip,
+		resume_at,
+		early_stop_at,
+		callback,
+	)
+	.await
 }
 
 /// Perform a memory dump request, but with an already existing HTTP client.
@@ -90,6 +105,7 @@ pub async fn dump_memory_with_raw_client<FnTy>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	resume_at: Option<usize>,
+	early_stop_at: Option<usize>,
 	buff_callback: FnTy,
 ) -> Result<(), CatBridgeError>
 where
@@ -109,25 +125,20 @@ where
 	//
 	// If requests start throwing errors, the receiving channel will send
 	// a message to `stop_requests_sender` which will shut everything down.
-	let buffered_stream_future =
-		futures::stream::iter((start_address..=MEMORY_MAX_ADDRESS).step_by(512))
-			.map(|page_start| async move {
-				loop {
-					if !do_memory_page_fetch(
-						client,
-						mion_ip,
-						page_start,
-						retry_counter_ref,
-						sender_ref,
-					)
-					.await
-					{
-						break;
-					}
-				}
-			})
-			.buffered(MAX_MEMORY_CONCURRENCY)
-			.collect::<Vec<()>>();
+	let buffered_stream_future = futures::stream::iter(
+		(start_address..=early_stop_at.unwrap_or(MEMORY_MAX_ADDRESS)).step_by(512),
+	)
+	.map(|page_start| async move {
+		loop {
+			if !do_memory_page_fetch(client, mion_ip, page_start, retry_counter_ref, sender_ref)
+				.await
+			{
+				break;
+			}
+		}
+	})
+	.buffered(MAX_MEMORY_CONCURRENCY)
+	.collect::<Vec<()>>();
 
 	// As requests finish, they may not necissarily be in order.
 	// We need to reorder them to ensure they're called back in a

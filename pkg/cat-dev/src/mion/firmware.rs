@@ -180,8 +180,7 @@ impl MIONFirmwareFile {
 	/// Each firmware type has a slightly different format than the rest of the
 	/// firmware types. An example of known following firmware types are:
 	///
-	/// - [`MIONFirmwareType::Mion`] -> `0.0.14.80` (note: how to split between
-	///   two 0's?)
+	/// - [`MIONFirmwareType::Mion`] -> `0.00.14.80`
 	/// - [`MIONFirmwareType::Fpga`] -> `13052071`
 	/// - [`MIONFirmwareType::Ipl`] -> `0.5`
 	#[must_use]
@@ -238,7 +237,8 @@ fn calculate_checksum(encrypted_blob: &[u8]) -> u8 {
 ///
 /// If there is a problem encrypting your data. See error codes
 /// from the [`aes`], and [`ecb`] crates.
-fn raw_encrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
+#[doc(hidden)]
+pub fn raw_encrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
 	let encryptor = Aes256EcbEnc::new(&STOCK_FW_KEY.into());
 	let mut decrypted = vec![
 		0x0;
@@ -258,7 +258,8 @@ fn raw_encrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
 /// ## Errors
 ///
 /// If your data is not the correct size to be decrypted.
-fn raw_decrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
+#[doc(hidden)]
+pub fn raw_decrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
 	let decryptor = Aes256EcbDec::new(&STOCK_FW_KEY.into());
 
 	decryptor

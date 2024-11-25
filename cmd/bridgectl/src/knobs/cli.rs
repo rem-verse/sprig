@@ -275,8 +275,12 @@ pub enum Subcommands {
 		visible_aliases = ["ls-serial-ports", "lssp", "list_serial_ports", "ls_serial_ports"],
 	)]
 	ListSerialPorts {},
-	#[clap(subcommand)]
-	Mion(MionSubcommands),
+	/// Subcommands for interacting directly with custom APIs for the small board
+	/// controlling all disc access (aka the MION).
+	Mion {
+		#[clap(subcommand)]
+		subcommand: Option<MionSubcommands>,
+	},
 	/// Remove a bridge from your local configuration file.
 	#[command(name = "remove", visible_alias = "rm")]
 	Remove {
@@ -443,7 +447,7 @@ impl Subcommands {
 					|| name == "ls_serial_ports"
 					|| name == "lssp"
 			}
-			Self::Mion(_) => name == "mion",
+			Self::Mion { subcommand } => name == "mion",
 			Self::Remove {
 				bridge_config_flags,
 				scan_flags,
@@ -500,7 +504,7 @@ pub enum MionSubcommands {
 			long = "output-path",
 			alias = "output_path",
 			help = "The path to output the dumped EEPROM.",
-			long_help = "The path to the file to write the EEPMROM dump."
+			long_help = "The path to the file to write the EEPROM dump."
 		)]
 		output_path: Option<PathBuf>,
 	},
@@ -529,8 +533,8 @@ pub enum MionSubcommands {
 			short = 'p',
 			long = "output-path",
 			alias = "output_path",
-			help = "The path to output the dumped EEPROM.",
-			long_help = "The path to the file to write the EEPMROM dump."
+			help = "The path to output the dumped memory of the MION.",
+			long_help = "The path to the file to write the dumped memory of the MION."
 		)]
 		output_path: Option<PathBuf>,
 		#[arg(
@@ -538,9 +542,112 @@ pub enum MionSubcommands {
 			long = "resume-at",
 			alias = "resume_at",
 			help = "The byte offset to resume reading at.",
-			long_help = "The byte offset on the page to resume reading at, use debug logs to see where you are if you intend to resume."
+			long_help = "The byte offset on the page to resume reading at, use debug logs of bridgectl to see where you are if you intend to resume."
 		)]
 		resume_at: Option<usize>,
+	},
+	/// Dump the firmware from the memory of the MION.
+	///
+	/// This is useful because doing a full memory dump takes _forever_ however
+	/// the firmware files are reaalistically only the first couple MBs of memory
+	/// always loaded at 0x0.
+	///
+	/// This dumps _just_ the first 3Mb of memory to get _just_ the firmware.
+	#[command(
+		name = "dump-firmware-from-memory",
+		alias = "dump_firmware_from_memory"
+	)]
+	DumpFirmwareFromMemory {
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
+		#[arg(
+			index = 1,
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what type you're searching for with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess"
+		)]
+		bridge_name_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Get only command flags.
+		// ///////////////////////////////////////////////////
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the partial dumped memory.",
+			long_help = "The path to the file to write the partial memory dump."
+		)]
+		output_path: Option<PathBuf>,
+	},
+	/// Decrypt a MION Firmware file.
+	#[command(
+		name = "decrypt-fw",
+		visible_aliases = [
+			"decrypt_fw",
+			"decrypt-firmware",
+			"decrypt_firmware",
+			"dfw",
+		],
+	)]
+	DecryptFirmware {
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the decrypted firmware file.",
+			long_help = "The path to output the decrypted firmware file, can also be specified with positional arguments rather than flags, or not at all."
+		)]
+		output_path_flag: Option<PathBuf>,
+		#[arg(
+			index = 1,
+			help = "The firmware file to decrypt.",
+			long_help = "The path to the mion fw that we will decrypt."
+		)]
+		firmware_path: PathBuf,
+		#[arg(
+			index = 2,
+			help = "The path to write the decrypted firmware file.",
+			long_help = "The path to write the decrypted firmware file, you can also use `--output-path`, `-o` to specify this rather than a positional argument, or not at all."
+		)]
+		output_path_positional: Option<PathBuf>,
+	},
+	/// Encrypt a MION Firmware file.
+	#[command(
+		name = "encrypt-fw",
+		visible_aliases = [
+			"encrypt_fw",
+			"encrypt-firmware",
+			"encrypt_firmware",
+			"efw",
+		],
+	)]
+	EncryptFirmware {
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the encrypted firmware file.",
+			long_help = "The path to output the encrypted firmware file, can also be specified with positional arguments rather than flags, or not at all."
+		)]
+		output_path_flag: Option<PathBuf>,
+		#[arg(
+			index = 1,
+			help = "The firmware file to encrypt.",
+			long_help = "The path to the mion fw that we will encrypt."
+		)]
+		firmware_path: PathBuf,
+		#[arg(
+			index = 2,
+			help = "The path to write the encrypted firmware file.",
+			long_help = "The path to write the encrypted firmware file, you can also use `--output-path`, `-o` to specify this rather than a positional argument, or not at all."
+		)]
+		output_path_positional: Option<PathBuf>,
 	},
 }
 impl MionSubcommands {
@@ -564,6 +671,37 @@ impl MionSubcommands {
 				output_path,
 				resume_at,
 			} => name == "dump-memory" || name == "dump_memory",
+			Self::DumpFirmwareFromMemory {
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_positional,
+				output_path,
+			} => name == "dump-firmware-from-memory" || name == "dump_firmware_from_memory",
+			Self::DecryptFirmware {
+				output_path_flag,
+				firmware_path,
+				output_path_positional,
+			} => [
+				"decrypt-fw",
+				"decrypt_fw",
+				"decrypt-firmware",
+				"decrypt_firmware",
+				"dfw",
+			]
+			.contains(&name),
+			Self::EncryptFirmware {
+				output_path_flag,
+				firmware_path,
+				output_path_positional,
+			} => [
+				"encrypt-fw",
+				"encrypt_fw",
+				"encrypt-firmware",
+				"encrypt_firmware",
+				"efw",
+			]
+			.contains(&name),
 		}
 	}
 }
