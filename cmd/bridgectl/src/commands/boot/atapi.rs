@@ -1,0 +1,86 @@
+//! Handle the 'ATAPI' related protocols for booting up a MION.
+//!
+//! ATAPI is where the actual disc drive emulation happens. It is not a true
+//! and proper ATAPI, but is close enough.
+
+use crate::{
+	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
+	utils::add_context_to,
+	SHOULD_LOG_JSON,
+};
+use cat_dev::fsemul::atapi::AtapiServer;
+use miette::miette;
+use std::net::Ipv4Addr;
+use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};
+use tracing::{error, info};
+
+/// Spin up a server ready to handle disc emulation.
+pub async fn serve_atapi(
+	host_ip: Option<Ipv4Addr>,
+	fsemul_atapi_port: Option<u16>,
+	setup_params_atapi_port: Option<u16>,
+) {
+	let atapi_server =
+		match AtapiServer::new(host_ip, fsemul_atapi_port.or(setup_params_atapi_port)).await {
+			Ok(srv) => srv,
+			Err(cause) => {
+				if SHOULD_LOG_JSON() {
+					error!(
+						id = "bridgectl::boot::atapi_bind_failure",
+						?cause,
+						"failed to start server for ATAPI Emulation"
+					);
+				} else {
+					error!(
+						"\n{:?}",
+						add_context_to(
+							miette!("Failed to start server for ATAPI Emulation"),
+							[cause.into()].into_iter(),
+						),
+					);
+				}
+
+				std::process::exit(BOOT_COULD_NOT_CONNECT);
+			}
+		};
+
+	spawn_atapi(atapi_server);
+}
+
+fn spawn_atapi(atapi_emulator: AtapiServer) {
+	if let Err(cause) = TaskBuilder::new()
+		.name("bridgectl::boot::serve_atapi")
+		.spawn(async move {
+			tokio::select! {
+				() = atapi_emulator.serve() => {}
+				_ = ctrl_c_signal() => if SHOULD_LOG_JSON() {
+					info!(
+						id = "bridgectl::boot::atapi_detected_ctrlc",
+						"ctrl-c has been hit, shutting down atapi",
+					);
+				} else {
+					info!(
+						"Ctrl-C has been detected as being hit! Shutting down atapi!"
+					);
+				}
+			}
+		}) {
+		if SHOULD_LOG_JSON() {
+			error!(
+				id = "bridgectl::boot::atapi_spawn_failure",
+				?cause,
+				"failed to spawn task to serve atapi data to mion"
+			);
+		} else {
+			error!(
+				"\n{:?}",
+				add_context_to(
+					miette!("Failed to spawn task to serve ATAPI data to MION!"),
+					[miette!("{cause:?}")].into_iter(),
+				),
+			);
+		}
+
+		std::process::exit(BOOT_COULD_NOT_SPAWN);
+	}
+}

@@ -19,16 +19,21 @@ mod dump_eeprom;
 mod dump_memory;
 mod setup;
 mod signal_get;
+mod status;
+mod update;
 
 pub use control::*;
 pub use dump_eeprom::*;
 pub use dump_memory::*;
 pub use setup::*;
 pub use signal_get::*;
+pub use status::*;
+pub use update::*;
 
 use crate::errors::{CatBridgeError, NetworkError, NetworkParseError};
 use bytes::Bytes;
 use reqwest::{Body, Client, Method, Response, Version};
+use tracing::{field::valuable, warn};
 
 /// Perform a request that attempts to remove all the logic for the 'simple'
 /// request cases.
@@ -97,4 +102,69 @@ async fn assert_status_and_read_body(
 	}
 
 	Ok(body_result?)
+}
+
+/// Parse out a result status from an HTML page.
+///
+/// If your page ends up rendering up results like: `RESULT:OK` when things are
+/// successful, you can use this method to get that result information.
+fn parse_result_from_body(body: &str, operation_name: &str) -> Result<bool, CatBridgeError> {
+	let start_tag_location = body.find("<body>").map(|num| num + 6).ok_or_else(|| {
+		CatBridgeError::NetworkError(NetworkError::ParseError(
+			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
+		))
+	})?;
+	let body_without_start_tag = body.split_at(start_tag_location).1;
+	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
+		CatBridgeError::NetworkError(NetworkError::ParseError(
+			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
+		))
+	})?;
+	let just_inner_body = body_without_start_tag.split_at(end_tag_location).0;
+	let without_newlines_or_extra_tags = just_inner_body
+		.replace('\n', "")
+		.replace("<CENTER>", "")
+		.replace("</CENTER>", "");
+
+	let mut was_successful = false;
+	let mut returned_result_code = "";
+	let mut log_lines = Vec::with_capacity(0);
+	let mut extra_lines = Vec::with_capacity(0);
+	for line in without_newlines_or_extra_tags
+		.split("<br>")
+		.fold(Vec::new(), |mut accum, item| {
+			accum.extend(item.split("<br/>"));
+			accum
+		}) {
+		let trimmed_line = line.trim();
+		if trimmed_line.is_empty() {
+			continue;
+		}
+
+		if let Some(result_code) = trimmed_line.strip_prefix("RESULT:") {
+			returned_result_code = result_code;
+			if result_code == "OK" {
+				was_successful = true;
+			}
+		} else if trimmed_line.starts_with("INFO:")
+			|| trimmed_line.starts_with("ERROR:")
+			|| trimmed_line.starts_with("WARN:")
+		{
+			log_lines.push(trimmed_line);
+		} else {
+			extra_lines.push(trimmed_line);
+		}
+	}
+
+	if !was_successful {
+		warn!(
+			log_lines = valuable(&log_lines),
+			extra_lines = valuable(&extra_lines),
+			%operation_name,
+			result_code = %returned_result_code,
+			"got an error from a result status page",
+		);
+	}
+
+	Ok(was_successful)
 }

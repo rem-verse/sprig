@@ -41,6 +41,7 @@ use crate::{
 use clap::Parser;
 use log::install_logging_handlers;
 use miette::miette;
+use std::path::PathBuf;
 use tracing::error;
 
 /// Whether or not we're logging in JSON.
@@ -104,7 +105,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_add_or_update(set_default).await;
 		}
@@ -123,14 +124,25 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			let used_positional = target_bridge(
+				target_flags,
+				bridge_name_positional.as_deref(),
+				serial_port_positional.is_some(),
+			)
+			.await;
 			initialize_fsemul_config(fsemul_flags).await;
 			initialize_shared_server_flags(shared_server_flags).await;
+
+			let positional_for_serial = if used_positional {
+				serial_port_positional
+			} else {
+				bridge_name_positional.map(PathBuf::from)
+			};
 
 			handle_boot(
 				disable_sata,
 				without_pcfs,
-				(serial_port_flag, serial_port_positional),
+				(serial_port_flag, positional_for_serial),
 				take_ownership,
 			)
 			.await;
@@ -144,7 +156,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_dump_parameters(parameter_space_port).await;
 		}
@@ -157,7 +169,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_get(output_as_table).await;
 		}
@@ -223,7 +235,7 @@ async fn main() {
 			}) => {
 				initialize_host_bridge(bridge_config_flags).await;
 				initialize_scan_flags(scan_flags).await;
-				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 				mion_handle_dump_eeprom(output_path).await;
 			}
@@ -237,7 +249,7 @@ async fn main() {
 			}) => {
 				initialize_host_bridge(bridge_config_flags).await;
 				initialize_scan_flags(scan_flags).await;
-				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 				mion_handle_dump_memory(output_path, resume_at).await;
 			}
@@ -250,7 +262,7 @@ async fn main() {
 			}) => {
 				initialize_host_bridge(bridge_config_flags).await;
 				initialize_scan_flags(scan_flags).await;
-				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 				mion_handle_dump_firmware_fromm_memory(output_path).await;
 			}
@@ -279,7 +291,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_remove_bridge().await;
 		}
@@ -291,7 +303,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_set_default_bridge().await;
 		}

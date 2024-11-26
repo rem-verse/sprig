@@ -19,7 +19,8 @@ pub async fn get_setup_parameters(mion_ip: Ipv4Addr) -> Result<SetupParameters, 
 	get_setup_parameters_with_raw_client(&Client::default(), mion_ip).await
 }
 
-/// Get the setup parameters from a particular MION IP.
+/// Get the setup parameters from a particular MION IP, but with an existing
+/// HTTP client.
 ///
 /// ## Errors
 ///
@@ -32,7 +33,7 @@ pub async fn get_setup_parameters_with_raw_client(
 	let body_as_string = do_simple_request::<Body>(
 		client,
 		Method::GET,
-		format!("http://{mion_ip}/mion/control.cgi"),
+		format!("http://{mion_ip}/setup.cgi"),
 		None,
 	)
 	.await?;

@@ -4,7 +4,7 @@
 use crate::{
 	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
 	mion::{
-		cgis::do_simple_request,
+		cgis::{do_simple_request, parse_result_from_body},
 		proto::cgis::{ControlOperation, SetParameter},
 	},
 };
@@ -13,7 +13,7 @@ use local_ip_address::local_ip;
 use reqwest::{Client, Method};
 use serde::Serialize;
 use std::net::Ipv4Addr;
-use tracing::{field::valuable, warn};
+use tracing::warn;
 
 /// Perform a `get_info` request given a host, and a name.
 ///
@@ -122,11 +122,69 @@ pub async fn set_param_with_raw_client(
 /// already be connected to the SDIO ports, and be listening for ATAPI
 /// requests.
 ///
+/// This is an older power on API and ***you should always prefer
+/// `power_on_v2` if it is possible to use.***
+///
+/// ## Errors
+///
+/// - If we cannot encode the parameters as a form url encoded.
+/// - If we cannot make the HTTP request.
+/// - If the server does not respond with a 200.
+/// - If we cannot read the body from HTTP.
+/// - If we cannot parse the HTML response.
+pub async fn power_on(mion_ip: Ipv4Addr) -> Result<bool, CatBridgeError> {
+	power_on_with_raw_client(&Client::default(), mion_ip).await
+}
+
+/// Initiate a power-on request to turn on the CAT-DEV machine.
+///
+/// Note: This request just starts the actual power on, by the time you get to
+/// powering on the device, if you are using things like emulation you should
+/// already be connected to the SDIO ports, and be listening for ATAPI
+/// requests.
+///
+/// This is an older power on API and ***you should always prefer
+/// `power_on_v2` if it is possible to use.***
+///
+/// ## Errors
+///
+/// - If we cannot encode the parameters as a form url encoded.
+/// - If we cannot make the HTTP request.
+/// - If the server does not respond with a 200.
+/// - If we cannot read the body from HTTP.
+/// - If we cannot parse the HTML response.
+pub async fn power_on_with_raw_client(
+	client: &Client,
+	mion_ip: Ipv4Addr,
+) -> Result<bool, CatBridgeError> {
+	let body_as_string = do_raw_control_request(
+		client,
+		mion_ip,
+		&[(
+			"operation",
+			Into::<&str>::into(ControlOperation::PowerOn).to_owned(),
+		)],
+	)
+	.await?;
+	parse_result_from_body(
+		&body_as_string,
+		Into::<&str>::into(ControlOperation::PowerOnV2),
+	)
+}
+
+/// Initiate a power-on request to turn on the CAT-DEV machine.
+///
+/// Note: This request just starts the actual power on, by the time you get to
+/// powering on the device, if you are using things like emulation you should
+/// already be connected to the SDIO ports, and be listening for ATAPI
+/// requests.
+///
 /// This can also override some pre-existing configurations, e.g. if you send
 /// a POST with emulation set to off even if PCFS is set to on, the cat-dev
 /// will techincally still boot.
 ///
-/// Power ON V2 is the power on API that the actual tools nintendo built use.
+/// ***Power ON V2 is only available on MIONs running at least 00.14.77 in
+/// terms of firmware.***
 ///
 /// ## Errors
 ///
@@ -164,7 +222,8 @@ pub async fn power_on_v2(
 /// a POST with emulation set to off even if PCFS is set to on, the cat-dev
 /// will techincally still boot.
 ///
-/// Power ON V2 is the power on API that the actual tools nintendo built use.
+/// ***Power ON V2 is only available on MIONs running at least 00.14.77 in
+/// terms of firmware.***
 ///
 /// ## Errors
 ///
@@ -296,62 +355,4 @@ fn extract_body_tags(
 		.collect::<FnvHashMap<String, String>>();
 
 	Ok(fields)
-}
-
-fn parse_result_from_body(body: &str, operation_name: &str) -> Result<bool, CatBridgeError> {
-	let start_tag_location = body.find("<body>").map(|num| num + 6).ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
-	let body_without_start_tag = body.split_at(start_tag_location).1;
-	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
-	let just_inner_body = body_without_start_tag.split_at(end_tag_location).0;
-	let without_newlines = just_inner_body.replace('\n', "");
-
-	let mut was_successful = false;
-	let mut returned_result_code = "";
-	let mut log_lines = Vec::with_capacity(0);
-	let mut extra_lines = Vec::with_capacity(0);
-	for line in without_newlines
-		.split("<br>")
-		.fold(Vec::new(), |mut accum, item| {
-			accum.extend(item.split("<br/>"));
-			accum
-		}) {
-		let trimmed_line = line.trim();
-		if trimmed_line.is_empty() {
-			continue;
-		}
-
-		if let Some(result_code) = trimmed_line.strip_prefix("RESULT:") {
-			returned_result_code = result_code;
-			if result_code == "OK" {
-				was_successful = true;
-			}
-		} else if trimmed_line.starts_with("INFO:")
-			|| trimmed_line.starts_with("ERROR:")
-			|| trimmed_line.starts_with("WARN:")
-		{
-			log_lines.push(trimmed_line);
-		} else {
-			extra_lines.push(trimmed_line);
-		}
-	}
-
-	if !was_successful {
-		warn!(
-			log_lines = valuable(&log_lines),
-			extra_lines = valuable(&extra_lines),
-			%operation_name,
-			result_code = %returned_result_code,
-			"got an error back from mion/control.cgi",
-		);
-	}
-
-	Ok(was_successful)
 }

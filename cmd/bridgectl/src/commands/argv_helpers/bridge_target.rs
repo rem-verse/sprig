@@ -63,6 +63,7 @@ use cat_dev::mion::{
 	proto::control::MionIdentity,
 	BridgeHostState,
 };
+use mac_address::MacAddress;
 use miette::miette;
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::sync::{RwLock, RwLockReadGuard};
@@ -72,6 +73,8 @@ use tracing::{debug, error, field::valuable, info, warn};
 static TARGETED_BRIDGE_NAME: RwLock<Option<String>> = RwLock::const_new(None);
 /// The IPv4 of the bridge we're actively targeting.
 static TARGETED_BRIDGE_IP: RwLock<Option<Ipv4Addr>> = RwLock::const_new(None);
+/// The MAC Address of the bridge we're actively targeting.
+static TARGETED_BRIDGE_MAC: RwLock<Option<MacAddress>> = RwLock::const_new(None);
 
 /// Perform 'targeting' of a single bridge, where we take all the various input
 /// sources to find a single bridge to operate on.
@@ -99,18 +102,22 @@ pub async fn target_bridge(
 		)
 		.await;
 		return false;
-	} else if target_flags.specified_bridge_search_flag() || first_arg_must_be_bridge {
-		return target_search_flags(target_flags, positional_argument).await;
+	} else if target_flags.specified_bridge_search_flag() || positional_argument.is_some() {
+		let return_value =
+			target_search_flags(target_flags, positional_argument, first_arg_must_be_bridge).await;
+		if let Some(used_first_arg) = return_value {
+			return used_first_arg;
+		}
 	}
 
 	if !try_to_load_from_env().await {
 		if SHOULD_LOG_JSON() {
 			info!(
 				id = "bridgectl::argv::default_fallback",
-				"No bridge specified in arguments or environment, trying to load default from configuration.",
+				"No bridge specified in environment, and argument is missing or _may_ not be bridge name, trying to load default from configuration.",
 			);
 		} else {
-			info!("No bridge specified in arguments or environment, trying to load default from configuration.");
+			info!("No bridge specified in environment, and argument is missing or _may_ not be a bridge name, trying to load default from configuration.");
 		}
 
 		if !try_to_load_default().await {
@@ -136,12 +143,6 @@ pub async fn target_bridge(
 						].into_iter(),
 					),
 				);
-			}
-
-			// At this point the first arg might be the bridge, and we've exhausted all
-			// other options, so just use it as the bridge.
-			if positional_argument.is_some() {
-				return target_search_flags(target_flags, positional_argument).await;
 			}
 
 			std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
@@ -186,6 +187,59 @@ pub async fn get_targeted_bridge_ip() -> Ipv4Addr {
 	let ip = resolve_ip_from_name(name_read_lock.as_ref().expect("impossible").to_owned()).await;
 	_ = write_lock.insert(ip);
 	ip
+}
+
+/// Get the MAC Address of the bridge actively being targeted.
+pub async fn get_targeted_bridge_mac() -> MacAddress {
+	let read_lock = TARGETED_BRIDGE_MAC.read().await;
+	if let Some(mac) = read_lock.as_ref() {
+		return *mac;
+	}
+	std::mem::drop(read_lock);
+
+	let mut write_lock = TARGETED_BRIDGE_MAC.write().await;
+	if let Some(mac) = write_lock.as_ref() {
+		return *mac;
+	}
+	let ip = get_targeted_bridge_ip().await;
+	let mac = resolve_mac_from_ip(ip).await;
+	_ = write_lock.insert(mac);
+	mac
+}
+
+async fn resolve_mac_from_ip(mion_ip: Ipv4Addr) -> MacAddress {
+	let port = get_control_port().await;
+	let timeout = get_scan_timeout().await;
+
+	match find_mion(MIONFindBy::Ip(mion_ip), false, Some(timeout), Some(port)).await {
+		Ok(opt_mion_info) => get_mion_mac_from_scan_result(opt_mion_info, mion_ip, port, timeout),
+		Err(cause) => {
+			if SHOULD_LOG_JSON() {
+				error!(
+					id = "bridgectl::argv::failed_to_execute_search",
+					?cause,
+					filters.find_by = %MIONFindBy::Ip(mion_ip),
+					scanning.port = %port,
+					scanning.timeout_seconds = timeout.as_secs(),
+					help = "Perhaps another program is already using the single MION port?",
+					"Could not execute search for bridge...",
+				);
+			} else {
+				error!(
+					filters.find_by = %MIONFindBy::Ip(mion_ip),
+					scanning.port = %port,
+					scanning.timeout_seconds = timeout.as_secs(),
+					"\n{:?}",
+					miette!(
+						help = "Perhaps another program is already using the single MION port?",
+						"Could not send a packet directly to the IP specified, perhaps it wasn't reachable?",
+					).wrap_err(cause),
+				);
+			}
+
+			std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
+		}
+	}
 }
 
 async fn resolve_name_from_ip(mion_ip: Ipv4Addr) -> String {
@@ -237,7 +291,10 @@ async fn resolve_name_from_ip(mion_ip: Ipv4Addr) -> String {
 	let timeout = get_scan_timeout().await;
 
 	match find_mion(MIONFindBy::Ip(mion_ip), false, Some(timeout), Some(port)).await {
-		Ok(opt_mion_info) => get_mion_name_from_scan_result(opt_mion_info, mion_ip, port, timeout),
+		Ok(opt_mion_info) => {
+			attempt_populate_mac_from_scan_result(opt_mion_info.as_ref());
+			get_mion_name_from_scan_result(opt_mion_info, mion_ip, port, timeout)
+		}
 		Err(cause) => {
 			if SHOULD_LOG_JSON() {
 				error!(
@@ -317,7 +374,10 @@ async fn resolve_ip_from_name(mion_name: String) -> Ipv4Addr {
 	)
 	.await
 	{
-		Ok(opt_mion_info) => get_mion_ip_from_scan_result(opt_mion_info, mion_name, port, timeout),
+		Ok(opt_mion_info) => {
+			attempt_populate_mac_from_scan_result(opt_mion_info.as_ref());
+			get_mion_ip_from_scan_result(opt_mion_info, mion_name, port, timeout)
+		}
 		Err(cause) => {
 			if SHOULD_LOG_JSON() {
 				error!(
@@ -345,6 +405,68 @@ async fn resolve_ip_from_name(mion_name: String) -> Ipv4Addr {
 			std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
 		}
 	}
+}
+
+/// Populates the targets mac address if we're already doing a search.
+///
+/// This helps prevent duplicate lookups/searches for the mac address.
+fn attempt_populate_mac_from_scan_result(found_result: Option<&MionIdentity>) {
+	let Some(result) = found_result else {
+		return;
+	};
+	// If someone is already trying to write the mac, let them write it.
+	let Ok(mut write_lock) = TARGETED_BRIDGE_MAC.try_write() else {
+		return;
+	};
+	_ = write_lock.insert(result.mac_address());
+}
+
+/// Get the MAC address from a scan result.
+fn get_mion_mac_from_scan_result(
+	found_result: Option<MionIdentity>,
+	mion_ip: Ipv4Addr,
+	port: u16,
+	timeout: Duration,
+) -> MacAddress {
+	if let Some(result) = found_result {
+		return result.mac_address();
+	}
+
+	if SHOULD_LOG_JSON() {
+		error!(
+			id = "bridgectl::argv::search_returned_no_bridges",
+			filters.find_by = %MIONFindBy::Ip(mion_ip),
+			scanning.port = port,
+			scanning.timeout_seconds = timeout.as_secs(),
+			suggestions = valuable(&[
+				"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
+				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+				"Ensure your filters line up with a single CAT-DEV device.",
+			]),
+			"could not find a bridge with the filters on your network.",
+		);
+	} else {
+		error!(
+			filters.find_by = %MIONFindBy::Ip(mion_ip),
+			scanning.port = port,
+			scanning.timeout_seconds = timeout.as_secs(),
+			"\n{:?}",
+			add_context_to(
+				miette!(
+					"Could not find a bridge that matches your filters on your network.",
+				),
+				[
+					miette!("Please ensure the CAT-DEV you're trying to find is powered on, and running."),
+					miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
+					miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
+					miette!("Ensure your filters line up with a single CAT-DEV device."),
+				].into_iter(),
+			),
+		);
+	}
+
+	std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
 }
 
 fn get_mion_ip_from_scan_result(
@@ -444,10 +566,13 @@ fn get_mion_name_from_scan_result(
 async fn target_search_flags(
 	target_flags: TargetBridgeFlags,
 	positional_argument: Option<&str>,
-) -> bool {
+	exit_if_arg_invalid: bool,
+) -> Option<bool> {
+	let mut used_flags = false;
 	let (find_by, extra_ip_filter, extra_name_filter, used_arg) = if target_flags
 		.specified_bridge_search_flag()
 	{
+		used_flags = true;
 		if target_flags.search_for_mac_raw().is_some() {
 			if let Some(mac) = target_flags.search_for_mac() {
 				(
@@ -483,7 +608,7 @@ async fn target_search_flags(
 						let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
 						_ = static_name_opt.insert(name.to_owned());
 					}
-					return false;
+					return Some(false);
 				}
 			}
 		} else {
@@ -495,29 +620,42 @@ async fn target_search_flags(
 				let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
 				_ = static_name_opt.insert(name.to_owned());
 			}
-			return false;
+			return Some(false);
 		}
 	} else {
-		let argument = positional_argument.expect(
-			"internal_error: target_search_flags() called when no search flags were specified",
-		);
+		let Some(argument) = positional_argument else {
+			if exit_if_arg_invalid {
+				return None;
+			}
+
+			panic!(
+				"internal_error: target_search_flags() called when no search flags were specified",
+			);
+		};
 
 		match MIONFindBy::from(argument.to_owned()) {
 			MIONFindBy::Ip(ip) => {
 				let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
 				_ = static_ip_opt.insert(ip);
-				return true;
+				return Some(true);
 			}
 			MIONFindBy::MacAddress(mac) => (MIONFindBy::MacAddress(mac), None, None, true),
 			MIONFindBy::Name(name) => {
 				let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
 				_ = static_name_opt.insert(name);
-				return true;
+				return Some(true);
 			}
 		}
 	};
 
-	do_scan_initial(find_by, extra_ip_filter, extra_name_filter, used_arg).await
+	do_scan_initial(
+		find_by,
+		extra_ip_filter,
+		extra_name_filter,
+		used_arg,
+		used_flags || exit_if_arg_invalid,
+	)
+	.await
 }
 
 async fn do_scan_initial(
@@ -525,7 +663,8 @@ async fn do_scan_initial(
 	extra_ip_filter: Option<Ipv4Addr>,
 	extra_name_filter: Option<&str>,
 	used_arg: bool,
-) -> bool {
+	should_exit: bool,
+) -> Option<bool> {
 	let port = get_control_port().await;
 	let timeout = get_scan_timeout().await;
 
@@ -565,38 +704,40 @@ async fn do_scan_initial(
 			.await;
 		}
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::failed_to_execute_search",
-					?cause,
-					filters.find_by = %find_by,
-					filters.extra_ip_filter = ?extra_ip_filter,
-					filters.extra_name_filter = ?extra_name_filter,
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					help = "Perhaps another program is already using the single MION port?",
-					"Could not execute search for bridge...",
-				);
-			} else {
-				error!(
-					filters.find_by = %find_by,
-					filters.extra_ip_filter = ?extra_ip_filter,
-					filters.extra_name_filter = ?extra_name_filter,
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					"\n{:?}",
-					miette!(
+			if should_exit {
+				if SHOULD_LOG_JSON() {
+					error!(
+						id = "bridgectl::argv::failed_to_execute_search",
+						?cause,
+						filters.find_by = %find_by,
+						filters.extra_ip_filter = ?extra_ip_filter,
+						filters.extra_name_filter = ?extra_name_filter,
+						scanning.port = %port,
+						scanning.timeout_seconds = timeout.as_secs(),
 						help = "Perhaps another program is already using the single MION port?",
-						"Could not send a packet directly to the IP specified, perhaps it wasn't reachable?",
-					).wrap_err(cause),
-				);
-			}
+						"Could not execute search for bridge...",
+					);
+				} else {
+					error!(
+						filters.find_by = %find_by,
+						filters.extra_ip_filter = ?extra_ip_filter,
+						filters.extra_name_filter = ?extra_name_filter,
+						scanning.port = %port,
+						scanning.timeout_seconds = timeout.as_secs(),
+						"\n{:?}",
+						miette!(
+							help = "Perhaps another program is already using the single MION port?",
+							"Could not send a packet directly to the IP specified, perhaps it wasn't reachable?",
+						).wrap_err(cause),
+					);
+				}
 
-			std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
+				std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
+			}
 		}
 	}
 
-	used_arg
+	Some(used_arg)
 }
 
 async fn process_found_mion(
@@ -624,7 +765,9 @@ async fn process_found_mion(
 		if matches_all {
 			let mut static_ip_opt = TARGETED_BRIDGE_IP.write().await;
 			let mut static_name_opt = TARGETED_BRIDGE_NAME.write().await;
+			let mut static_mac_opt = TARGETED_BRIDGE_MAC.write().await;
 			_ = static_ip_opt.insert(result.ip_address());
+			_ = static_mac_opt.insert(result.mac_address());
 			_ = static_name_opt.insert(result.name().to_owned());
 		}
 	}

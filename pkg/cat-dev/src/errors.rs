@@ -168,6 +168,14 @@ pub enum APIError {
 	#[error("Unknown operation for `control.cgi`: [{0}]")]
 	#[diagnostic(code(cat_dev::api::control::unknown_operation))]
 	UnknownControlOperation(String),
+	/// There are a series of operations you can call on `status.cgi`,
+	/// unfortunately the one specified is not an operation we know on
+	/// any firmware version.
+	#[error("Unknown operation for `status.cgi`: [{0}]")]
+	#[diagnostic(code(cat_dev::api::control::unknown_operation))]
+	UnknownStatusOperation(String),
+	/// There are only so many sizes a cat-dev HDD bank can come in, these are
+	/// hardcoded. You've specified a bank we can't set.
 	#[error("Unknown ID for Cat-DEV Bank Sizes: [{0}]")]
 	#[diagnostic(code(cat_dev::api::setup::unknown_bank_size))]
 	UnknownCatDevBankSizeId(u32),
@@ -376,22 +384,43 @@ pub enum NetworkParseError {
 	#[error("Could not parse byte from memory dump: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::html::bad_memory_byte))]
 	HtmlResponseBadByte(String),
+	/// We attempted to find an `<input>` element with a certain name in the
+	/// HTML response, but were not able to find one.
 	#[error("Could not find input with name: `{0}`, within HTML body: `{1}`")]
 	#[diagnostic(code(cat_dev::net::parse::html::missing_tagged_input))]
 	HtmlResponseMissingTaggedInput(String, String),
+	/// We expected this HTML response to have an IP encoded as a string, but we
+	/// could not parse the string as an IP.
 	#[error("Expected HTML Response to have an IP as a string, but could not parse: `{0:?}`")]
 	#[diagnostic(code(cat_dev::net::parse::html::html_response_ip_encoding_error))]
 	HtmlResponseIpExpectedButNotThere(AddrParseError),
+	/// We expected the HTML response to have one radio box checked out of all
+	/// the radio boxes, but we found no radio boxes that were checked.
 	#[error("Expected HTML Response to have a radio button, could not parse: `{0}`")]
 	HtmlResponseNoRadioChecked(String),
+	/// We expected this HTML response to have a number encoded as a string, but we
+	/// could not parse the string as a number.
 	#[error("Expected HTML Response to have an number as a string, but could not parse: `{0:?}`")]
 	#[diagnostic(code(cat_dev::net::parse::html::html_response_number_encoding_error))]
 	HtmlResponseNumberExpectedButNotThere(ParseIntError),
+	/// We expected to find an item in a table `<tr>`/`<td>`, but were not able
+	/// to find one in the HTML response we got back.
 	#[error("Expected HTML Response to have a table item with prefix: {1}, but couldn't find one in: `{0}`")]
 	HtmlResponseNoTableItemWithPrefix(String, String),
+	/// We expected this HTML response to have a MAC Address encoded as a string,
+	/// but we could not parse the string as a MAC address.
 	#[error("Expected HTML Response to have a MAC as a string, but could not parse: `{0:?}`")]
 	#[diagnostic(code(cat_dev::net::parse::html::html_response_mac_encoding_error))]
 	HtmlResponseMacExpectedButNotThere(MacParseError),
+	#[error("Expected to find closing tag: {0}, in the rest of the HTML Body: {1}")]
+	#[diagnostic(code(cat_dev::net::parse::html::html_response_missing_closing_tag))]
+	HtmlResponseMissingClosingTag(String, String),
+	#[error("Expected to find a string to help identify the version in the HTML ({0}) as part of the string ({1}), but did not find one.")]
+	#[diagnostic(code(cat_dev::net::parse::html::html_response_missing_version_prefix))]
+	HtmlResponseMissingVersionPart(String, String),
+	#[error("When fetching the versions of the MION we expect to find both the FW version, and the FPGA version, but only found the following versions: {0:?}")]
+	#[diagnostic(code(cat_dev::net::parse::html::html_response_missing_Versions))]
+	HtmlResponseMissingVersions(Vec<String>),
 	#[error("Got an unexpected sdio/printf packet type: {0}, not sure how to handle")]
 	#[diagnostic(code(cat_dev::net::parse::sdio::printf::unknown_packet_type))]
 	UnknownSdioPrintfPacketType(u8),

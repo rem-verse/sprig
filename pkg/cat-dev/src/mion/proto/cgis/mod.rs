@@ -3,6 +3,10 @@
 
 mod control;
 mod setup;
+mod status;
+mod update;
 
 pub use control::*;
 pub use setup::*;
+pub use status::*;
+pub use update::*;

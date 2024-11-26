@@ -89,37 +89,34 @@ pub async fn handle_encrypt_firmware(
 		.extend_from_slice(&decrypted_firmware_contents[&decrypted_firmware_contents.len() - 6..]);
 
 	// Now we can write!
-	match tokio::fs::write(&output_path, encrypted_contents)
+	if let Err(cause) = tokio::fs::write(&output_path, encrypted_contents)
 		.await
 		.into_diagnostic()
 	{
-		Ok(()) => {}
-		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-	    		id = "bridgectl::mion::encrypt_firmware::could_not_write_encrypted_firmware_file",
-          ?cause,
-	    		output_file = valuable(&output_path),
-	    		"Could not write encrypted file contents.",
-	    	);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!(
-    					"Could not write the encrypted firmware file, perhaps some filesystem error?"
-    				),
-						[
-							cause,
-							miette!(format!("Was Writing File: {}", output_path.display())),
-						]
-						.into_iter(),
-					),
-				);
-			}
-
-			std::process::exit(ENCRYPT_FW_COULD_NOT_WRITE_FW);
+		if SHOULD_LOG_JSON() {
+			error!(
+				id = "bridgectl::mion::encrypt_firmware::could_not_write_encrypted_firmware_file",
+				?cause,
+				output_file = valuable(&output_path),
+				"Could not write encrypted file contents.",
+			);
+		} else {
+			error!(
+				"\n{:?}",
+				add_context_to(
+					miette!(
+    				"Could not write the encrypted firmware file, perhaps some filesystem error?"
+    			),
+					[
+						cause,
+						miette!(format!("Was Writing File: {}", output_path.display())),
+					]
+					.into_iter(),
+				),
+			);
 		}
+
+		std::process::exit(ENCRYPT_FW_COULD_NOT_WRITE_FW);
 	}
 }
 
