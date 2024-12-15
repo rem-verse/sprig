@@ -96,19 +96,13 @@ pub enum Subcommands {
 		// Shared Flags for targeting a single Serial Port.
 		// ///////////////////////////////////////////////////
 		#[arg(
-			short = 's',
-			long = "serial-port-path",
-			alias = "serial_port_path",
-			help = "The path to the serial port to use (conflicts with the positional argument).",
-			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
-		)]
-		serial_port_flag: Option<PathBuf>,
-		#[arg(
 			index = 2,
 			help = "The path to the serial port to use (conflicts with the flag).",
 			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the flag)."
 		)]
 		serial_port_positional: Option<PathBuf>,
+		#[command(flatten)]
+		shared_serial_port_flags: SharedSerialPortFlags,
 		// ///////////////////////////////////////////////////
 		// Boot only command flags.
 		// ///////////////////////////////////////////////////
@@ -367,22 +361,25 @@ pub enum Subcommands {
 	)]
 	Tail {
 		// ///////////////////////////////////////////////////
-		// Shared Flags for targeting a single Serial Port.
+		// Shared Flags for targeting a single bridge.
 		// ///////////////////////////////////////////////////
-		#[arg(
-			short = 's',
-			long = "serial-port-path",
-			alias = "serial_port_path",
-			help = "The path to the serial port to use (conflicts with the positional argument).",
-			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
-		)]
-		serial_port_flag: Option<PathBuf>,
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
-			help = "The path to the serial port to use (conflicts with the flag).",
-			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the flag)."
+			help = "Either a bridge name, or the path to the serial port to tail.",
+			long_help = "This can be the path to the serial port, OR this can be interpreted as a bridge search parameter. If you don't want to specify what bridge you want to get parameters from with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
-		serial_port_positional: Option<PathBuf>,
+		bridge_name_or_serial_port_path: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single Serial Port.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		shared_serial_port_flags: SharedSerialPortFlags,
 	},
 }
 impl Subcommands {
@@ -405,8 +402,8 @@ impl Subcommands {
 				bridge_name_positional,
 				fsemul_flags,
 				shared_server_flags,
-				serial_port_flag,
 				serial_port_positional,
+				shared_serial_port_flags,
 				disable_sata,
 				without_pcfs,
 				take_ownership,
@@ -469,8 +466,11 @@ impl Subcommands {
 				parameter_names_positional,
 			} => name == "set-parameters" || name == "set_parameters" || name == "sp",
 			Self::Tail {
-				serial_port_flag,
-				serial_port_positional,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_or_serial_port_path,
+				shared_serial_port_flags,
 			} => name == "tail" || name == "tail-serial-port" || name == "tail_serial_port",
 		}
 	}
@@ -1096,6 +1096,82 @@ impl Valuable for SharedServerFlags {
 			&[Valuable::as_value(
 				&self.bind_addr.map(|ip| format!("{ip}")),
 			)],
+		));
+	}
+}
+
+/// Common flags that are present on multiple subcommands for managing
+/// serial-ports.
+///
+/// *note: there are some flags that may appear as a positional outside
+/// of this.*
+#[derive(Args, Debug)]
+pub struct SharedSerialPortFlags {
+	#[arg(
+		short = 's',
+		long = "serial-port-path",
+		alias = "serial_port_path",
+		help = "The path to the serial port to use (conflicts with the positional argument).",
+		long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
+	)]
+	serial_port_flag: Option<PathBuf>,
+	#[arg(
+		long = "debug-out-port",
+		alias = "debug_out_port",
+		help = "A port override to determine where we should connect for `DEBUG_OUT` logs.",
+		long_help = "A port override to determine where we should connect for `DBEUG_OUT` logs, the default port is 6001."
+	)]
+	debug_out_port: Option<u16>,
+}
+impl SharedSerialPortFlags {
+	#[must_use]
+	pub fn serial_port_flag(&self) -> Option<&PathBuf> {
+		self.serial_port_flag.as_ref()
+	}
+
+	#[must_use]
+	pub fn debug_out_port(&self) -> Option<u16> {
+		self.debug_out_port
+	}
+}
+impl Display for SharedSerialPortFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"Shared Serial Port Flags --serial-port-path: `{:?}`, --debug-out-port: `{:?}`",
+			self.serial_port_flag, self.debug_out_port,
+		)
+	}
+}
+const SHARED_SERIAL_PORT_FLAG_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("serial_port_flag"),
+	NamedField::new("debug_out_port"),
+];
+impl Structable for SharedSerialPortFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"SharedSerialPortFlags",
+			Fields::Named(SHARED_SERIAL_PORT_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for SharedSerialPortFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			SHARED_SERIAL_PORT_FLAG_FIELDS,
+			&[
+				Valuable::as_value(
+					&self
+						.serial_port_flag
+						.as_ref()
+						.map(|p| format!("{}", p.display())),
+				),
+				Valuable::as_value(&self.debug_out_port),
+			],
 		));
 	}
 }

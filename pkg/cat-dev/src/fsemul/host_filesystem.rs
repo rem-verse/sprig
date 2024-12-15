@@ -2,27 +2,22 @@
 //! client.
 
 use crate::{
-	errors::{CatBridgeError, FSError, NetworkError},
-	fsemul::sdio::proto::SdioControlReadRequest,
+	errors::{CatBridgeError, FSError},
+	fsemul::{bsf::BootSystemFile, dlf::DiskLayoutFile, errors::FSEmulFSError},
+	TitleID,
 };
 use bytes::{Bytes, BytesMut};
-use std::path::PathBuf;
-use tokio::{
-	fs::File,
-	io::{AsyncReadExt, BufReader},
-	sync::mpsc::Sender,
-};
-use tracing::{field::valuable, info, warn};
+use std::path::{Path, PathBuf};
+use tokio::fs::{create_dir_all, write as fs_write};
+use whoami::username;
 
-/// The size of an SDIO Block we end up serving.
-const SDIO_BLOCK_SIZE: usize = 512_usize;
-/// The size of a single TCP packet we should end up serving.
-const SDIO_TCP_PACKET_SIZE: usize = 65536_usize;
-/// The amount of blocks that can fit within a single packet.
-const SDIO_BLOCKS_PER_PACKET: usize = SDIO_TCP_PACKET_SIZE / SDIO_BLOCK_SIZE;
-
-/// A pointer to a directory that will allow reading/writing over SDIO for
-/// a cat-dev.
+/// A wrapper around interacting with the 'host' or PC filesystem for the
+/// various times a cat-dev will reach out to the host.
+///
+/// This is little more than a wrapper around a [`PathBuf`], and targeted
+/// methods to make getting files/generating default files/etc. easy. Most of
+/// the actual logic for turning a request from `SDIO`, `ATAPI`, etc. all come
+/// from those client/server implementations rather than the logic living here.
 #[derive(Debug, PartialEq, Eq)]
 pub struct HostFilesystem {
 	/// The path to the base data directory to serve a filesystem out of.
@@ -32,149 +27,221 @@ pub struct HostFilesystem {
 impl HostFilesystem {
 	/// Create a filesystem from a root cafe dir.
 	///
+	/// If no cafe dir is provided, we will attempt to locate the default
+	/// installation path for cafe sdk which is:
+	///
+	/// - `C:\cafe_sdk` on windows.
+	/// - `/opt/cafe_sdk` on any unix/bsd like OS.
+	///
 	/// ## Errors
 	///
-	/// If the Cafe SDK directory is corrupt, or can't be found.
-	pub fn from_cafe_dir(cafe_dir: Option<PathBuf>) -> Result<Self, FSError> {
-		let Some(cafe_base_dir) = cafe_dir.or_else(Self::default_cafe_directory) else {
-			return Err(FSError::CantFindCafeSdkPath);
+	/// If the Cafe SDK directory is corrupt, or can't be found. A Cafe SDK
+	/// directory is considered corrupt if it is missing core files that we
+	/// _need_ to be able to serve a Cafe-OS distribution. These file
+	/// requirements may change from version to version of this crate, but should
+	/// always be compatible with a clean cafe sdk directory.
+	pub fn from_cafe_dir(cafe_dir: Option<PathBuf>) -> Result<Self, FSEmulFSError> {
+		let Some(cafe_sdk_path) = cafe_dir.or_else(Self::default_cafe_directory) else {
+			return Err(FSEmulFSError::CantFindCafeSdkPath);
 		};
 
-		if !cafe_base_dir
-			.join("data")
-			.join("mlc")
-			.join("sys")
-			.join("title")
-			.join("00050030")
-			.join("1001000A")
-			.join("code")
-			.join("app.xml")
-			.exists() || !cafe_base_dir
-			.join("data")
-			.join("mlc")
-			.join("sys")
-			.join("title")
-			.join("00050030")
-			.join("1001010A")
-			.join("code")
-			.join("app.xml")
-			.exists() || !cafe_base_dir
-			.join("data")
-			.join("mlc")
-			.join("sys")
-			.join("title")
-			.join("00050030")
-			.join("1001020A")
-			.join("code")
-			.join("app.xml")
-			.exists()
+		if !Self::join_many(
+			&cafe_sdk_path,
+			[
+				"data", "mlc", "sys", "title", "00050030", "1001000A", "code", "app.xml",
+			],
+		)
+		.exists() || !Self::join_many(
+			&cafe_sdk_path,
+			[
+				"data", "mlc", "sys", "title", "00050030", "1001010A", "code", "app.xml",
+			],
+		)
+		.exists() || !Self::join_many(
+			&cafe_sdk_path,
+			[
+				"data", "mlc", "sys", "title", "00050030", "1001020A", "code", "app.xml",
+			],
+		)
+		.exists()
 		{
-			return Err(FSError::CafeSdkPathCorrupt);
+			return Err(FSEmulFSError::CafeSdkPathCorrupt);
 		}
 
 		// Can't generate a `fw.img` file for now :(
-		if !cafe_base_dir
-			.join("data")
-			.join("slc")
-			.join("sys")
-			.join("title")
-			.join("00050010")
-			.join("1000400A")
-			.join("code")
-			.join("fw.img")
-			.exists()
+		if !Self::join_many(
+			&cafe_sdk_path,
+			[
+				"data", "slc", "sys", "title", "00050010", "1000400A", "code", "fw.img",
+			],
+		)
+		.exists()
 		{
-			return Err(FSError::CafeSdkPathCorrupt);
+			return Err(FSEmulFSError::CafeSdkPathCorrupt);
 		}
 
-		Ok(Self {
-			cafe_sdk_path: cafe_base_dir,
-		})
+		Ok(Self { cafe_sdk_path })
 	}
 
-	/// Serve a file from an SDIO read request.
+	/// The root path to the Cafe SDK.
 	///
-	/// TODO(mythra): actually figure out how address maps to actual files.
+	/// *note: although we do expose this for logging, and other info... we do
+	/// not recommend manually interacting with the SDK path. There are much
+	/// better alternatives.*
+	#[must_use]
+	pub const fn cafe_sdk_path(&self) -> &PathBuf {
+		&self.cafe_sdk_path
+	}
+
+	/// Get the path to the current boot1 `.bsf` file.
+	///
+	/// This function will create the boot1 system file, if it does not yet
+	/// exist. As a result it may error, if we can't create, and place the
+	/// boot system file.
 	///
 	/// ## Errors
 	///
-	/// - If the device requests an unknown address to read files from.
-	/// - If we cannot read the file from the disk.
-	/// - If we cannot serve the file to a client.
-	pub async fn serve_sdio_file(
-		&self,
-		read_request: SdioControlReadRequest,
-		sender: Sender<Bytes>,
-	) -> Result<(), CatBridgeError> {
-		match read_request.lba() {
-			0x80 => {
-				// all 0's
-				info!(
-				  sdio.host_path = %self.cafe_sdk_path.display(),
-				  sdio.request = valuable(&read_request),
-				  "Requested known, but unmapped part of the disk, serving 0's for blocks.",
-				);
-
-				Self::serve_zeroed_blocks(read_request.blocks(), sender).await
-			}
-			0x7F_FF80 => {
-				let requested_path = self
-					.cafe_sdk_path
-					.join("temp")
-					.join("mythra")
-					.join("caferun")
-					.join("ppc.bsf");
-				info!(
-				  sdio.host_path = %self.cafe_sdk_path.display(),
-				  sdio.request = valuable(&read_request),
-				  sdio.serving = %requested_path.display(),
-				  "Serving known file over PCFS",
-				);
-
-				Self::serve_padded_file_sdio(requested_path, read_request.blocks(), sender).await
-			}
-			0x480 => {
-				let requested_path = self
-					.cafe_sdk_path
-					.join("data")
-					.join("slc")
-					.join("sys")
-					.join("title")
-					.join("00050010")
-					.join("1000400A")
-					.join("code")
-					.join("fw.img");
-				info!(
-				  sdio.host_path = %self.cafe_sdk_path.display(),
-				  sdio.request = valuable(&read_request),
-				  sdio.serving = %requested_path.display(),
-				  "Serving known file over PCFS",
-				);
-
-				Self::serve_padded_file_sdio(requested_path, read_request.blocks(), sender).await
-			}
-			0x7C80 => {
-				// all 0's
-				info!(
-				  sdio.host_path = %self.cafe_sdk_path.display(),
-				  sdio.request = valuable(&read_request),
-				  "Requested known, but unmapped part of the disk, serving 0's for blocks.",
-				);
-
-				Self::serve_zeroed_blocks(read_request.blocks(), sender).await
-			}
-			_ => {
-				warn!(
-				  sdio.host_path = %self.cafe_sdk_path.display(),
-				  sdio.request = valuable(&read_request),
-				  "Unknown LBA for read-request!",
-				);
-
-				Err(NetworkError::UnknownPCFSServerAddress(read_request.lba()).into())
-			}
+	/// - If the temp directory does not exist, and we can't create it.
+	/// - If the boot system file does not exist, and we can't write it to disk.
+	pub async fn boot1_sytstem_path(&self) -> Result<PathBuf, FSError> {
+		let mut path = self.temp_path().await?;
+		path.push("caferun");
+		if !path.exists() {
+			create_dir_all(&path).await?;
 		}
+		path.push("ppc.bsf");
+
+		if !path.exists() {
+			fs_write(&path, Bytes::from(BootSystemFile::default())).await?;
+		}
+
+		Ok(path)
 	}
 
+	/// Get the path to the current `diskid.bin`.
+	///
+	/// If the current Disk ID does not exist, we will write a blank diskid to
+	/// this path.
+	///
+	/// ## Errors
+	///
+	/// - If the temporary directory does not exist, and we can't create it.
+	/// - If the disk ID path does not exist, and we can't write it to disk.
+	pub async fn disk_id_path(&self) -> Result<PathBuf, FSError> {
+		let mut path = self.temp_path().await?;
+		path.push("caferun");
+		if !path.exists() {
+			create_dir_all(&path).await?;
+		}
+		path.push("diskid.bin");
+
+		if !path.exists() {
+			fs_write(&path, BytesMut::zeroed(32).freeze()).await?;
+		}
+
+		Ok(path)
+	}
+
+	/// Get the path to the current firmware file to boot on the MION.
+	///
+	/// This is guaranteed to always exist, as it's part of our check for a
+	/// corrupt SDK.
+	#[must_use]
+	pub fn firmware_file_path(&self) -> PathBuf {
+		Self::join_many(
+			&self.slc_path_for((0x0005_0010, 0x1000_400A)),
+			["code", "fw.img"],
+		)
+	}
+
+	/// Get the path to the disk layout file for the PPC booting process.
+	///
+	/// This function will create a disk layout file, as well as a Boot System
+	/// File, and a disk id file if they do not yet exist.
+	///
+	/// ## Errors
+	///
+	/// - If the temp directory does not exist, and we can't create it.
+	/// - If the boot system file does not exist, and we can't write it to disk.
+	/// - If the diskid file does not exist, and we can't write it to disk.
+	/// - If the firmware image file does not exist.
+	/// - If the dlf file does not exist, and we can't create it.
+	pub async fn ppc_boot_dlf_path(&self) -> Result<PathBuf, CatBridgeError> {
+		let mut path = self.temp_path().await?;
+		path.push("caferun");
+		if !path.exists() {
+			create_dir_all(&path).await.map_err(FSError::from)?;
+		}
+		path.push("ppc_boot.dlf");
+
+		if !path.exists() {
+			// This probably isn't the right set of defaults for everyone, but i'm
+			// not yet smart enough to figure all this out.
+			let mut root_dlf = DiskLayoutFile::new(0x00B8_8200_u128);
+			root_dlf.upsert_addressed_path(0_u128, &self.disk_id_path().await?)?;
+			root_dlf.upsert_addressed_path(0x80000_u128, &self.boot1_sytstem_path().await?)?;
+			root_dlf.upsert_addressed_path(0x90000_u128, &self.firmware_file_path())?;
+			fs_write(&path, Bytes::from(root_dlf))
+				.await
+				.map_err(FSError::from)?;
+		}
+
+		Ok(path)
+	}
+
+	/// Get a file from the SLC.
+	///
+	/// The SLC always serves "sys" files, and are relative to a title id, almost
+	/// always a system title id such as (`00050010`).
+	///
+	/// *note: the file is not guaranteed to exist! It's just a path!*
+	#[must_use]
+	pub fn slc_path_for(&self, title_id: TitleID) -> PathBuf {
+		Self::join_many(
+			&self.cafe_sdk_path,
+			[
+				"data".to_owned(),
+				"slc".to_owned(),
+				"sys".to_owned(),
+				"title".to_owned(),
+				format!("{:08X?}", title_id.0),
+				format!("{:08X?}", title_id.1),
+			],
+		)
+	}
+
+	/// Get the current path to the temporary directory for this Cafe SDK
+	/// install.
+	///
+	/// ## Errors
+	///
+	/// - If the temporary path does not exist and could not be created.
+	async fn temp_path(&self) -> Result<PathBuf, FSError> {
+		let temp_path = Self::join_many(&self.cafe_sdk_path, ["temp".to_owned(), username()]);
+		if !temp_path.exists() {
+			create_dir_all(&temp_path).await?;
+		}
+		Ok(temp_path)
+	}
+
+	/// A small utility function to join many paths into a single path effeciently.
+	#[must_use]
+	fn join_many<PathTy, IterTy>(base: &Path, parts: IterTy) -> PathBuf
+	where
+		PathTy: AsRef<Path>,
+		IterTy: IntoIterator<Item = PathTy>,
+	{
+		let mut as_owned = PathBuf::from(base);
+		for part in parts {
+			as_owned = as_owned.join(part.as_ref());
+		}
+		as_owned
+	}
+
+	/// Get the current OS's default directory path.
+	///
+	/// For Windows this is: `C:\cafe_sdk`.
+	/// For Unix/BSD likes this is: `/opt/cafe_sdk`
 	#[allow(
     // Not actually unreachable unless on unsupported OS.
     unreachable_code,
@@ -198,92 +265,6 @@ impl HostFilesystem {
 		}
 
 		None
-	}
-
-	/// Serve a file over a tcp stream to SDIO.
-	async fn serve_padded_file_sdio(
-		path: PathBuf,
-		blocks_requested: u32,
-		sender: Sender<Bytes>,
-	) -> Result<(), CatBridgeError> {
-		let mut fd = File::open(path).await.map_err(FSError::IOError)?;
-
-		let mut blocks_as_size = usize::try_from(blocks_requested)
-			.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
-		// Small enough, ready to just be read one-shot.
-		if blocks_as_size <= SDIO_BLOCKS_PER_PACKET {
-			let mut file_buff = BytesMut::with_capacity(blocks_as_size * SDIO_BLOCK_SIZE);
-			let read_bytes = fd
-				.read_buf(&mut file_buff)
-				.await
-				.map_err(FSError::IOError)?;
-			if read_bytes < blocks_as_size * SDIO_BLOCK_SIZE {
-				let padding = BytesMut::zeroed((blocks_as_size * SDIO_BLOCK_SIZE) - read_bytes);
-				file_buff.extend(padding);
-			}
-			sender
-				.send(file_buff.freeze())
-				.await
-				.map_err(NetworkError::SendQueueFailure)?;
-		} else {
-			let mut exhausted_file = false;
-			let mut reader = BufReader::new(fd);
-
-			while blocks_as_size > 0 {
-				let blocks_to_read = std::cmp::min(blocks_as_size, SDIO_BLOCKS_PER_PACKET);
-				let bytes_to_read = blocks_to_read * SDIO_BLOCK_SIZE;
-				let mut file_buff = BytesMut::with_capacity(bytes_to_read);
-
-				let read_bytes = if exhausted_file {
-					0
-				} else {
-					let read_bytes = reader
-						.read_buf(&mut file_buff)
-						.await
-						.map_err(FSError::IOError)?;
-					if read_bytes == 0 {
-						exhausted_file = true;
-					}
-					read_bytes
-				};
-
-				if read_bytes < bytes_to_read {
-					let padding = BytesMut::zeroed(bytes_to_read - read_bytes);
-					file_buff.extend(padding);
-				}
-
-				sender
-					.send(file_buff.freeze())
-					.await
-					.map_err(NetworkError::SendQueueFailure)?;
-				blocks_as_size -= blocks_to_read;
-			}
-		}
-
-		Ok(())
-	}
-
-	/// Serve totally empty zero'd blocks.
-	async fn serve_zeroed_blocks(
-		blocks_requested: u32,
-		sender: Sender<Bytes>,
-	) -> Result<(), CatBridgeError> {
-		let mut blocks_as_size = usize::try_from(blocks_requested)
-			.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
-
-		while blocks_as_size > 0 {
-			let blocks_to_read = std::cmp::min(blocks_as_size, SDIO_BLOCKS_PER_PACKET);
-			let bytes_to_read = blocks_to_read * SDIO_BLOCK_SIZE;
-
-			let zero_buff = BytesMut::zeroed(bytes_to_read);
-			sender
-				.send(zero_buff.freeze())
-				.await
-				.map_err(NetworkError::SendQueueFailure)?;
-			blocks_as_size -= blocks_to_read;
-		}
-
-		Ok(())
 	}
 }
 

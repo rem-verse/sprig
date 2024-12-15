@@ -4,10 +4,13 @@
 //! of parameters. These values are usually things reachable from other parts
 //! of the MION interface, but are available through the MION too.
 
+mod errors;
 pub mod well_known;
 
+pub use errors::*;
+
 use crate::{
-	errors::{APIError, NetworkError, NetworkParseError},
+	errors::NetworkParseError,
 	mion::proto::parameter::well_known::{index_from_parameter_name, ValuableParameterDump},
 };
 use bytes::{BufMut, Bytes, BytesMut};
@@ -38,13 +41,13 @@ impl From<PacketType> for i32 {
 }
 
 impl TryFrom<i32> for PacketType {
-	type Error = NetworkParseError;
+	type Error = MIONParamProtocolError;
 
 	fn try_from(value: i32) -> Result<Self, Self::Error> {
 		match value {
 			0 => Ok(Self::Read),
 			1 => Ok(Self::Write),
-			_ => Err(NetworkParseError::UnknownParamsPacketType(value)),
+			_ => Err(MIONParamProtocolError::PacketType(value)),
 		}
 	}
 }
@@ -75,20 +78,21 @@ impl Display for MionDumpParameters {
 }
 
 impl TryFrom<Bytes> for MionDumpParameters {
-	type Error = NetworkError;
+	type Error = NetworkParseError;
 
 	fn try_from(packet: Bytes) -> Result<Self, Self::Error> {
 		if packet.len() < 8 {
-			return Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
+			return Err(NetworkParseError::NotEnoughData(
 				"MionDumpParameters",
 				8,
 				packet.len(),
 				packet,
-			)));
+			));
 		}
 		if packet.len() > 8 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnexpectedTrailer("MionDumpParameters", packet.slice(8..)),
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"MionDumpParameters",
+				packet.slice(8..),
 			));
 		}
 
@@ -96,12 +100,10 @@ impl TryFrom<Bytes> for MionDumpParameters {
 		// and no error status so 4 0's for length after.
 		let static_bytes: &'static [u8] = &[0_u8, 0, 0, 0, 0, 0, 0, 0];
 		if packet != static_bytes {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::PacketDoesntMatchStaticPayload(
-					"MionDumpParameters",
-					static_bytes,
-					packet,
-				),
+			return Err(NetworkParseError::DoesntMatchStaticPayload(
+				"MionDumpParameters",
+				static_bytes,
+				packet,
 			));
 		}
 
@@ -140,10 +142,10 @@ impl DumpedMionParameters {
 	/// ## Errors
 	///
 	/// - If the name of this parameter is not known.
-	pub fn get_parameter_by_name(&self, name: &str) -> Result<u8, APIError> {
+	pub fn get_parameter_by_name(&self, name: &str) -> Result<u8, MIONParameterAPIError> {
 		index_from_parameter_name(name)
 			.map(|index| self.parameters[index])
-			.ok_or_else(|| APIError::MIONParameterNameNotKnown(name.to_owned()))
+			.ok_or_else(|| MIONParameterAPIError::NameNotKnown(name.to_owned()))
 	}
 
 	/// Get a parameter by a particular index.
@@ -151,29 +153,30 @@ impl DumpedMionParameters {
 	/// ## Errors
 	///
 	/// - If the index is not within the range of valid parameters.
-	pub fn get_parameter_by_index(&self, index: usize) -> Result<u8, APIError> {
+	pub fn get_parameter_by_index(&self, index: usize) -> Result<u8, MIONParameterAPIError> {
 		if index > 511 {
-			return Err(APIError::MIONParameterNotInRage(index));
+			return Err(MIONParameterAPIError::NotInRange(index));
 		}
 		Ok(self.parameters[index])
 	}
 }
 
 impl TryFrom<Bytes> for DumpedMionParameters {
-	type Error = NetworkError;
+	type Error = NetworkParseError;
 
 	fn try_from(packet: Bytes) -> Result<Self, Self::Error> {
 		if packet.len() < 520 {
-			return Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
+			return Err(NetworkParseError::NotEnoughData(
 				"DumpedMionParameters",
 				520,
 				packet.len(),
 				packet,
-			)));
+			));
 		}
 		if packet.len() > 520 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnexpectedTrailer("DumpedMionParameters", packet.slice(520..)),
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"DumpedMionParameters",
+				packet.slice(520..),
 			));
 		}
 
@@ -182,15 +185,11 @@ impl TryFrom<Bytes> for DumpedMionParameters {
 			header[0], header[1], header[2], header[3],
 		]))?;
 		if packet_type != PacketType::Read {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnknownParamsPacketType(i32::from(packet_type)),
-			));
+			return Err(MIONParamProtocolError::PacketType(i32::from(packet_type)).into());
 		}
 		let size_or_error = i32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 		if size_or_error != 512 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::ParamsPacketErrorCode(size_or_error),
-			));
+			return Err(MIONParamProtocolError::ErrorCode(size_or_error).into());
 		}
 		let parameters = packet.slice(8..);
 
@@ -255,9 +254,9 @@ impl SetMionParameters {
 	/// ## Errors
 	///
 	/// - If the `parameters` argument is not exactly 512 bytes long.
-	pub fn new(parameters: Bytes) -> Result<Self, APIError> {
+	pub fn new(parameters: Bytes) -> Result<Self, MIONParameterAPIError> {
 		if parameters.len() != 512 {
-			return Err(APIError::MIONParameterBodyNotCorrectLength(
+			return Err(MIONParameterAPIError::BodyNotCorrectLength(
 				parameters.len(),
 			));
 		}
@@ -276,10 +275,10 @@ impl SetMionParameters {
 	/// ## Errors
 	///
 	/// - If the name of this parameter is not known.
-	pub fn get_parameter_by_name(&self, name: &str) -> Result<u8, APIError> {
+	pub fn get_parameter_by_name(&self, name: &str) -> Result<u8, MIONParameterAPIError> {
 		index_from_parameter_name(name)
 			.map(|index| self.parameters[index])
-			.ok_or_else(|| APIError::MIONParameterNameNotKnown(name.to_owned()))
+			.ok_or_else(|| MIONParameterAPIError::NameNotKnown(name.to_owned()))
 	}
 
 	/// Get a parameter by a particular index.
@@ -287,29 +286,30 @@ impl SetMionParameters {
 	/// ## Errors
 	///
 	/// - If the index is not within the range of valid parameters.
-	pub fn get_parameter_by_index(&self, index: usize) -> Result<u8, APIError> {
+	pub fn get_parameter_by_index(&self, index: usize) -> Result<u8, MIONParameterAPIError> {
 		if index > 511 {
-			return Err(APIError::MIONParameterNotInRage(index));
+			return Err(MIONParameterAPIError::NotInRange(index));
 		}
 		Ok(self.parameters[index])
 	}
 }
 
 impl TryFrom<Bytes> for SetMionParameters {
-	type Error = NetworkError;
+	type Error = NetworkParseError;
 
 	fn try_from(packet: Bytes) -> Result<Self, Self::Error> {
 		if packet.len() < 520 {
-			return Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
+			return Err(NetworkParseError::NotEnoughData(
 				"SetMionParameters",
 				520,
 				packet.len(),
 				packet,
-			)));
+			));
 		}
 		if packet.len() > 520 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnexpectedTrailer("SetMionParameters", packet.slice(520..)),
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"SetMionParameters",
+				packet.slice(520..),
 			));
 		}
 
@@ -318,15 +318,11 @@ impl TryFrom<Bytes> for SetMionParameters {
 			header[0], header[1], header[2], header[3],
 		]))?;
 		if packet_type != PacketType::Write {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnknownParamsPacketType(i32::from(packet_type)),
-			));
+			return Err(MIONParamProtocolError::PacketType(i32::from(packet_type)).into());
 		}
 		let size_or_error_code = i32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 		if size_or_error_code != 512 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::ParamsPacketErrorCode(size_or_error_code),
-			));
+			return Err(MIONParamProtocolError::ErrorCode(size_or_error_code).into());
 		}
 		let parameters = packet.slice(8..);
 
@@ -380,23 +376,21 @@ impl SetMionParametersResponse {
 }
 
 impl TryFrom<Bytes> for SetMionParametersResponse {
-	type Error = NetworkError;
+	type Error = NetworkParseError;
 
 	fn try_from(packet: Bytes) -> Result<Self, Self::Error> {
 		if packet.len() < 12 {
-			return Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
+			return Err(NetworkParseError::NotEnoughData(
 				"SetMionParametersResponse",
 				12,
 				packet.len(),
 				packet,
-			)));
+			));
 		}
 		if packet.len() > 12 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnexpectedTrailer(
-					"SetMionParametersResponse",
-					packet.slice(12..),
-				),
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"SetMionParametersResponse",
+				packet.slice(12..),
 			));
 		}
 
@@ -405,15 +399,11 @@ impl TryFrom<Bytes> for SetMionParametersResponse {
 			header[0], header[1], header[2], header[3],
 		]))?;
 		if packet_type != PacketType::Write {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnknownParamsPacketType(i32::from(packet_type)),
-			));
+			return Err(MIONParamProtocolError::PacketType(i32::from(packet_type)).into());
 		}
 		let size_or_status = i32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 		if size_or_status != 4 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::ParamsPacketErrorCode(size_or_status),
-			));
+			return Err(MIONParamProtocolError::ErrorCode(size_or_status).into());
 		}
 
 		let body = packet.slice(8..);
@@ -545,51 +535,36 @@ mod unit_tests {
 			let short_data = vec![0x0; 4];
 			let too_much_data = vec![0x0; 16];
 
-			match MionDumpParameters::try_from(Bytes::from(short_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::NotEnoughData(
-							"MionDumpParameters",
-							8,
-							short_data.len(),
-							Bytes::from(short_data),
-						),
-					);
-				}
-				val => panic!("MionDumpParameters parsing too short of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				MionDumpParameters::try_from(Bytes::from(short_data.clone())),
+				Err(NetworkParseError::NotEnoughData(
+					"MionDumpParameters",
+					8,
+					short_data.len(),
+					Bytes::from(short_data),
+				)),
+			);
 
-			match MionDumpParameters::try_from(Bytes::from(too_much_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnexpectedTrailer(
-							"MionDumpParameters",
-							Bytes::from(too_much_data).slice(8..),
-						)
-					);
-				}
-				val => panic!("MionDumpParameters parsing too long of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				MionDumpParameters::try_from(Bytes::from(too_much_data.clone())),
+				Err(NetworkParseError::UnexpectedTrailer(
+					"MionDumpParameters",
+					Bytes::from(too_much_data).slice(8..),
+				)),
+			);
 		}
 
 		// Invalid packet contents
 		{
 			let invalid_static_packet = vec![0x0, 0x0, 0x0, 0x1, 0x0, 0x0, 0x0, 0x0];
-			match MionDumpParameters::try_from(Bytes::from(invalid_static_packet.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::PacketDoesntMatchStaticPayload(
-							"MionDumpParameters",
-							&[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0],
-							Bytes::from(invalid_static_packet),
-						)
-					);
-				}
-				val => panic!("MionDumpParameters parsing too long of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				MionDumpParameters::try_from(Bytes::from(invalid_static_packet.clone())),
+				Err(NetworkParseError::DoesntMatchStaticPayload(
+					"MionDumpParameters",
+					&[0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0],
+					Bytes::from(invalid_static_packet),
+				)),
+			);
 		}
 	}
 
@@ -600,33 +575,23 @@ mod unit_tests {
 			let short_data = vec![0x0; 519];
 			let too_long_data = vec![0x0; 521];
 
-			match DumpedMionParameters::try_from(Bytes::from(short_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::NotEnoughData(
-							"DumpedMionParameters",
-							520,
-							short_data.len(),
-							Bytes::from(short_data),
-						),
-					);
-				}
-				val => panic!("DumpedMionParameters parsing too short of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				DumpedMionParameters::try_from(Bytes::from(short_data.clone())),
+				Err(NetworkParseError::NotEnoughData(
+					"DumpedMionParameters",
+					520,
+					short_data.len(),
+					Bytes::from(short_data),
+				)),
+			);
 
-			match DumpedMionParameters::try_from(Bytes::from(too_long_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnexpectedTrailer(
-							"DumpedMionParameters",
-							Bytes::from(too_long_data).slice(520..),
-						),
-					);
-				}
-				val => panic!("DumpedMionParameters parsing too long of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				DumpedMionParameters::try_from(Bytes::from(too_long_data.clone())),
+				Err(NetworkParseError::UnexpectedTrailer(
+					"DumpedMionParameters",
+					Bytes::from(too_long_data).slice(520..),
+				)),
+			);
 		}
 
 		// Invalid Command
@@ -636,30 +601,20 @@ mod unit_tests {
 			data[0] = 11;
 			let packet_with_bad_data = Bytes::from(data);
 
-			match DumpedMionParameters::try_from(packet_with_bad_data) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnknownParamsPacketType(11),
-					);
-				}
-				val => panic!("DumpedMionParameters parsing packet with bad packettype was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				DumpedMionParameters::try_from(packet_with_bad_data),
+				Err(MIONParamProtocolError::PacketType(11).into()),
+			);
 
 			// Write request, isn't valid either.
 			let mut data = vec![0x0; 520];
 			data[0] = 1;
 			let packet_with_bad_data = Bytes::from(data);
 
-			match DumpedMionParameters::try_from(packet_with_bad_data) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnknownParamsPacketType(1),
-					);
-				}
-				val => panic!("DumpedMionParameters parsing packet with incorrect packettype was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				DumpedMionParameters::try_from(packet_with_bad_data),
+				Err(MIONParamProtocolError::PacketType(1).into(),),
+			);
 		}
 
 		// Real life packet
@@ -707,14 +662,14 @@ mod unit_tests {
 		);
 		assert_eq!(
 			parsed_packet.get_parameter_by_name("512"),
-			Err(APIError::MIONParameterNameNotKnown("512".to_owned())),
+			Err(MIONParameterAPIError::NameNotKnown("512".to_owned())),
 		);
 
 		assert_eq!(parsed_packet.get_parameter_by_index(511), Ok(0xFF));
 		assert_eq!(
 			// 512 is out of bounds as we start counting at 0.
 			parsed_packet.get_parameter_by_index(512),
-			Err(APIError::MIONParameterNotInRage(512)),
+			Err(MIONParameterAPIError::NotInRange(512)),
 		);
 	}
 
@@ -725,33 +680,23 @@ mod unit_tests {
 			let short_data = vec![0x0; 519];
 			let too_long_data = vec![0x0; 521];
 
-			match SetMionParameters::try_from(Bytes::from(short_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::NotEnoughData(
-							"SetMionParameters",
-							520,
-							short_data.len(),
-							Bytes::from(short_data),
-						),
-					);
-				}
-				val => panic!("SetMionParameters parsing too short of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParameters::try_from(Bytes::from(short_data.clone())),
+				Err(NetworkParseError::NotEnoughData(
+					"SetMionParameters",
+					520,
+					short_data.len(),
+					Bytes::from(short_data),
+				)),
+			);
 
-			match SetMionParameters::try_from(Bytes::from(too_long_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnexpectedTrailer(
-							"SetMionParameters",
-							Bytes::from(too_long_data).slice(520..),
-						),
-					);
-				}
-				val => panic!("SetMionParameters parsing too long of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParameters::try_from(Bytes::from(too_long_data.clone())),
+				Err(NetworkParseError::UnexpectedTrailer(
+					"SetMionParameters",
+					Bytes::from(too_long_data).slice(520..),
+				)),
+			);
 		}
 
 		// Invalid Command
@@ -761,30 +706,20 @@ mod unit_tests {
 			data[0] = 11;
 			let packet_with_bad_data = Bytes::from(data);
 
-			match SetMionParameters::try_from(packet_with_bad_data) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnknownParamsPacketType(11),
-					);
-				}
-				val => panic!("SetMionParameters parsing packet with bad packettype was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParameters::try_from(packet_with_bad_data),
+				Err(MIONParamProtocolError::PacketType(11).into()),
+			);
 
 			// Write request, isn't valid either.
 			let mut data = vec![0x0; 520];
 			data[0] = 0;
 			let packet_with_bad_data = Bytes::from(data);
 
-			match SetMionParameters::try_from(packet_with_bad_data) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnknownParamsPacketType(0),
-					);
-				}
-				val => panic!("SetMionParameters parsing packet with incorrect packettype was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParameters::try_from(packet_with_bad_data),
+				Err(MIONParamProtocolError::PacketType(0).into()),
+			);
 		}
 
 		// Real life packet
@@ -819,7 +754,7 @@ mod unit_tests {
 			// Invalid parameters length
 			assert_eq!(
 				SetMionParameters::new(Bytes::from(&REAL_LIFE_DUMPED_MION_PARAMETERS_PACKET[7..])),
-				Err(APIError::MIONParameterBodyNotCorrectLength(513)),
+				Err(MIONParameterAPIError::BodyNotCorrectLength(513)),
 			);
 		}
 
@@ -851,14 +786,14 @@ mod unit_tests {
 			);
 			assert_eq!(
 				parsed_packet.get_parameter_by_name("512"),
-				Err(APIError::MIONParameterNameNotKnown("512".to_owned())),
+				Err(MIONParameterAPIError::NameNotKnown("512".to_owned())),
 			);
 
 			assert_eq!(parsed_packet.get_parameter_by_index(511), Ok(69));
 			assert_eq!(
 				// 512 is out of bounds as we start counting at 0.
 				parsed_packet.get_parameter_by_index(512),
-				Err(APIError::MIONParameterNotInRage(512)),
+				Err(MIONParameterAPIError::NotInRange(512)),
 			);
 		}
 	}
@@ -870,92 +805,61 @@ mod unit_tests {
 			let short_data = vec![0x0; 11];
 			let too_long_data = vec![0x0; 13];
 
-			match SetMionParametersResponse::try_from(Bytes::from(short_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::NotEnoughData(
-							"SetMionParametersResponse",
-							12,
-							short_data.len(),
-							Bytes::from(short_data),
-						),
-					);
-				}
-				val => panic!("SetMionParametersResponse parsing too short of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParametersResponse::try_from(Bytes::from(short_data.clone())),
+				Err(NetworkParseError::NotEnoughData(
+					"SetMionParametersResponse",
+					12,
+					short_data.len(),
+					Bytes::from(short_data),
+				)),
+			);
 
-			match SetMionParametersResponse::try_from(Bytes::from(too_long_data.clone())) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnexpectedTrailer(
-							"SetMionParametersResponse",
-							Bytes::from(too_long_data).slice(12..),
-						),
-					);
-				}
-				val => panic!("SetMionParametersResponse parsing too long of data was successful or not a parse error:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParametersResponse::try_from(Bytes::from(too_long_data.clone())),
+				Err(NetworkParseError::UnexpectedTrailer(
+					"SetMionParametersResponse",
+					Bytes::from(too_long_data).slice(12..),
+				)),
+			);
 		}
 
 		// unknown packet type
 		{
 			// Bogus Packet Type
-			match SetMionParametersResponse::try_from(Bytes::from(vec![
-				// Packet type -- bogus
-				0x11, 0x0, 0x0, 0x0,
-				// Body length.
-				0x4, 0x0, 0x0, 0x0,
-				// Return Code
-				0x0, 0x0, 0x0, 0x0,
-			])) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnknownParamsPacketType(0x11),
-					);
-				}
-				val => panic!("SetMionParametersResponse parsing bogus packet type did not error correctly:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParametersResponse::try_from(Bytes::from(vec![
+					// Packet type -- bogus
+					0x11, 0x0, 0x0, 0x0, // Body length.
+					0x4, 0x0, 0x0, 0x0, // return code.
+					0x0, 0x0, 0x0, 0x0,
+				])),
+				Err(MIONParamProtocolError::PacketType(0x11).into()),
+			);
 
 			// Wrong Packet Type -- read instead of write
-			match SetMionParametersResponse::try_from(Bytes::from(vec![
-				// Packet type -- read
-				0x0, 0x0, 0x0, 0x0,
-				// Body length.
-				0x4, 0x0, 0x0, 0x0,
-				// Return Code
-				0x0, 0x0, 0x0, 0x0,
-			])) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::UnknownParamsPacketType(0),
-					);
-				}
-				val => panic!("SetMionParametersResponse parsing bogus packet type did not error correctly:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParametersResponse::try_from(Bytes::from(vec![
+					// Packet type -- read
+					0x0, 0x0, 0x0, 0x0, // Body length.
+					0x4, 0x0, 0x0, 0x0, // Return Code
+					0x0, 0x0, 0x0, 0x0,
+				])),
+				Err(MIONParamProtocolError::PacketType(0).into()),
+			);
 		}
 
 		// Bad Size/Status
 		{
-			match SetMionParametersResponse::try_from(Bytes::from(vec![
-				// Packet type -- write
-				0x1, 0x0, 0x0, 0x0,
-				// bogus size.
-				0x5, 0x0, 0x0, 0x0,
-				// return code
-				0x0, 0x0, 0x0, 0x0
-			])) {
-				Err(NetworkError::ParseError(parse_val)) => {
-					assert_eq!(
-						parse_val,
-						NetworkParseError::ParamsPacketErrorCode(5),
-					);
-				}
-				val => panic!("SetMionParametersResponse parsing bogus size/error_code did not error correctly:\n\n {val:?}"),
-			}
+			assert_eq!(
+				SetMionParametersResponse::try_from(Bytes::from(vec![
+					// Packet type -- write
+					0x1, 0x0, 0x0, 0x0, // bogus size.
+					0x5, 0x0, 0x0, 0x0, // return code
+					0x0, 0x0, 0x0, 0x0,
+				])),
+				Err(MIONParamProtocolError::ErrorCode(5).into(),),
+			);
 		}
 
 		// Successful -- includes roundtrip

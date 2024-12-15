@@ -1,4 +1,4 @@
-use crate::errors::APIError;
+use crate::mion::cgis::MIONCGIApiError;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// The type of operations you can do on the `status.cgi` page.
@@ -28,12 +28,12 @@ impl From<StatusOperation> for &str {
 impl TryFrom<&str> for StatusOperation {
 	// This type is an API Error, because we don't ever deserialize it from the
 	// network.
-	type Error = APIError;
+	type Error = MIONCGIApiError;
 
 	fn try_from(value: &str) -> Result<Self, Self::Error> {
 		match value {
 			"eject" => Ok(Self::Eject),
-			val => Err(APIError::UnknownStatusOperation(val.to_owned())),
+			val => Err(MIONCGIApiError::UnknownStatusOperation(val.to_owned())),
 		}
 	}
 }

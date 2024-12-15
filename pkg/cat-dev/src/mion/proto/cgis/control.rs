@@ -1,4 +1,4 @@
-use crate::errors::APIError;
+use crate::mion::cgis::MIONCGIApiError;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// The type of operations you can do on the `control.cgi` page.
@@ -34,7 +34,7 @@ impl From<ControlOperation> for &str {
 impl TryFrom<&str> for ControlOperation {
 	// This type is an API Error, because we don't ever deserialize it from the
 	// network.
-	type Error = APIError;
+	type Error = MIONCGIApiError;
 
 	fn try_from(value: &str) -> Result<Self, Self::Error> {
 		match value {
@@ -42,7 +42,7 @@ impl TryFrom<&str> for ControlOperation {
 			"power_on_v2" => Ok(Self::PowerOnV2),
 			"get_info" => Ok(Self::GetInfo),
 			"set_param" => Ok(Self::SetParam),
-			val => Err(APIError::UnknownControlOperation(val.to_owned())),
+			val => Err(MIONCGIApiError::UnknownControlOperation(val.to_owned())),
 		}
 	}
 }

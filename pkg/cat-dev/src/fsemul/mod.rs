@@ -1,18 +1,25 @@
 //! Code related to filesystem emulation.
 //!
-//! It should be noted though, that `FSEMul`, is much more than just the
-//! actual PCFS process, and even that has multiple modes (e.g. SDIO, SATA,
-//! etc.).
+//! It should be noted there are two common terms when talking about file
+//! system emulation.
+//!
+//! - `FSEmul` is the core process that talks with the MION, and talks with
+//!   the MION to implement effectively all of the actual protocols.
+//! - `PCFS`/`PCFSServer` are tools built _on-top_ of `FSEmul`, and contain
+//!   their own protocols to implement a filesystem on your PC.
 //!
 //! This is meant to be an all encompassing set of utilities related to
-//! file-system emulation.
+//! file-system emulation, and as a result covers _both_ `FSEmul` & `PCFS`.
 
 pub mod atapi;
 pub mod bsf;
+pub mod dlf;
+pub mod errors;
 mod host_filesystem;
+pub mod pcfs;
 pub mod sdio;
 
-use crate::errors::FSError;
+use crate::{errors::FSError, fsemul::errors::FSEmulFSError};
 use configparser::ini::Ini;
 use std::path::PathBuf;
 use tracing::warn;
@@ -45,7 +52,7 @@ impl FsEmulConfig {
 	/// - If we cannot get the default host path for your OS.
 	/// - Any error case from [`FSEmulConfig::load_explicit_path`].
 	pub async fn load() -> Result<Self, FSError> {
-		let default_host_path = Self::get_default_host_path().ok_or(FSError::CantFindFsEmulPath)?;
+		let default_host_path = Self::get_default_host_path().ok_or(FSEmulFSError::CantFindPath)?;
 		Self::load_explicit_path(default_host_path).await
 	}
 

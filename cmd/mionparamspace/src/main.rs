@@ -13,8 +13,12 @@ use crate::knobs::cli::CliOpts;
 use cat_dev::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
 	mion::{
+		errors::MIONProtocolError,
 		parameter::{get_parameters, set_parameters_and_get_changed_values},
-		proto::parameter::{well_known::ParameterLocationSpecification, DumpedMionParameters},
+		proto::parameter::{
+			well_known::ParameterLocationSpecification, DumpedMionParameters,
+			MIONParamProtocolError,
+		},
 	},
 };
 use std::{env::args, net::Ipv4Addr};
@@ -110,21 +114,22 @@ fn do_set(ip: Ipv4Addr, potential_offset: Option<u64>, set_to_value: Option<u64>
 			std::process::exit(7);
 		}
 		Err(cause) => {
-			let opt_error_code = match cause {
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::NotEnoughData(_name, _needed, got, _data),
-				)) => i32::try_from(got).ok(),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnexpectedTrailer(_name, trailer),
-				)) => i32::try_from(trailer.len() + 12).ok(),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnknownParamsPacketType(typ),
-				)) => Some(typ),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::ParamsPacketErrorCode(ec),
-				)) => Some(ec),
-				_ => None,
-			};
+			let opt_error_code =
+				match cause {
+					CatBridgeError::Network(NetworkError::Parse(
+						NetworkParseError::NotEnoughData(_name, _needed, got, _data),
+					)) => i32::try_from(got).ok(),
+					CatBridgeError::Network(NetworkError::Parse(
+						NetworkParseError::UnexpectedTrailer(_name, trailer),
+					)) => i32::try_from(trailer.len() + 12).ok(),
+					CatBridgeError::Network(NetworkError::Parse(NetworkParseError::MION(
+						MIONProtocolError::Params(MIONParamProtocolError::PacketType(typ)),
+					))) => Some(typ),
+					CatBridgeError::Network(NetworkError::Parse(NetworkParseError::MION(
+						MIONProtocolError::Params(MIONParamProtocolError::ErrorCode(ec)),
+					))) => Some(ec),
+					_ => None,
+				};
 
 			if let Some(ec) = opt_error_code {
 				print!("mionparamspace: ERROR: get response data len error({ec})\nERROR!");
@@ -172,21 +177,22 @@ fn do_get_parameters(ip: Ipv4Addr) -> DumpedMionParameters {
 	match runtime.block_on(get_parameters(ip, None, None)) {
 		Ok(val) => val,
 		Err(cause) => {
-			let opt_error_code = match cause {
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::NotEnoughData(_name, _needed, got, _data),
-				)) => i32::try_from(got).ok(),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnexpectedTrailer(_name, trailer),
-				)) => i32::try_from(trailer.len() + 12).ok(),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnknownParamsPacketType(typ),
-				)) => Some(typ),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::ParamsPacketErrorCode(ec),
-				)) => Some(ec),
-				_ => None,
-			};
+			let opt_error_code =
+				match cause {
+					CatBridgeError::Network(NetworkError::Parse(
+						NetworkParseError::NotEnoughData(_name, _needed, got, _data),
+					)) => i32::try_from(got).ok(),
+					CatBridgeError::Network(NetworkError::Parse(
+						NetworkParseError::UnexpectedTrailer(_name, trailer),
+					)) => i32::try_from(trailer.len() + 12).ok(),
+					CatBridgeError::Network(NetworkError::Parse(NetworkParseError::MION(
+						MIONProtocolError::Params(MIONParamProtocolError::PacketType(typ)),
+					))) => Some(typ),
+					CatBridgeError::Network(NetworkError::Parse(NetworkParseError::MION(
+						MIONProtocolError::Params(MIONParamProtocolError::ErrorCode(ec)),
+					))) => Some(ec),
+					_ => None,
+				};
 
 			if let Some(ec) = opt_error_code {
 				print!("mionparamspace: ERROR: get response data len error({ec})\nERROR!");

@@ -4,10 +4,10 @@
 //! the setup page on the actual main page of the MION dashboard.
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
+	errors::NetworkError,
 	mion::{
 		cgis::{do_simple_request, parse_result_from_body},
-		proto::cgis::StatusOperation,
+		proto::cgis::{MIONCGIErrors, StatusOperation},
 	},
 };
 use reqwest::{Client, Method};
@@ -24,10 +24,7 @@ use std::net::Ipv4Addr;
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn set_disc_eject_state(
-	mion_ip: Ipv4Addr,
-	disc_in: bool,
-) -> Result<bool, CatBridgeError> {
+pub async fn set_disc_eject_state(mion_ip: Ipv4Addr, disc_in: bool) -> Result<bool, NetworkError> {
 	set_disc_eject_state_with_raw_client(&Client::default(), mion_ip, disc_in).await
 }
 
@@ -45,7 +42,7 @@ pub async fn set_disc_eject_state_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	disc_in: bool,
-) -> Result<bool, CatBridgeError> {
+) -> Result<bool, NetworkError> {
 	let body_as_string = do_raw_status_request(
 		client,
 		mion_ip,
@@ -57,7 +54,10 @@ pub async fn set_disc_eject_state_with_raw_client(
 	)
 	.await?;
 
-	parse_result_from_body(&body_as_string, Into::<&str>::into(StatusOperation::Eject))
+	Ok(parse_result_from_body(
+		&body_as_string,
+		Into::<&str>::into(StatusOperation::Eject),
+	)?)
 }
 
 /// Perform a raw operation on the MION board's `/mion/status.cgi` page.
@@ -74,7 +74,7 @@ pub async fn do_raw_status_request<'key, 'value, UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<String, CatBridgeError>
+) -> Result<String, NetworkError>
 where
 	UrlEncodableType: Serialize,
 {
@@ -84,8 +84,7 @@ where
 		format!("http://{mion_ip}/mion/status.cgi"),
 		Some(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)
-				.map_err(NetworkError::ParseError)?,
+				.map_err(MIONCGIErrors::FormDataEncodeError)?,
 		),
 	)
 	.await

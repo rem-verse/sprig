@@ -17,6 +17,7 @@ const AUTHZ_HEADER: &str = "bWlvbjovTXVsdGlfSS9PX05ldHdvcmsv";
 mod control;
 mod dump_eeprom;
 mod dump_memory;
+mod errors;
 mod setup;
 mod signal_get;
 mod status;
@@ -25,12 +26,16 @@ mod update;
 pub use control::*;
 pub use dump_eeprom::*;
 pub use dump_memory::*;
+pub use errors::*;
 pub use setup::*;
 pub use signal_get::*;
 pub use status::*;
 pub use update::*;
 
-use crate::errors::{CatBridgeError, NetworkError, NetworkParseError};
+use crate::{
+	errors::{NetworkError, NetworkParseError},
+	mion::proto::cgis::MIONCGIErrors,
+};
 use bytes::Bytes;
 use reqwest::{Body, Client, Method, Response, Version};
 use tracing::{field::valuable, warn};
@@ -55,7 +60,7 @@ async fn do_simple_request<BodyTy>(
 	method: Method,
 	url: String,
 	body: Option<BodyTy>,
-) -> Result<String, CatBridgeError>
+) -> Result<String, NetworkError>
 where
 	BodyTy: Into<Body>,
 {
@@ -69,13 +74,9 @@ where
 		req = req.body(body);
 	}
 	let response_body =
-		assert_status_and_read_body(200, req.send().await.map_err(NetworkError::ReqwestError)?)
-			.await?;
+		assert_status_and_read_body(200, req.send().await.map_err(NetworkError::HTTP)?).await?;
 
-	String::from_utf8(response_body.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)
-		.map_err(CatBridgeError::NetworkError)
+	Ok(String::from_utf8(response_body.into()).map_err(NetworkParseError::Utf8Expected)?)
 }
 
 /// Assert that a response status code is a specific code, and get the body.
@@ -86,40 +87,33 @@ where
 async fn assert_status_and_read_body(
 	needed_status: u16,
 	response: Response,
-) -> Result<Bytes, CatBridgeError> {
+) -> Result<Bytes, NetworkError> {
 	let status = response.status().as_u16();
-	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
+	let body_result = response.bytes().await.map_err(NetworkError::HTTP);
 	if status != needed_status {
 		if let Ok(body) = body_result {
-			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCode(status, body),
-			)));
+			return Err(MIONCGIErrors::UnexpectedStatusCode(status, body).into());
 		}
 
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::UnexpectedStatusCodeNoBody(status),
-		)));
+		return Err(MIONCGIErrors::UnexpectedStatusCodeNoBody(status).into());
 	}
 
-	Ok(body_result?)
+	body_result
 }
 
 /// Parse out a result status from an HTML page.
 ///
 /// If your page ends up rendering up results like: `RESULT:OK` when things are
 /// successful, you can use this method to get that result information.
-fn parse_result_from_body(body: &str, operation_name: &str) -> Result<bool, CatBridgeError> {
-	let start_tag_location = body.find("<body>").map(|num| num + 6).ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
+fn parse_result_from_body(body: &str, operation_name: &str) -> Result<bool, MIONCGIErrors> {
+	let start_tag_location = body
+		.find("<body>")
+		.map(|num| num + 6)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body.to_owned()))?;
 	let body_without_start_tag = body.split_at(start_tag_location).1;
-	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
+	let end_tag_location = body_without_start_tag
+		.find("</body>")
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body.to_owned()))?;
 	let just_inner_body = body_without_start_tag.split_at(end_tag_location).0;
 	let without_newlines_or_extra_tags = just_inner_body
 		.replace('\n', "")

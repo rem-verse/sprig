@@ -53,7 +53,7 @@ use crate::{
 		argv_helpers::{
 			coalesce_serial_ports, get_host_bind_address, get_targeted_bridge_ip,
 			get_targeted_bridge_mac, get_targeted_bridge_name, lease_fsemul_config_optionally,
-			lease_host_file_system, spawn_serial_log_task,
+			lease_host_file_system,
 		},
 		boot::{
 			atapi::serve_atapi,
@@ -62,7 +62,7 @@ use crate::{
 		},
 	},
 	exit_codes::BOOT_CGI_FAILURE,
-	knobs::env::PCFS_IS_SATA,
+	knobs::{cli::SharedSerialPortFlags, env::PCFS_IS_SATA},
 	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
@@ -79,7 +79,7 @@ use tracing::{error, field::valuable, info, warn};
 pub async fn handle_boot(
 	disable_sata: bool,
 	no_pcfs: bool,
-	serial_port_args: (Option<PathBuf>, Option<PathBuf>),
+	serial_port_args: (SharedSerialPortFlags, Option<&PathBuf>),
 	take_ownership: bool,
 ) {
 	let bridge_ip = get_targeted_bridge_ip().await;
@@ -88,12 +88,9 @@ pub async fn handle_boot(
 	let host_ip = get_host_bind_address().await;
 
 	let is_modern_bridge = is_modern_bridge(bridge_ip).await;
-	let mut serial_task_handle = None;
-	if let Some((serial_port, serial_path)) =
-		coalesce_serial_ports(serial_port_args.0.as_ref(), serial_port_args.1.as_ref())
-	{
-		serial_task_handle = Some(spawn_serial_log_task(serial_port, serial_path));
-	}
+	let serial_task_handle =
+		coalesce_serial_ports(bridge_ip, &serial_port_args.0, serial_port_args.1).spawn_log_task();
+
 	let (_info_request, setup_params, needs_pcfs) = validate_bridge_ready_for_booting(
 		is_modern_bridge,
 		take_ownership,
@@ -117,6 +114,7 @@ pub async fn handle_boot(
 	let fsemul = lease_fsemul_config_optionally().await;
 	let file_system = lease_host_file_system().await;
 	serve_atapi(
+		file_system,
 		host_ip,
 		fsemul.and_then(|emul| emul.get_atapi_emulation_port()),
 		setup_params
@@ -135,7 +133,7 @@ async fn boot_modern_without_pcfs(
 	needs_pcfs: bool,
 	bridge_ip: Ipv4Addr,
 	host_ip: Option<Ipv4Addr>,
-	serial_handle: Option<JoinHandle<()>>,
+	serial_handle: JoinHandle<()>,
 ) {
 	if needs_pcfs {
 		if SHOULD_LOG_JSON() {
@@ -156,9 +154,7 @@ async fn boot_modern_without_pcfs(
 		Ok(result_code) => {
 			if result_code {
 				info!("Successfully powered on MION!");
-				if let Some(hndl) = serial_handle {
-					_ = hndl.await;
-				}
+				_ = serial_handle.await;
 			} else {
 				error!("Failed to boot cat-dev bridge! Please reach out for support!");
 				std::process::exit(BOOT_CGI_FAILURE);
@@ -195,7 +191,7 @@ async fn boot_modern_without_pcfs(
 /// Legacy mion fw's do not have access to the newer APIs that just let us turn
 /// off emulation temporarily, or get info, or do any "smart" things. However,
 /// hey we can still turn these things on.
-async fn boot_legacy_without_pcfs(bridge_ip: Ipv4Addr, serial_handle: Option<JoinHandle<()>>) {
+async fn boot_legacy_without_pcfs(bridge_ip: Ipv4Addr, serial_handle: JoinHandle<()>) {
 	// We are about to turn on a cat-dev without providing any "niceities" of
 	// PCFS. Including the Disc Emulator.
 	//
@@ -208,9 +204,7 @@ async fn boot_legacy_without_pcfs(bridge_ip: Ipv4Addr, serial_handle: Option<Joi
 		Ok(result_code) => {
 			if result_code {
 				info!("Successfully powered on MION!");
-				if let Some(hndl) = serial_handle {
-					_ = hndl.await;
-				}
+				_ = serial_handle.await;
 			} else {
 				error!("Failed to boot cat-dev bridge! Please reach out for support!");
 				std::process::exit(BOOT_CGI_FAILURE);

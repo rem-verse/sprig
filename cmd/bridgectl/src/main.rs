@@ -16,7 +16,7 @@ use crate::{
 	commands::{
 		argv_helpers::{
 			initialize_fsemul_config, initialize_host_bridge, initialize_scan_flags,
-			initialize_shared_server_flags, target_bridge,
+			initialize_shared_server_flags, should_interpret_arg_as_port_path, target_bridge,
 		},
 		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
 		handle_get_parameters, handle_help, handle_list, handle_list_serial_ports,
@@ -116,8 +116,8 @@ async fn main() {
 			bridge_name_positional,
 			fsemul_flags,
 			shared_server_flags,
-			serial_port_flag,
 			serial_port_positional,
+			shared_serial_port_flags,
 			disable_sata,
 			without_pcfs,
 			take_ownership,
@@ -142,7 +142,7 @@ async fn main() {
 			handle_boot(
 				disable_sata,
 				without_pcfs,
-				(serial_port_flag, positional_for_serial),
+				(shared_serial_port_flags, positional_for_serial.as_ref()),
 				take_ownership,
 			)
 			.await;
@@ -333,10 +333,40 @@ async fn main() {
 			.await;
 		}
 		Subcommands::Tail {
-			serial_port_flag,
-			serial_port_positional,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
+			bridge_name_or_serial_port_path,
+			shared_serial_port_flags,
 		} => {
-			handle_tail(serial_port_flag, serial_port_positional).await;
+			// If a user supplied a positional argument, it may be a PATH, or
+			// a bridge name (to connect on debug out), but cannot be both.
+			//
+			// So we do some seperation here.
+			let interpret_as_path =
+				should_interpret_arg_as_port_path(bridge_name_or_serial_port_path.as_ref());
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			_ = target_bridge(
+				target_flags,
+				if interpret_as_path {
+					None
+				} else {
+					bridge_name_or_serial_port_path.as_deref()
+				},
+				true,
+			)
+			.await;
+
+			handle_tail(
+				if interpret_as_path {
+					bridge_name_or_serial_port_path.map(PathBuf::from)
+				} else {
+					None
+				},
+				shared_serial_port_flags,
+			)
+			.await;
 		}
 	}
 }

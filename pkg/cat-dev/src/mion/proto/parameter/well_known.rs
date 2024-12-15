@@ -1,7 +1,7 @@
 //! Parameters that are well known, and can be referred to by their name
 //! rather than just their index.
 
-use crate::{errors::APIError, mion::proto::control::MIONBootType};
+use crate::mion::proto::{control::MIONBootType, parameter::MIONParameterAPIError};
 use bytes::Bytes;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
@@ -15,25 +15,25 @@ pub enum ParameterLocationSpecification {
 }
 
 impl TryFrom<&str> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: &str) -> Result<Self, Self::Error> {
 		if index_from_parameter_name(value).is_some() {
 			Ok(Self::NameLike(value.to_owned()))
 		} else {
-			Err(APIError::MIONParameterNameNotKnown(value.to_owned()))
+			Err(MIONParameterAPIError::NameNotKnown(value.to_owned()))
 		}
 	}
 }
 impl TryFrom<&String> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: &String) -> Result<Self, Self::Error> {
 		Self::try_from(value.as_str())
 	}
 }
 impl TryFrom<String> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: String) -> Result<Self, Self::Error> {
 		Self::try_from(value.as_str())
@@ -41,13 +41,13 @@ impl TryFrom<String> for ParameterLocationSpecification {
 }
 
 impl TryFrom<u16> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: u16) -> Result<Self, Self::Error> {
 		if value < 512 {
 			Ok(Self::Index(value))
 		} else {
-			Err(APIError::MIONParameterNotInRage(usize::from(value)))
+			Err(MIONParameterAPIError::NotInRange(usize::from(value)))
 		}
 	}
 }
@@ -109,7 +109,7 @@ const PARAMETER_DUMP_FIELDS: &[NamedField<'static>] = &[
 ];
 const KNOWN_INDEXES: &[usize] = &[2_usize, 3_usize, 4_usize, 5_usize];
 pub struct ValuableParameterDump<'value>(pub &'value Bytes);
-impl<'value> Structable for ValuableParameterDump<'value> {
+impl Structable for ValuableParameterDump<'_> {
 	fn definition(&self) -> StructDef<'_> {
 		StructDef::new_static(
 			"ValuableParameterDump",
@@ -117,7 +117,7 @@ impl<'value> Structable for ValuableParameterDump<'value> {
 		)
 	}
 }
-impl<'value> Valuable for ValuableParameterDump<'value> {
+impl Valuable for ValuableParameterDump<'_> {
 	fn as_value(&self) -> valuable::Value<'_> {
 		Value::Structable(self)
 	}

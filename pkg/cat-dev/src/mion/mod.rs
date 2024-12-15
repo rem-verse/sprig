@@ -9,12 +9,14 @@
 
 pub mod cgis;
 pub mod discovery;
+pub mod errors;
 pub mod firmware;
 pub mod parameter;
 pub mod proto;
 
-use crate::errors::{APIError, FSError};
+use crate::errors::FSError;
 use configparser::ini::Ini;
+use errors::MIONAPIError;
 use fnv::FnvHashMap;
 use std::{
 	fmt::{Display, Formatter, Result as FmtResult},
@@ -277,15 +279,15 @@ impl BridgeHostState {
 		&mut self,
 		bridge_name: &str,
 		bridge_ip: Ipv4Addr,
-	) -> Result<(), APIError> {
+	) -> Result<(), MIONAPIError> {
 		if !bridge_name.is_ascii() {
-			return Err(APIError::DeviceNameMustBeAscii);
+			return Err(MIONAPIError::DeviceNameMustBeAscii);
 		}
 		if bridge_name.is_empty() {
-			return Err(APIError::DeviceNameCannotBeEmpty);
+			return Err(MIONAPIError::DeviceNameCannotBeEmpty);
 		}
 		if bridge_name.len() > 255 {
-			return Err(APIError::DeviceNameTooLong(bridge_name.len()));
+			return Err(MIONAPIError::DeviceNameTooLong(bridge_name.len()));
 		}
 
 		self.configuration.set(
@@ -326,15 +328,15 @@ impl BridgeHostState {
 	/// If your device name is not ascii.
 	/// If your device name is empty.
 	/// If your device name is too long.
-	pub fn set_default_bridge(&mut self, bridge_name: &str) -> Result<(), APIError> {
+	pub fn set_default_bridge(&mut self, bridge_name: &str) -> Result<(), MIONAPIError> {
 		if !bridge_name.is_ascii() {
-			return Err(APIError::DeviceNameMustBeAscii);
+			return Err(MIONAPIError::DeviceNameMustBeAscii);
 		}
 		if bridge_name.is_empty() {
-			return Err(APIError::DeviceNameCannotBeEmpty);
+			return Err(MIONAPIError::DeviceNameCannotBeEmpty);
 		}
 		if bridge_name.len() > 255 {
-			return Err(APIError::DeviceNameTooLong(bridge_name.len()));
+			return Err(MIONAPIError::DeviceNameTooLong(bridge_name.len()));
 		}
 
 		let bridge_key = format!("{BRIDGE_NAME_KEY_PREFIX}{bridge_name}");
@@ -343,7 +345,7 @@ impl BridgeHostState {
 			.get(HOST_BRIDGES_SECTION, &bridge_key)
 			.is_none()
 		{
-			return Err(APIError::DefaultDeviceMustExist);
+			return Err(MIONAPIError::DefaultDeviceMustExist);
 		}
 
 		self.configuration
@@ -668,19 +670,19 @@ mod unit_tests {
 
 		assert_eq!(
 			host_env.set_default_bridge("00-25-5C-BA-5A-00"),
-			Err(APIError::DefaultDeviceMustExist),
+			Err(MIONAPIError::DefaultDeviceMustExist),
 		);
 		assert_eq!(
 			host_env.upsert_bridge("", Ipv4Addr::new(192, 168, 1, 1)),
-			Err(APIError::DeviceNameCannotBeEmpty),
+			Err(MIONAPIError::DeviceNameCannotBeEmpty),
 		);
 		assert_eq!(
 			host_env.upsert_bridge("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Ipv4Addr::new(192, 168, 1, 1)),
-			Err(APIError::DeviceNameTooLong(256)),
+			Err(MIONAPIError::DeviceNameTooLong(256)),
 		);
 		assert_eq!(
 			host_env.upsert_bridge("𒀀", Ipv4Addr::new(192, 168, 1, 1)),
-			Err(APIError::DeviceNameMustBeAscii),
+			Err(MIONAPIError::DeviceNameMustBeAscii),
 		);
 
 		assert!(host_env

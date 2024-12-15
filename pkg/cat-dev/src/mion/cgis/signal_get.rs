@@ -2,8 +2,8 @@
 //! getting signals
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::cgis::do_simple_request,
+	errors::NetworkError,
+	mion::{cgis::do_simple_request, proto::cgis::MIONCGIErrors},
 };
 use reqwest::{Client, Method};
 use serde::Serialize;
@@ -18,7 +18,7 @@ use std::net::Ipv4Addr;
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn get_vdd2(mion_ip: Ipv4Addr) -> Result<String, CatBridgeError> {
+pub async fn get_vdd2(mion_ip: Ipv4Addr) -> Result<String, NetworkError> {
 	get_vdd2_with_raw_client(&Client::default(), mion_ip).await
 }
 
@@ -35,23 +35,17 @@ pub async fn get_vdd2(mion_ip: Ipv4Addr) -> Result<String, CatBridgeError> {
 pub async fn get_vdd2_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
-) -> Result<String, CatBridgeError> {
+) -> Result<String, NetworkError> {
 	let body_as_string = do_raw_signal_http_request(client, mion_ip, &[("sig", "VDD2")]).await?;
 
 	let start_tag_location = body_as_string
 		.find("<body>")
 		.map(|num| num + 6)
-		.ok_or_else(|| {
-			CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::HtmlResponseMissingBody(body_as_string.clone()),
-			))
-		})?;
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body_as_string.clone()))?;
 	let body_without_start_tag = body_as_string.split_at(start_tag_location).1;
-	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body_as_string.clone()),
-		))
-	})?;
+	let end_tag_location = body_without_start_tag
+		.find("</body>")
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body_as_string.clone()))?;
 
 	Ok(body_without_start_tag
 		.split_at(end_tag_location)
@@ -73,7 +67,7 @@ pub async fn do_raw_signal_http_request<'key, 'value, UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<String, CatBridgeError>
+) -> Result<String, NetworkError>
 where
 	UrlEncodableType: Serialize,
 {
@@ -83,8 +77,7 @@ where
 		format!("http://{mion_ip}/signal_get.cgi"),
 		Some(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)
-				.map_err(NetworkError::ParseError)?,
+				.map_err(MIONCGIErrors::FormDataEncodeError)?,
 		),
 	)
 	.await

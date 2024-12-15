@@ -9,6 +9,7 @@ version.workspace = true
 
 [dependencies]
 aes = "^0.8.4"
+bitflags = { version = "^2.6.0", default-features = false }
 bytes.workspace = true
 cipher = { version = "^0.4.4", features = ["alloc", "block-padding"] }
 configparser = "^3.1.0"
@@ -20,14 +21,15 @@ mac_address.workspace = true
 miette.workspace = true
 network-interface.workspace = true
 pin-project-lite = "^0.2.15"
-reqwest = "^0.12.9"
-serde = "^1.0.214"
+reqwest = { version = "^0.12.9", default-features = false, features=["charset", "macos-system-configuration"] }
+serde = "^1.0.216"
 serde_urlencoded = "^0.7.1"
-thiserror = "^2.0.3"
+thiserror = "^2.0.7"
 tracing.workspace = true
 tokio.workspace = true
-tokio-util = { version = "^0.7.12", default-features = false, features = ["codec"] }
+tokio-util = { version = "^0.7.13", default-features = false, features = ["codec"] }
 valuable.workspace = true
+whoami = "^1.5.2"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "macos"))'.dependencies]
 libc = "^0.2"

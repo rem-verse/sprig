@@ -2,10 +2,10 @@
 //! turning the device on & off.
 
 use crate::{
-	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
+	errors::{APIError, CatBridgeError, NetworkError},
 	mion::{
 		cgis::{do_simple_request, parse_result_from_body},
-		proto::cgis::{ControlOperation, SetParameter},
+		proto::cgis::{ControlOperation, MIONCGIErrors, SetParameter},
 	},
 };
 use fnv::FnvHashMap;
@@ -27,7 +27,7 @@ use tracing::warn;
 pub async fn get_info(
 	mion_ip: Ipv4Addr,
 	name: &str,
-) -> Result<FnvHashMap<String, String>, CatBridgeError> {
+) -> Result<FnvHashMap<String, String>, NetworkError> {
 	get_info_with_raw_client(&Client::default(), mion_ip, name).await
 }
 
@@ -44,7 +44,7 @@ pub async fn get_info_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	name: &str,
-) -> Result<FnvHashMap<String, String>, CatBridgeError> {
+) -> Result<FnvHashMap<String, String>, NetworkError> {
 	let body_as_string = do_raw_control_request(
 		client,
 		mion_ip,
@@ -52,7 +52,7 @@ pub async fn get_info_with_raw_client(
 			("operation", Into::<&str>::into(ControlOperation::GetInfo)),
 			(
 				"host",
-				&format!("{}", local_ip().map_err(NetworkError::LocalIpError)?),
+				&format!("{}", local_ip().map_err(NetworkError::LocalIp)?),
 			),
 			("shutdown", "1"),
 			("name", name),
@@ -60,7 +60,10 @@ pub async fn get_info_with_raw_client(
 	)
 	.await?;
 
-	extract_body_tags(&body_as_string, ControlOperation::GetInfo.into())
+	Ok(extract_body_tags(
+		&body_as_string,
+		ControlOperation::GetInfo.into(),
+	)?)
 }
 
 /// Perform a `set_param` request given a host, and the parameter to set.
@@ -75,7 +78,7 @@ pub async fn get_info_with_raw_client(
 pub async fn set_param(
 	mion_ip: Ipv4Addr,
 	parameter_to_set: SetParameter,
-) -> Result<bool, CatBridgeError> {
+) -> Result<bool, NetworkError> {
 	set_param_with_raw_client(&Client::default(), mion_ip, parameter_to_set).await
 }
 
@@ -92,7 +95,7 @@ pub async fn set_param_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	parameter_to_set: SetParameter,
-) -> Result<bool, CatBridgeError> {
+) -> Result<bool, NetworkError> {
 	let body_as_string = do_raw_control_request(
 		client,
 		mion_ip,
@@ -109,10 +112,10 @@ pub async fn set_param_with_raw_client(
 	)
 	.await?;
 
-	parse_result_from_body(
+	Ok(parse_result_from_body(
 		&body_as_string,
 		Into::<&str>::into(ControlOperation::SetParam),
-	)
+	)?)
 }
 
 /// Initiate a power-on request to turn on the CAT-DEV machine.
@@ -132,7 +135,7 @@ pub async fn set_param_with_raw_client(
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn power_on(mion_ip: Ipv4Addr) -> Result<bool, CatBridgeError> {
+pub async fn power_on(mion_ip: Ipv4Addr) -> Result<bool, NetworkError> {
 	power_on_with_raw_client(&Client::default(), mion_ip).await
 }
 
@@ -156,7 +159,7 @@ pub async fn power_on(mion_ip: Ipv4Addr) -> Result<bool, CatBridgeError> {
 pub async fn power_on_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
-) -> Result<bool, CatBridgeError> {
+) -> Result<bool, NetworkError> {
 	let body_as_string = do_raw_control_request(
 		client,
 		mion_ip,
@@ -166,10 +169,11 @@ pub async fn power_on_with_raw_client(
 		)],
 	)
 	.await?;
-	parse_result_from_body(
+
+	Ok(parse_result_from_body(
 		&body_as_string,
 		Into::<&str>::into(ControlOperation::PowerOnV2),
-	)
+	)?)
 }
 
 /// Initiate a power-on request to turn on the CAT-DEV machine.
@@ -270,10 +274,10 @@ pub async fn power_on_v2_with_raw_client(
 	}
 
 	let body_as_string = do_raw_control_request(client, mion_ip, &parameters).await?;
-	parse_result_from_body(
+	Ok(parse_result_from_body(
 		&body_as_string,
 		Into::<&str>::into(ControlOperation::PowerOnV2),
-	)
+	)?)
 }
 
 /// Perform a raw operation on the MION board's `control.cgi` page.
@@ -290,7 +294,7 @@ pub async fn do_raw_control_request<'key, 'value, UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<String, CatBridgeError>
+) -> Result<String, NetworkError>
 where
 	UrlEncodableType: Serialize,
 {
@@ -300,8 +304,7 @@ where
 		format!("http://{mion_ip}/mion/control.cgi"),
 		Some(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)
-				.map_err(NetworkError::ParseError)?,
+				.map_err(MIONCGIErrors::FormDataEncodeError)?,
 		),
 	)
 	.await
@@ -318,18 +321,15 @@ where
 fn extract_body_tags(
 	body: &str,
 	operation_name: &str,
-) -> Result<FnvHashMap<String, String>, CatBridgeError> {
-	let start_tag_location = body.find("<body>").map(|num| num + 6).ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
+) -> Result<FnvHashMap<String, String>, MIONCGIErrors> {
+	let start_tag_location = body
+		.find("<body>")
+		.map(|num| num + 6)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body.to_owned()))?;
 	let body_without_start_tag = body.split_at(start_tag_location).1;
-	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
+	let end_tag_location = body_without_start_tag
+		.find("</body>")
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body.to_owned()))?;
 	let just_inner_body = body_without_start_tag.split_at(end_tag_location).0;
 
 	let without_newlines = just_inner_body.replace('\n', "");

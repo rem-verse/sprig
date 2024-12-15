@@ -9,8 +9,11 @@
 //! more buggy behavior I have chosen to not implement yet. PRs accepted.*
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::{cgis::do_simple_request, proto::cgis::MIONFirmwareVersions},
+	errors::NetworkError,
+	mion::{
+		cgis::do_simple_request,
+		proto::cgis::{MIONCGIErrors, MIONFirmwareVersions},
+	},
 };
 use reqwest::{Body, Client, Method};
 use std::net::Ipv4Addr;
@@ -32,7 +35,7 @@ const VERISON_PREFIX: &str = "Version : ";
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn get_versions(mion_ip: Ipv4Addr) -> Result<MIONFirmwareVersions, CatBridgeError> {
+pub async fn get_versions(mion_ip: Ipv4Addr) -> Result<MIONFirmwareVersions, NetworkError> {
 	get_versions_with_raw_client(&Client::default(), mion_ip).await
 }
 
@@ -49,7 +52,7 @@ pub async fn get_versions(mion_ip: Ipv4Addr) -> Result<MIONFirmwareVersions, Cat
 pub async fn get_versions_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
-) -> Result<MIONFirmwareVersions, CatBridgeError> {
+) -> Result<MIONFirmwareVersions, NetworkError> {
 	let body_as_string = do_simple_request::<Body>(
 		client,
 		Method::GET,
@@ -65,56 +68,42 @@ pub async fn get_versions_with_raw_client(
 	))
 }
 
-fn parse_versions_from_update_html(body_as_string: &str) -> Result<([u8; 3], u32), CatBridgeError> {
+fn parse_versions_from_update_html(body_as_string: &str) -> Result<([u8; 3], u32), MIONCGIErrors> {
 	// Parse out the `<body>` tag, we can't close the actual body tag because
 	// _sometimes_ the MION will add in custom colors.
 	let start_tag_location = body_as_string
 		.find("<body")
 		.map(|num| num + 5)
-		.ok_or_else(|| {
-			CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::HtmlResponseMissingBody(body_as_string.to_owned()),
-			))
-		})?;
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body_as_string.to_owned()))?;
 	let body_without_start_tag = body_as_string.split_at(start_tag_location).1;
-	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body_as_string.to_owned()),
-		))
-	})?;
+	let end_tag_location = body_without_start_tag
+		.find("</body>")
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body_as_string.to_owned()))?;
 	let body_contents = body_without_start_tag
 		.split_at(end_tag_location)
 		.0
 		.to_owned();
-	let versions = get_version_elements(&body_contents).map_err(NetworkError::ParseError)?;
+	let versions = get_version_elements(&body_contents)?;
 	// We should get an FPGA version, and a FW version. IPL versions are tracked
 	// elsewhere.
 	if versions.len() != 2 {
-		return Err(
-			NetworkError::ParseError(NetworkParseError::HtmlResponseMissingVersions(versions))
-				.into(),
-		);
+		return Err(MIONCGIErrors::HtmlResponseMissingVersions(versions));
 	}
 
-	let fpga_version = u32::from_str_radix(&versions[0], 16).map_err(|cause| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseNumberExpectedButNotThere(
-			cause,
-		))
-	})?;
+	let fpga_version = u32::from_str_radix(&versions[0], 16)
+		.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?;
 	let mut fw_version = [0_u8; 3];
 	for (idx, item) in versions[1].splitn(3, '.').enumerate() {
-		fw_version[idx] = item.parse::<u8>().map_err(|cause| {
-			NetworkError::ParseError(NetworkParseError::HtmlResponseNumberExpectedButNotThere(
-				cause,
-			))
-		})?;
+		fw_version[idx] = item
+			.parse::<u8>()
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?;
 	}
 
 	Ok((fw_version, fpga_version))
 }
 
 /// Parse all of the version strings out of an HTML response.
-fn get_version_elements(mut html_response: &str) -> Result<Vec<String>, NetworkParseError> {
+fn get_version_elements(mut html_response: &str) -> Result<Vec<String>, MIONCGIErrors> {
 	let mut results = Vec::new();
 
 	while let Some(idx) = html_response.find(FORM_PREFIX) {
@@ -126,7 +115,7 @@ fn get_version_elements(mut html_response: &str) -> Result<Vec<String>, NetworkP
 		// that.
 		let missing_form_start = html_response.split_at(idx + FORM_PREFIX.len()).1;
 		let Some(form_close_at) = missing_form_start.find(FORM_SUFFIX) else {
-			return Err(NetworkParseError::HtmlResponseMissingClosingTag(
+			return Err(MIONCGIErrors::HtmlResponseMissingClosingTag(
 				FORM_SUFFIX.to_owned(),
 				missing_form_start.to_owned(),
 			));
@@ -144,7 +133,7 @@ fn get_version_elements(mut html_response: &str) -> Result<Vec<String>, NetworkP
 			form_insides.trim().replace("<br>", "")
 		};
 		let Some(version_prefix_location) = version_data.find(VERISON_PREFIX) else {
-			return Err(NetworkParseError::HtmlResponseMissingVersionPart(
+			return Err(MIONCGIErrors::HtmlResponseMissingVersionPart(
 				VERISON_PREFIX.to_owned(),
 				version_data,
 			));
@@ -154,7 +143,7 @@ fn get_version_elements(mut html_response: &str) -> Result<Vec<String>, NetworkP
 			.split_at(version_prefix_location + VERISON_PREFIX.len())
 			.1;
 		let Some(version_suffix_location) = version_with_extra_data.find(')') else {
-			return Err(NetworkParseError::HtmlResponseMissingVersionPart(
+			return Err(MIONCGIErrors::HtmlResponseMissingVersionPart(
 				")".to_owned(),
 				version_with_extra_data.to_owned(),
 			));

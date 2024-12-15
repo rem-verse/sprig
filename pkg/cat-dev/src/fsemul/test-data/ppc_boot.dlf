@@ -1,0 +1,5 @@
+v1.00
+0x0000000000000000,"/opt/cafe_sdk/temp/mythra/caferun/diskid.bin"
+0x0000000000080000,"/opt/cafe_sdk/temp/mythra/caferun/ppc.bsf"
+0x0000000000090000,"/opt/cafe_sdk/data/slc/sys/title/00050010/1000400A/code/fw.img"
+0x0000000000B88200,""

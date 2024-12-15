@@ -1,10 +1,11 @@
 //! APIs for interacting with MION Firmware Files.
 
-use crate::errors::APIError;
 use aes::{cipher::KeyInit, Aes256};
 use cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, BlockSizeUser};
 use ecb::{Decryptor, Encryptor};
+use miette::Diagnostic;
 use std::fmt::{Display, Formatter, Result as FmtResult};
+use thiserror::Error;
 
 type Aes256EcbEnc = Encryptor<Aes256>;
 type Aes256EcbDec = Decryptor<Aes256>;
@@ -95,15 +96,21 @@ impl MIONFirmwareFile {
 	///   `PWI-SS_FW_IMAGE` for [`MionFirmwareType::Mion`] &
 	///   [`MionFirmwareType::Ipl`], and `PWI-SS_FP_IMAGE` for
 	///   [`MionFirmwareType::FPGA`].
-	pub fn parse(firmware: &[u8], firmware_type: MIONFirmwareType) -> Result<Self, APIError> {
+	pub fn parse(
+		firmware: &[u8],
+		firmware_type: MIONFirmwareType,
+	) -> Result<Self, MIONFirmwareAPIError> {
 		let firmware_length = firmware.len();
 		if firmware_length < 0x26 {
-			return Err(APIError::MionFirmwareTooSmall(firmware_length));
+			return Err(MIONFirmwareAPIError::TooSmall(firmware_length));
 		}
 		let chksum_in_file = firmware[firmware_length - 1];
 		let got_chksum = calculate_checksum(firmware);
 		if chksum_in_file != got_chksum {
-			return Err(APIError::BadMionFWChecksum(chksum_in_file, got_chksum));
+			return Err(MIONFirmwareAPIError::BadChecksum(
+				chksum_in_file,
+				got_chksum,
+			));
 		}
 		// This check is uniquely ours, the MION does not have this.
 		//
@@ -111,7 +118,7 @@ impl MIONFirmwareFile {
 		// terminator.
 		if matches!(firmware_type, MIONFirmwareType::Mion) && firmware[firmware_length - 3] != 0x00
 		{
-			return Err(APIError::MionFirmwareMissingNULTerminator(
+			return Err(MIONFirmwareAPIError::MissingNULTerminator(
 				firmware[firmware_length - 3],
 			));
 		}
@@ -122,7 +129,7 @@ impl MIONFirmwareFile {
 			_ => b"PWI-SS_FW_IMAGE\0",
 		};
 		if !decrypted.ends_with(expected_footer) {
-			return Err(APIError::MionFirmwareMissingSignature);
+			return Err(MIONFirmwareAPIError::MissingSignature);
 		}
 
 		Ok(Self {
@@ -206,6 +213,46 @@ impl MIONFirmwareFile {
 	}
 }
 
+/// Errors related to handling mion firmwares.
+#[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
+pub enum MIONFirmwareAPIError {
+	/// You attempted to encrypt data that we could not encrypt.
+	#[error("We could not encrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[diagnostic(code(cat_dev::api::mion::firmware::bad_decrypted_data_length))]
+	BadDecryptedDataLength(usize),
+	/// You attempted to decrypt data that we could not decrypt.
+	#[error("We could not decrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[diagnostic(code(cat_dev::api::mion::firmware::bad_encrypted_data_length))]
+	BadEncryptedDataLength(usize),
+	/// The MION Firmware files end with a final byte that acts as a checksum
+	/// to validate the content before it was correct. Your checksum was not
+	/// correct.
+	#[error("The MION Firmware file you provided had an invalid checksum, we expected: {1:02x}, but got: {0:02x}")]
+	#[diagnostic(code(cat_dev::api::mion::firmware::bad_checksum))]
+	BadChecksum(u8, u8),
+	/// All MION Firmware files must be at a minimum 0x26 bytes long.
+	///
+	/// This covers a single AES-256 block (32 bytes), plus the 6 byte footer
+	/// that they contain.
+	#[error("The MION Firmware file provided was too small, it must be at least 0x26 bytes long, was {0:02x}")]
+	#[diagnostic(code(cat_dev::api::mion::firmware::too_small))]
+	TooSmall(usize),
+	/// The MION Firmware version string must end with a `0x00`, as this is a
+	/// load-bearing NUL terminator for many parts of the firmware.
+	#[error("The Version String for MION Firmware Files Typed 'MION', must have their version bytes end with a NUL terminator (0x00) due to an oversight in programming. Your file ended with: ({0:02x})")]
+	#[diagnostic(code(cat_dev::api::mion::firmware::missing_nul_terminator))]
+	MissingNULTerminator(u8),
+	/// All MION FW files must end with:
+	///
+	/// - `PWI-SS_FW_IMAGE` for IPL/MION firmware types
+	/// - `PWI-SS_FP_IMAGE` for FPGA firmware types.
+	///
+	/// If they do not, they are immediately considered invalid.
+	#[error("While validating the decrypted contents of your FW we were not able to identify the required ending bytes, this firmware is corrupt.")]
+	#[diagnostic(code(cat_dev::api::mion_fw::missing_signature))]
+	MissingSignature,
+}
+
 /// Calculate a checksum for a given _encrypted_ blob.
 ///
 /// The checksum present as the last byte in the file takes in all the content
@@ -238,7 +285,7 @@ fn calculate_checksum(encrypted_blob: &[u8]) -> u8 {
 /// If there is a problem encrypting your data. See error codes
 /// from the [`aes`], and [`ecb`] crates.
 #[doc(hidden)]
-pub fn raw_encrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
+pub fn raw_encrypt(file_contents: &[u8]) -> Result<Vec<u8>, MIONFirmwareAPIError> {
 	let encryptor = Aes256EcbEnc::new(&STOCK_FW_KEY.into());
 	let mut decrypted = vec![
 		0x0;
@@ -247,7 +294,7 @@ pub fn raw_encrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
 	];
 	let actual_len = encryptor
 		.encrypt_padded_b2b_mut::<NoPadding>(file_contents, &mut decrypted)
-		.map_err(|_| APIError::BadDecryptedDataLength(Aes256EcbEnc::block_size()))?
+		.map_err(|_| MIONFirmwareAPIError::BadDecryptedDataLength(Aes256EcbEnc::block_size()))?
 		.len();
 	decrypted.truncate(actual_len);
 	Ok(decrypted)
@@ -259,12 +306,12 @@ pub fn raw_encrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
 ///
 /// If your data is not the correct size to be decrypted.
 #[doc(hidden)]
-pub fn raw_decrypt(file_contents: &[u8]) -> Result<Vec<u8>, APIError> {
+pub fn raw_decrypt(file_contents: &[u8]) -> Result<Vec<u8>, MIONFirmwareAPIError> {
 	let decryptor = Aes256EcbDec::new(&STOCK_FW_KEY.into());
 
 	decryptor
 		.decrypt_padded_vec_mut::<NoPadding>(file_contents)
-		.map_err(|_| APIError::BadEncryptedDataLength(Aes256EcbDec::block_size()))
+		.map_err(|_| MIONFirmwareAPIError::BadEncryptedDataLength(Aes256EcbDec::block_size()))
 }
 
 #[cfg(test)]

@@ -2,8 +2,11 @@
 //! only meant for humans.
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::{cgis::do_simple_request, proto::cgis::SetupParameters},
+	errors::CatBridgeError,
+	mion::{
+		cgis::do_simple_request,
+		proto::cgis::{MIONCGIErrors, SetupParameters},
+	},
 };
 use mac_address::MacAddress;
 use reqwest::{Body, Client, Method};
@@ -54,16 +57,13 @@ fn parse_response_body_from_setup(body_as_string: &str) -> Result<SetupParameter
 	Ok(SetupParameters::new(
 		find_input_from_body(&InputType::Text, "id_5", body_as_string)?
 			.parse::<Ipv4Addr>()
-			.map_err(NetworkParseError::HtmlResponseIpExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseIpExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_6", body_as_string)?
 			.parse::<Ipv4Addr>()
-			.map_err(NetworkParseError::HtmlResponseIpExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseIpExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_7", body_as_string)?
 			.parse::<Ipv4Addr>()
-			.map_err(NetworkParseError::HtmlResponseIpExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseIpExpectedButNotThere)?,
 		find_input_from_body(&InputType::BooleanRadio, "id_4", body_as_string)?
 			.parse::<bool>()
 			.expect("impossible, this function only returns Ok(true) or Ok(false)"),
@@ -72,48 +72,38 @@ fn parse_response_body_from_setup(body_as_string: &str) -> Result<SetupParameter
 			.expect("impossible, this function only returns Ok(true) or Ok(false)"),
 		find_input_from_body(&InputType::Text, "id_9", body_as_string)?
 			.parse::<Ipv4Addr>()
-			.map_err(NetworkParseError::HtmlResponseIpExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseIpExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_10", body_as_string)?
 			.parse::<Ipv4Addr>()
-			.map_err(NetworkParseError::HtmlResponseIpExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseIpExpectedButNotThere)?,
 		find_input_from_body(&InputType::BooleanRadio, "id_11", body_as_string)?
 			.parse::<bool>()
 			.expect("impossible, this function only returns Ok(true) or Ok(false)"),
 		find_input_from_body(&InputType::Text, "id_12", body_as_string)?
 			.parse::<Ipv4Addr>()
-			.map_err(NetworkParseError::HtmlResponseIpExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseIpExpectedButNotThere)?,
 		find_input_from_body(&InputType::SelectedResultValue, "id_26", body_as_string)?
 			.parse::<u32>()
-			.map_err(NetworkParseError::HtmlResponseNumberExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?
 			.try_into()?,
 		find_input_from_body(&InputType::Text, "id_27", body_as_string)?
 			.parse::<u8>()
-			.map_err(NetworkParseError::HtmlResponseNumberExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_13", body_as_string)?
 			.parse::<u16>()
-			.map_err(NetworkParseError::HtmlResponseNumberExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_14", body_as_string)?
 			.parse::<u16>()
-			.map_err(NetworkParseError::HtmlResponseNumberExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_15", body_as_string)?
 			.parse::<u16>()
-			.map_err(NetworkParseError::HtmlResponseNumberExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_16", body_as_string)?
 			.parse::<u16>()
-			.map_err(NetworkParseError::HtmlResponseNumberExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?,
 		find_input_from_body(&InputType::Text, "id_17", body_as_string)?
 			.parse::<u16>()
-			.map_err(NetworkParseError::HtmlResponseNumberExpectedButNotThere)
-			.map_err(NetworkError::ParseError)?,
+			.map_err(MIONCGIErrors::HtmlResponseNumberExpectedButNotThere)?,
 		find_input_from_body(&InputType::BooleanRadio, "id_33", body_as_string)?
 			.parse::<bool>()
 			.expect("impossible, this function only returns Ok(true) or Ok(false)"),
@@ -131,8 +121,7 @@ fn parse_response_body_from_setup(body_as_string: &str) -> Result<SetupParameter
 			body_as_string,
 		)?
 		.parse::<MacAddress>()
-		.map_err(NetworkParseError::HtmlResponseMacExpectedButNotThere)
-		.map_err(NetworkError::ParseError)?,
+		.map_err(MIONCGIErrors::HtmlResponseMacExpectedButNotThere)?,
 	))
 }
 
@@ -148,7 +137,7 @@ fn find_input_from_body(
 	input_typ: &InputType<'_>,
 	input_id: &str,
 	html_response: &str,
-) -> Result<String, NetworkError> {
+) -> Result<String, MIONCGIErrors> {
 	match input_typ {
 		InputType::Text => {
 			let string_to_find = format!("<input type=\"text\" name=\"{input_id}\"");
@@ -188,8 +177,8 @@ fn find_input_from_body(
 			)) {
 				Ok("false".to_owned())
 			} else {
-				Err(NetworkError::ParseError(
-					NetworkParseError::HtmlResponseNoRadioChecked(html_response.to_owned()),
+				Err(MIONCGIErrors::HtmlResponseNoRadioChecked(
+					html_response.to_owned(),
 				))
 			}
 		}
@@ -232,11 +221,9 @@ fn find_input_from_body(
 				return Ok(value.to_owned());
 			}
 
-			Err(NetworkError::ParseError(
-				NetworkParseError::HtmlResponseNoTableItemWithPrefix(
-					html_response.to_owned(),
-					table_prefix.to_owned().to_owned(),
-				),
+			Err(MIONCGIErrors::HtmlResponseNoTableItemWithPrefix(
+				html_response.to_owned(),
+				table_prefix.to_owned().to_owned(),
 			))
 		}
 	}
@@ -273,12 +260,9 @@ fn get_html_value(
 	html_response: &str,
 	haystack: &str,
 	needle: &str,
-) -> Result<usize, NetworkError> {
+) -> Result<usize, MIONCGIErrors> {
 	haystack.find(needle).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingTaggedInput(
-			input_id.to_owned(),
-			html_response.to_owned(),
-		))
+		MIONCGIErrors::HtmlResponseMissingTaggedInput(input_id.to_owned(), html_response.to_owned())
 	})
 }
 fn rget_html_value(
@@ -286,12 +270,9 @@ fn rget_html_value(
 	html_response: &str,
 	haystack: &str,
 	needle: &str,
-) -> Result<usize, NetworkError> {
+) -> Result<usize, MIONCGIErrors> {
 	haystack.rfind(needle).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingTaggedInput(
-			input_id.to_owned(),
-			html_response.to_owned(),
-		))
+		MIONCGIErrors::HtmlResponseMissingTaggedInput(input_id.to_owned(), html_response.to_owned())
 	})
 }
 

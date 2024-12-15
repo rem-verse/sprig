@@ -235,7 +235,7 @@ where
 				)
 				.await
 			})
-			.map_err(|_| CatBridgeError::SpawnFailure)?;
+			.map_err(CatBridgeError::SpawnFailure)?;
 	}
 
 	let mut listening_sockets = Vec::with_capacity(tasks.len());
@@ -251,7 +251,7 @@ where
 			Ok(optional_socket) => optional_socket,
 			Err(cause) => {
 				tasks.abort_all();
-				return Err(cause);
+				return Err(cause.into());
 			}
 		};
 		if let Some(socket) = opt_socket.take() {
@@ -388,22 +388,22 @@ where
 		MIONFindBy::Ip(ipv4) => {
 			let local_socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
 				.await
-				.map_err(|_| NetworkError::BindAddressError)?;
+				.map_err(|_| NetworkError::BindFailure)?;
 			local_socket
 				.connect(SocketAddrV4::new(ipv4, port))
 				.await
-				.map_err(NetworkError::IOError)?;
+				.map_err(NetworkError::IO)?;
 			local_socket
 				.send(&Bytes::from(MionIdentityAnnouncement::new(
 					find_detailed_info,
 				)))
 				.await
-				.map_err(NetworkError::IOError)?;
+				.map_err(NetworkError::IO)?;
 
 			let mut buff = BytesMut::zeroed(8192);
 			tokio::select! {
 				result = local_socket.recv(&mut buff) => {
-					let actual_size = result.map_err(NetworkError::IOError)?;
+					let actual_size = result.map_err(NetworkError::IO)?;
 					buff.truncate(actual_size);
 				}
 				() = sleep(Duration::from_secs(MION_ANNOUNCE_TIMEOUT_SECONDS)) => {
@@ -549,11 +549,11 @@ impl Display for MIONFindBy {
 /// ## Errors
 ///
 /// - If we cannot list all the network interfaces present on the system.
-pub fn get_all_broadcast_addresses() -> Result<Vec<(Addr, Ipv4Addr)>, CatBridgeError> {
+pub fn get_all_broadcast_addresses() -> Result<Vec<(Addr, Ipv4Addr)>, NetworkError> {
 	Ok(NetworkInterface::show()
 		.map_err(|cause| {
 			error!(?cause, "could not list network interfaces on this device");
-			CatBridgeError::NetworkError(NetworkError::ListInterfacesError)
+			NetworkError::ListInterfacesFailure(cause)
 		})?
 		.into_iter()
 		.fold(Vec::<(Addr, Ipv4Addr)>::new(), |mut accum, iface| {
@@ -591,7 +591,7 @@ async fn broadcast_to_mions_on_interface<InterfaceLoggingHook>(
 	interface_addr: Addr,
 	interface_ipv4: Ipv4Addr,
 	interface_hook: InterfaceLoggingHook,
-) -> Result<Option<UdpSocket>, CatBridgeError>
+) -> Result<Option<UdpSocket>, NetworkError>
 where
 	InterfaceLoggingHook: Fn(&'_ Addr),
 {
@@ -618,7 +618,7 @@ where
 		override_control_port.unwrap_or(DEFAULT_MION_CONTROL_PORT),
 	)))
 	.await
-	.map_err(|_| NetworkError::BindAddressError)?;
+	.map_err(|_| NetworkError::BindFailure)?;
 	local_socket
 		.set_broadcast(true)
 		.map_err(|_| NetworkError::SetBroadcastFailure)?;
@@ -631,7 +631,7 @@ where
 			),
 		)
 		.await
-		.map_err(NetworkError::IOError)?;
+		.map_err(NetworkError::IO)?;
 	Ok(Some(local_socket))
 }
 

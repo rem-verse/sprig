@@ -1,4 +1,4 @@
-use crate::errors::APIError;
+use crate::mion::cgis::MIONCGIApiError;
 use mac_address::MacAddress;
 use std::{
 	fmt::{Display, Formatter, Result as FmtResult},
@@ -459,11 +459,11 @@ impl From<CatDevBankSize> for u32 {
 	}
 }
 impl TryFrom<u32> for CatDevBankSize {
-	type Error = APIError;
+	type Error = MIONCGIApiError;
 
 	fn try_from(value: u32) -> Result<Self, Self::Error> {
 		match value {
-			4_294_967_295 => Ok(Self::Blank),
+			u32::MAX => Ok(Self::Blank),
 			0 => Ok(Self::TwentyFiveGbs),
 			1 => Ok(Self::FiveGbs),
 			2 => Ok(Self::NineGbs),
@@ -472,7 +472,7 @@ impl TryFrom<u32> for CatDevBankSize {
 			5 => Ok(Self::SixteenGbs),
 			6 => Ok(Self::EighteenGbs),
 			7 => Ok(Self::TwentyOneGbs),
-			_ => Err(APIError::UnknownCatDevBankSizeId(value)),
+			_ => Err(MIONCGIApiError::UnknownCatDevBankSizeId(value)),
 		}
 	}
 }

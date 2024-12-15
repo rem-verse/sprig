@@ -9,14 +9,19 @@
 //! 7975), and "SDIO Block Data" (by default port 7976), which actually
 //! interact over two totally independent TCP streams.
 
+pub mod errors;
 pub mod proto;
+mod reads;
 
 use crate::{
 	errors::{CatBridgeError, NetworkError},
 	fsemul::{
-		sdio::proto::{
-			ChunkSDIOControlCodec, SdioControlMessage, SdioControlMessageRequest,
-			SdioControlPacketType, SdioControlReadRequest, SdioControlWriteRequest,
+		sdio::{
+			proto::{
+				ChunkSDIOControlCodec, SdioControlMessage, SdioControlMessageRequest,
+				SdioControlPacketType, SdioControlReadRequest, SdioControlWriteRequest,
+			},
+			reads::serve_read_request,
 		},
 		HostFilesystem,
 	},
@@ -54,7 +59,10 @@ pub const DEFAULT_SDIO_BLOCK_PORT: u16 = 7976;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The amount of TCP Packets that can be buffered per client.
-const TCP_PACKET_BUFFER_SIZE: usize = 8192_usize;
+///
+/// *note: this is not the size of an individual packet, or packets, but is
+/// just the amount of packets that can be queued.*
+const SDIO_TCP_PACKET_BUFFER_SIZE: usize = 8192_usize;
 
 /// A lock to ensure only one person sends over SDIO at a time.
 ///
@@ -117,13 +125,13 @@ impl<'fs> SdioClient<'fs> {
 			control_port,
 			control_stream: control_stream_future
 				.await
-				.map_err(|_| NetworkError::ConnectionTimeout(timeout_duration))?
-				.map_err(NetworkError::IOError)?,
+				.map_err(|_| NetworkError::Timeout(timeout_duration))?
+				.map_err(NetworkError::IO)?,
 			data_port,
 			data_stream: data_stream_future
 				.await
-				.map_err(|_| NetworkError::ConnectionTimeout(timeout_duration))?
-				.map_err(NetworkError::IOError)?,
+				.map_err(|_| NetworkError::Timeout(timeout_duration))?
+				.map_err(NetworkError::IO)?,
 			host_ip: mion_ip,
 			host_filesystem,
 			printf_control_buff: String::with_capacity(0),
@@ -152,17 +160,17 @@ impl<'fs> SdioClient<'fs> {
 		while let Some(packet_result) = stream.next().await {
 			let packet = match packet_result {
 				Ok(packet) => packet.freeze(),
-				Err(cause) => return Err(NetworkError::IOError(cause).into()),
+				Err(cause) => return Err(NetworkError::IO(cause).into()),
 			};
 			// Somehow got an empty packet, not sure what to do with this, let's just close.
 			if packet.is_empty() {
 				break;
 			}
 
-			match SdioControlPacketType::try_from(packet[0]).map_err(NetworkError::ParseError)? {
+			match SdioControlPacketType::try_from(packet[0])? {
 				SdioControlPacketType::Message => {
-					let message_request = SdioControlMessageRequest::try_from(packet)
-						.map_err(NetworkError::ParseError)?;
+					let message_request =
+						SdioControlMessageRequest::try_from(packet).map_err(NetworkError::Parse)?;
 					for message in message_request.messages_owned() {
 						match message {
 							SdioControlMessage::Printf(to_print) => {
@@ -179,17 +187,21 @@ impl<'fs> SdioClient<'fs> {
 					);
 				}
 				SdioControlPacketType::Read => {
-					let read_request = SdioControlReadRequest::try_from(packet)
-						.map_err(NetworkError::ParseError)?;
+					let read_request = SdioControlReadRequest::try_from(packet)?;
 					let guard = SDIO_DATA_LOCK.lock().await;
-					self.host_filesystem
-						.serve_sdio_file(read_request, data_sender.clone())
-						.await?;
+					serve_read_request(self.host_filesystem, &read_request, &data_sender).await?;
 					std::mem::drop(guard);
 				}
 				SdioControlPacketType::Write => {
-					let _write_request = SdioControlWriteRequest::try_from(packet)
-						.map_err(NetworkError::ParseError)?;
+					let _write_request = SdioControlWriteRequest::try_from(packet)?;
+				}
+				SdioControlPacketType::StartBlockChannel => {
+					info!(
+						"Got request to start PCFS Block Channel, but we've already started it..."
+					);
+				}
+				SdioControlPacketType::StartControlListeningChannel => {
+					info!("Got request to start CTRL Character Channel, but we've already started it...");
 				}
 			}
 		}
@@ -248,7 +260,7 @@ impl<'fs> SdioClient<'fs> {
 	fn spawn_control_write_task(
 		mut sink: SplitSink<Framed<TcpStream, ChunkSDIOControlCodec>, Bytes>,
 	) -> Result<Sender<Bytes>, CatBridgeError> {
-		let (sender, mut receiver) = channel::<Bytes>(TCP_PACKET_BUFFER_SIZE);
+		let (sender, mut receiver) = channel::<Bytes>(SDIO_TCP_PACKET_BUFFER_SIZE);
 
 		TaskBuilder::new()
 			.name("cat_dev::fsemul::sdio_control::write_task")
@@ -263,14 +275,14 @@ impl<'fs> SdioClient<'fs> {
 					}
 				}
 			})
-			.map_err(|_| CatBridgeError::SpawnFailure)?;
+			.map_err(CatBridgeError::SpawnFailure)?;
 
 		Ok(sender)
 	}
 
 	/// Spawn a task that will watch a channel, and send it out over a channel.
 	fn spawn_data_write_task(mut sink: OwnedWriteHalf) -> Result<Sender<Bytes>, CatBridgeError> {
-		let (sender, mut receiver) = channel::<Bytes>(TCP_PACKET_BUFFER_SIZE);
+		let (sender, mut receiver) = channel::<Bytes>(SDIO_TCP_PACKET_BUFFER_SIZE);
 
 		TaskBuilder::new()
 			.name("cat_dev::fsemul::sdio_data::write_task")
@@ -285,7 +297,7 @@ impl<'fs> SdioClient<'fs> {
 					}
 				}
 			})
-			.map_err(|_| CatBridgeError::SpawnFailure)?;
+			.map_err(CatBridgeError::SpawnFailure)?;
 
 		Ok(sender)
 	}
@@ -320,17 +332,16 @@ impl SdioClient<'static> {
 		while let Some(packet_result) = stream.next().await {
 			let packet = match packet_result {
 				Ok(packet) => packet.freeze(),
-				Err(cause) => return Err(NetworkError::IOError(cause).into()),
+				Err(cause) => return Err(NetworkError::IO(cause).into()),
 			};
 			// Somehow got an empty packet, not sure what to do with this, let's just close.
 			if packet.is_empty() {
 				break;
 			}
 
-			match SdioControlPacketType::try_from(packet[0]).map_err(NetworkError::ParseError)? {
+			match SdioControlPacketType::try_from(packet[0])? {
 				SdioControlPacketType::Message => {
-					let message_request = SdioControlMessageRequest::try_from(packet)
-						.map_err(NetworkError::ParseError)?;
+					let message_request = SdioControlMessageRequest::try_from(packet)?;
 					for message in message_request.messages_owned() {
 						match message {
 							SdioControlMessage::Printf(to_print) => {
@@ -347,8 +358,7 @@ impl SdioClient<'static> {
 					);
 				}
 				SdioControlPacketType::Read => {
-					let read_request = SdioControlReadRequest::try_from(packet)
-						.map_err(NetworkError::ParseError)?;
+					let read_request = SdioControlReadRequest::try_from(packet)?;
 
 					let host_fs: &'static HostFilesystem = self.host_filesystem;
 					let cloned_sender = data_sender.clone();
@@ -357,17 +367,24 @@ impl SdioClient<'static> {
 						.spawn(async move {
 							let guard = SDIO_DATA_LOCK.lock().await;
 							if let Err(cause) =
-								host_fs.serve_sdio_file(read_request, cloned_sender).await
+								serve_read_request(host_fs, &read_request, &cloned_sender).await
 							{
 								error!(?cause, "Failed to respond to read request, ignoring!");
 							}
 							std::mem::drop(guard);
 						})
-						.map_err(|_| CatBridgeError::SpawnFailure)?;
+						.map_err(CatBridgeError::SpawnFailure)?;
 				}
 				SdioControlPacketType::Write => {
-					let _write_request = SdioControlWriteRequest::try_from(packet)
-						.map_err(NetworkError::ParseError)?;
+					let _write_request = SdioControlWriteRequest::try_from(packet)?;
+				}
+				SdioControlPacketType::StartBlockChannel => {
+					info!(
+						"Got request to start PCFS Block Channel, but we've already started it..."
+					);
+				}
+				SdioControlPacketType::StartControlListeningChannel => {
+					info!("Got request to start CTRL Character Channel, but we've already started it...");
 				}
 			}
 		}

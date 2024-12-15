@@ -2,11 +2,13 @@
 //! board.
 
 mod control;
+mod errors;
 mod setup;
 mod status;
 mod update;
 
 pub use control::*;
+pub use errors::*;
 pub use setup::*;
 pub use status::*;
 pub use update::*;

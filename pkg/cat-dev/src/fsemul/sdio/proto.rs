@@ -7,11 +7,20 @@
 //! The only part that "has a protocol" too is the control port. The data port
 //! is literally just transferring files around.
 
-use crate::errors::NetworkParseError;
+use crate::{errors::NetworkParseError, fsemul::sdio::errors::SDIOProtocolError};
 use bytes::{Bytes, BytesMut};
 use tokio::io::Error as IoError;
 use tokio_util::codec::{Decoder, Encoder};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+/// The size of an SDIO Block we end up serving.
+pub const SDIO_BLOCK_SIZE: usize = 0x200_usize;
+/// The size of an SDIO Block we end up serving.
+pub const SDIO_BLOCK_SIZE_AS_U32: u32 = 0x200_u32;
+/// The size of a single TCP packet we should end up serving.
+pub const SDIO_TCP_PACKET_SIZE: usize = 0x10000_usize;
+/// The amount of blocks that can fit within a single packet.
+pub const SDIO_BLOCKS_PER_PACKET: usize = SDIO_TCP_PACKET_SIZE / SDIO_BLOCK_SIZE;
 
 /// A codec that chunks a stream into SDIO Control packets.
 ///
@@ -51,6 +60,16 @@ pub enum SdioControlPacketType {
 	Read,
 	/// Instruction to write on the data stream.
 	Write,
+	/// TODO(mythra): confirm this is what it does.
+	///
+	/// Seems to be used in older firmwares to tell the server to
+	/// 'start' the SDIO block channel.
+	StartBlockChannel,
+	/// TODO(mythra): confirm this is what it does.
+	///
+	/// Seems to be used in older firmwares to tell the server to
+	/// 'start' the CTRL Character channel.
+	StartControlListeningChannel,
 }
 
 impl From<SdioControlPacketType> for u8 {
@@ -59,19 +78,23 @@ impl From<SdioControlPacketType> for u8 {
 			SdioControlPacketType::Message => 8,
 			SdioControlPacketType::Read => 0,
 			SdioControlPacketType::Write => 1,
+			SdioControlPacketType::StartBlockChannel => 0xA,
+			SdioControlPacketType::StartControlListeningChannel => 0xB,
 		}
 	}
 }
 
 impl TryFrom<u8> for SdioControlPacketType {
-	type Error = NetworkParseError;
+	type Error = SDIOProtocolError;
 
 	fn try_from(value: u8) -> Result<Self, Self::Error> {
 		match value {
 			0 => Ok(Self::Read),
 			1 => Ok(Self::Write),
 			8 => Ok(Self::Message),
-			_ => Err(NetworkParseError::UnknownSdioPrintfPacketType(value)),
+			0xA => Ok(Self::StartBlockChannel),
+			0xB => Ok(Self::StartControlListeningChannel),
+			_ => Err(SDIOProtocolError::UnknownPrintfPacketType(value)),
 		}
 	}
 }
@@ -88,7 +111,7 @@ impl SdioControlReadRequest {
 	/// Get the address to read from.
 	#[must_use]
 	pub const fn lba(&self) -> u32 {
-		self.lba
+		self.lba * SDIO_BLOCK_SIZE_AS_U32
 	}
 
 	/// Get the amount of blocks to read.
@@ -105,23 +128,21 @@ impl SdioControlReadRequest {
 }
 
 impl TryFrom<Bytes> for SdioControlReadRequest {
-	type Error = NetworkParseError;
+	type Error = SDIOProtocolError;
 
 	fn try_from(value: Bytes) -> Result<Self, Self::Error> {
-		if value.len() != 512 {
-			return Err(NetworkParseError::SdioPrintfInvalidSize(value.len()));
+		if value.len() < 512 {
+			return Err(SDIOProtocolError::PrintfInvalidSize(value.len()));
 		}
 		if value[0] != 0 {
-			return Err(NetworkParseError::UnknownSdioPrintfPacketType(value[0]));
+			return Err(SDIOProtocolError::UnknownPrintfPacketType(value[0]));
 		}
 
 		let lba = u32::from_le_bytes([value[4], value[5], value[6], value[7]]);
 		let blocks = u32::from_le_bytes([value[8], value[9], value[10], value[11]]);
 		let channel = u32::from_le_bytes([value[12], value[13], value[14], value[15]]);
 		if value[12] >= 0xC {
-			return Err(NetworkParseError::SdioPrintfInvalidChannel(
-				value[12], channel,
-			));
+			return Err(SDIOProtocolError::PrintfInvalidChannel(value[12], channel));
 		}
 
 		Ok(Self {
@@ -176,7 +197,7 @@ impl SdioControlWriteRequest {
 	/// Get the address to write too.
 	#[must_use]
 	pub const fn lba(&self) -> u32 {
-		self.lba
+		self.lba * SDIO_BLOCK_SIZE_AS_U32
 	}
 
 	/// Get the amount of blocks to read.
@@ -193,23 +214,21 @@ impl SdioControlWriteRequest {
 }
 
 impl TryFrom<Bytes> for SdioControlWriteRequest {
-	type Error = NetworkParseError;
+	type Error = SDIOProtocolError;
 
 	fn try_from(value: Bytes) -> Result<Self, Self::Error> {
 		if value.len() != 512 {
-			return Err(NetworkParseError::SdioPrintfInvalidSize(value.len()));
+			return Err(SDIOProtocolError::PrintfInvalidSize(value.len()));
 		}
 		if value[0] != 1 {
-			return Err(NetworkParseError::UnknownSdioPrintfPacketType(value[0]));
+			return Err(SDIOProtocolError::UnknownPrintfPacketType(value[0]));
 		}
 
 		let lba = u32::from_le_bytes([value[4], value[5], value[6], value[7]]);
 		let blocks = u32::from_le_bytes([value[8], value[9], value[10], value[11]]);
 		let channel = u32::from_le_bytes([value[12], value[13], value[14], value[15]]);
 		if value[12] >= 0xC {
-			return Err(NetworkParseError::SdioPrintfInvalidChannel(
-				value[12], channel,
-			));
+			return Err(SDIOProtocolError::PrintfInvalidChannel(value[12], channel));
 		}
 
 		Ok(Self {
@@ -291,10 +310,10 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
   )]
 	fn try_from(value: Bytes) -> Result<Self, Self::Error> {
 		if value.len() != 512 {
-			return Err(NetworkParseError::SdioPrintfInvalidSize(value.len()));
+			return Err(SDIOProtocolError::PrintfInvalidSize(value.len()).into());
 		}
 		if value[0] != 8 {
-			return Err(NetworkParseError::UnknownSdioPrintfPacketType(value[0]));
+			return Err(SDIOProtocolError::UnknownPrintfPacketType(value[0]).into());
 		}
 
 		let character_length = u16::from_le_bytes([value[0x2], value[0x3]]);
@@ -312,14 +331,13 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 					buff.truncate(eol);
 				}
 				messages.push(SdioControlMessage::Printf(
-					String::from_utf8(buff.into())
-						.map_err(NetworkParseError::InvalidDataNeedsUTF8)?,
+					String::from_utf8(buff.into()).map_err(NetworkParseError::Utf8Expected)?,
 				));
 				// These message types consume the whole buffer probably idk
 				break;
 			}
 
-			return Err(NetworkParseError::UnknownSdioPrintfMessageType(message_ty));
+			return Err(SDIOProtocolError::UnknownPrintfMessageType(message_ty).into());
 		}
 
 		Ok(Self {
@@ -484,7 +502,7 @@ mod unit_tests {
 
 			assert_eq!(
 				read_request.lba(),
-				0x7FF_F80,
+				0xFFFF_0000,
 				"Failed to parse correct address to read from on a real life read request.",
 			);
 			assert_eq!(

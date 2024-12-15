@@ -6,9 +6,11 @@
 //! them to then connect to them.
 
 mod announcement;
-pub use announcement::*;
+mod errors;
 
-use crate::errors::{NetworkError, NetworkParseError};
+pub use announcement::*;
+pub use errors::*;
+
 use std::fmt::{Display, Formatter, Result as FmtResult};
 
 /// Used as a "Request" & "Response" code for a packet when talking with
@@ -31,7 +33,7 @@ impl Display for MionCommandByte {
 	}
 }
 impl TryFrom<u8> for MionCommandByte {
-	type Error = NetworkError;
+	type Error = MIONControlProtocolError;
 
 	fn try_from(value: u8) -> Result<Self, Self::Error> {
 		match value {
@@ -39,9 +41,7 @@ impl TryFrom<u8> for MionCommandByte {
 			0x21 => Ok(Self::Broadcast),
 			0x2A => Ok(Self::AnnounceYourselves),
 			0x20 => Ok(Self::AcknowledgeAnnouncement),
-			_ => Err(NetworkError::ParseError(NetworkParseError::UnknownCommand(
-				value,
-			))),
+			_ => Err(MIONControlProtocolError::UnknownCommand(value)),
 		}
 	}
 }

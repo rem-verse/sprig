@@ -7,7 +7,7 @@
 
 use crate::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::cgis::AUTHZ_HEADER,
+	mion::{cgis::AUTHZ_HEADER, proto::cgis::MIONCGIErrors},
 };
 use bytes::{Bytes, BytesMut};
 use fnv::FnvHashMap;
@@ -238,7 +238,10 @@ async fn do_memory_page_fetch(
 	let Ok(potential_response) = timeout_response else {
 		if retry_counter.fetch_add(1, AtomicOrdering::AcqRel) > MAX_RETRIES {
 			_ = result_stream
-				.send(Err(NetworkError::TimeoutError.into()))
+				.send(Err(NetworkError::Timeout(Duration::from_secs(
+					MEMORY_TIMEOUT_SECONDS,
+				))
+				.into()))
 				.await;
 			return false;
 		}
@@ -268,7 +271,10 @@ async fn do_memory_page_fetch(
 	let Ok(body_result) = timeout_body_result else {
 		if retry_counter.fetch_add(1, AtomicOrdering::AcqRel) > MAX_RETRIES {
 			_ = result_stream
-				.send(Err(NetworkError::TimeoutError.into()))
+				.send(Err(NetworkError::Timeout(Duration::from_secs(
+					MEMORY_TIMEOUT_SECONDS,
+				))
+				.into()))
 				.await;
 			return false;
 		}
@@ -281,37 +287,31 @@ async fn do_memory_page_fetch(
 	if status != 200 {
 		if let Ok(body) = body_result {
 			_ = result_stream
-				.send(Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnexpectedStatusCode(status, body),
-				))))
+				.send(Err(MIONCGIErrors::UnexpectedStatusCode(status, body).into()))
 				.await;
 			return false;
 		}
 
 		_ = result_stream
-			.send(Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCodeNoBody(status),
-			))))
+			.send(Err(MIONCGIErrors::UnexpectedStatusCodeNoBody(status).into()))
 			.await;
 		return false;
 	}
-	let read_body_bytes = match body_result.map_err(NetworkError::ReqwestError) {
+	let read_body_bytes = match body_result.map_err(NetworkError::HTTP) {
 		Ok(value) => value,
 		Err(cause) => {
 			_ = result_stream.send(Err(cause.into())).await;
 			return false;
 		}
 	};
-	let body_as_string = match String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)
-	{
-		Ok(value) => value,
-		Err(cause) => {
-			_ = result_stream.send(Err(cause.into())).await;
-			return false;
-		}
-	};
+	let body_as_string =
+		match String::from_utf8(read_body_bytes.into()).map_err(NetworkParseError::Utf8Expected) {
+			Ok(value) => value,
+			Err(cause) => {
+				_ = result_stream.send(Err(cause.into())).await;
+				return false;
+			}
+		};
 
 	process_received_page(page_start, result_stream, &body_as_string).await
 }
@@ -324,7 +324,7 @@ async fn process_received_page(
 	let table = match extract_memory_table_body(body_as_string) {
 		Ok(value) => value,
 		Err(cause) => {
-			_ = result_stream.send(Err(cause)).await;
+			_ = result_stream.send(Err(cause.into())).await;
 			return false;
 		}
 	};
@@ -342,17 +342,16 @@ async fn process_received_page(
 		{
 			if table_column.trim().len() != 2 {
 				_ = result_stream
-					.send(Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-						NetworkParseError::HtmlResponseBadByte(table_column.to_owned()),
-					))))
+					.send(Err(MIONCGIErrors::HtmlResponseBadByte(
+						table_column.to_owned(),
+					)
+					.into()))
 					.await;
 				return false;
 			}
-			let byte = match u8::from_str_radix(table_column.trim(), 16).map_err(|_| {
-				NetworkError::ParseError(NetworkParseError::HtmlResponseBadByte(
-					table_column.to_owned(),
-				))
-			}) {
+			let byte = match u8::from_str_radix(table_column.trim(), 16)
+				.map_err(|_| MIONCGIErrors::HtmlResponseBadByte(table_column.to_owned()))
+			{
 				Ok(value) => value,
 				Err(cause) => {
 					_ = result_stream.send(Err(cause.into())).await;
@@ -367,18 +366,14 @@ async fn process_received_page(
 	false
 }
 
-fn extract_memory_table_body(body: &str) -> Result<String, CatBridgeError> {
-	let start = body.find(TABLE_START_SIGIL).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingMemoryDumpSigil(
-			body.to_owned(),
-		))
-	})?;
+fn extract_memory_table_body(body: &str) -> Result<String, MIONCGIErrors> {
+	let start = body
+		.find(TABLE_START_SIGIL)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingMemoryDumpSigil(body.to_owned()))?;
 	let body_minus_start = &body[start + TABLE_START_SIGIL.len()..];
-	let end = body_minus_start.find(TABLE_END_SIGIL).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingMemoryDumpSigil(
-			body.to_owned(),
-		))
-	})?;
+	let end = body_minus_start
+		.find(TABLE_END_SIGIL)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingMemoryDumpSigil(body.to_owned()))?;
 
 	Ok(body_minus_start[..end].to_owned())
 }
@@ -412,7 +407,7 @@ where
 		)
 		.body::<String>(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)?,
+				.map_err(MIONCGIErrors::FormDataEncodeError)?,
 		)
 		.send()
 		.await?)

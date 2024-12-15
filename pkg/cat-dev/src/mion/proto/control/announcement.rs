@@ -8,8 +8,11 @@
 //! And all the associated structures necessary to parse those packets.
 
 use crate::{
-	errors::{APIError, NetworkError, NetworkParseError},
-	mion::proto::control::MionCommandByte,
+	errors::NetworkParseError,
+	mion::{
+		errors::MIONAPIError,
+		proto::control::{MIONControlProtocolError, MionCommandByte},
+	},
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use mac_address::MacAddress;
@@ -64,59 +67,51 @@ impl Display for MionIdentityAnnouncement {
 	}
 }
 impl TryFrom<Bytes> for MionIdentityAnnouncement {
-	type Error = NetworkError;
+	type Error = NetworkParseError;
 
 	fn try_from(packet: Bytes) -> Result<Self, Self::Error> {
 		if packet.len() < 25 {
-			return Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
+			return Err(NetworkParseError::NotEnoughData(
 				"MionIdentityAnnouncement",
 				25,
 				packet.len(),
 				packet,
-			)));
+			));
 		}
 		if packet.len() > 33 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnexpectedTrailer(
-					"MionIdentityAnnouncement",
-					packet.slice(33..),
-				),
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"MionIdentityAnnouncement",
+				packet.slice(33..),
 			));
 		}
 		let is_detailed = packet.len() > 25;
 
 		if packet[0] != u8::from(MionCommandByte::AnnounceYourselves) {
-			return Err(NetworkError::ParseError(NetworkParseError::UnknownCommand(
-				packet[0],
-			)));
+			return Err(MIONControlProtocolError::UnknownCommand(packet[0]).into());
 		}
 
 		if &packet[1..24] != ANNOUNCEMENT_MESSAGE.as_bytes() {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::FieldEncodedIncorrectly(
-					"MionIdentityAnnouncement",
-					"buff",
-					"Must start with static message: `MULTI_I/O_NETWORK_BOARD` with a NUL Terminator",
-				),
+			return Err(NetworkParseError::FieldEncodedIncorrectly(
+				"MionIdentityAnnouncement",
+				"buff",
+				"Must start with static message: `MULTI_I/O_NETWORK_BOARD` with a NUL Terminator",
 			));
 		}
 		if packet[24] != 0 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::FieldEncodedIncorrectly(
-					"MionIdentityAnnouncement",
-					"buff",
-					"Must start with static message: `MULTI_I/O_NETWORK_BOARD` with a NUL Terminator",
-				),
+			return Err(NetworkParseError::FieldEncodedIncorrectly(
+				"MionIdentityAnnouncement",
+				"buff",
+				"Must start with static message: `MULTI_I/O_NETWORK_BOARD` with a NUL Terminator",
 			));
 		}
 		if is_detailed && &packet[25..] != b"enumV1\0\0" {
-			return Err(NetworkError::ParseError(
+			return Err(
 				NetworkParseError::FieldEncodedIncorrectly(
 					"MionIdentityAnnouncement",
 					"buff",
 					"Only the static string `enumV1` followed by two NUL Terminators is allowed after `MULTI_I/O_NETWORK_BOARD`.",
 				),
-			));
+			);
 		}
 
 		Ok(Self {
@@ -150,8 +145,8 @@ pub enum MIONBootType {
 	NAND,
 	/// Boot from the PC rather than from it's own internal device nand.
 	PCFS,
-	/// Unsure exactly what this means, presumably something related to
-	/// both PCFS & NAND.
+	/// Dual, also sometimes called 'MULTI' (mostly in earlier SDKs), allows
+	/// using both PCFS + NAND at the same time.
 	DUAL,
 	/// An unknown boot type we don't know how to parse.
 	Unk(u8),
@@ -214,15 +209,15 @@ impl MionIdentity {
 		ip_address: Ipv4Addr,
 		mac: MacAddress,
 		name: String,
-	) -> Result<Self, APIError> {
+	) -> Result<Self, MIONAPIError> {
 		if !name.is_ascii() {
-			return Err(APIError::DeviceNameMustBeAscii);
+			return Err(MIONAPIError::DeviceNameMustBeAscii);
 		}
 		if name.len() > 255 {
-			return Err(APIError::DeviceNameTooLong(name.len()));
+			return Err(MIONAPIError::DeviceNameTooLong(name.len()));
 		}
 		if name.is_empty() {
-			return Err(APIError::DeviceNameCannotBeEmpty);
+			return Err(MIONAPIError::DeviceNameCannotBeEmpty);
 		}
 
 		Ok(Self {
@@ -420,63 +415,55 @@ impl Display for MionIdentity {
 	}
 }
 impl TryFrom<(Ipv4Addr, Bytes)> for MionIdentity {
-	type Error = NetworkError;
+	type Error = NetworkParseError;
 
 	fn try_from((from_address, packet): (Ipv4Addr, Bytes)) -> Result<Self, Self::Error> {
 		// Packet must be at least 18 bytes.
 		//
 		// Name starts at the 17th byte, and must be at least one byte long.
 		if packet.len() < 17 {
-			return Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
+			return Err(NetworkParseError::NotEnoughData(
 				"MionIdentity",
 				17,
 				packet.len(),
 				packet,
-			)));
+			));
 		}
 
 		if packet[0] != u8::from(MionCommandByte::AcknowledgeAnnouncement) {
-			return Err(NetworkError::ParseError(NetworkParseError::UnknownCommand(
-				packet[0],
-			)));
+			return Err(MIONControlProtocolError::UnknownCommand(packet[0]).into());
 		}
 		// Name is variable in size, so we need to make sure we need there is
 		// enough space. Name length is stored at index 7, and is just one byte
 		// long.
 		let name_length = usize::from(packet[7]);
 		if packet.len() < 16 + name_length {
-			return Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
+			return Err(NetworkParseError::NotEnoughData(
 				"MionIdentity",
 				16 + name_length,
 				packet.len(),
 				packet,
-			)));
+			));
 		}
 		if name_length < 1 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::FieldNotLongEnough(
-					"MionIdentity",
-					"name",
-					1,
-					name_length,
-					packet,
-				),
+			return Err(NetworkParseError::FieldNotLongEnough(
+				"MionIdentity",
+				"name",
+				1,
+				name_length,
+				packet,
 			));
 		}
 		if packet.len() > 16 + name_length + 239 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnexpectedTrailer(
-					"MionIdentity",
-					packet.slice(16 + name_length + 239..),
-				),
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"MionIdentity",
+				packet.slice(16 + name_length + 239..),
 			));
 		}
 		if packet.len() != 16 + name_length && packet.len() != 16 + name_length + 239 {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::UnexpectedTrailer(
-					"MionIdentity",
-					packet.slice(16 + name_length..),
-				),
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"MionIdentity",
+				packet.slice(16 + name_length..),
 			));
 		}
 		let is_detailed = packet.len() > 16 + name_length;
@@ -487,13 +474,17 @@ impl TryFrom<(Ipv4Addr, Bytes)> for MionIdentity {
 		let fpga_version = [packet[8], packet[9], packet[10], packet[11]];
 		let firmware_version = [packet[12], packet[13], packet[14], packet[15]];
 		let Ok(name) = String::from_utf8(Vec::from(&packet[16..16 + name_length])) else {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::FieldEncodedIncorrectly("MionIdentity", "name", "ASCII"),
+			return Err(NetworkParseError::FieldEncodedIncorrectly(
+				"MionIdentity",
+				"name",
+				"ASCII",
 			));
 		};
 		if !name.is_ascii() {
-			return Err(NetworkError::ParseError(
-				NetworkParseError::FieldEncodedIncorrectly("MionIdentity", "name", "ASCII"),
+			return Err(NetworkParseError::FieldEncodedIncorrectly(
+				"MionIdentity",
+				"name",
+				"ASCII",
 			));
 		}
 
@@ -591,6 +582,7 @@ impl Valuable for MionIdentity {
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
+	use crate::mion::errors::MIONProtocolError;
 
 	#[test]
 	pub fn mion_command_byte_conversions() {
@@ -622,7 +614,7 @@ mod unit_tests {
 				// Doesn't fall within the ASCII range.
 				"Ƙ".to_owned()
 			),
-			Err(APIError::DeviceNameMustBeAscii),
+			Err(MIONAPIError::DeviceNameMustBeAscii),
 		);
 		assert_eq!(
 			MionIdentity::new(
@@ -634,7 +626,7 @@ mod unit_tests {
 				// Device name cannot be more than 255 bytes.
 				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned()
 			),
-			Err(APIError::DeviceNameTooLong(300)),
+			Err(MIONAPIError::DeviceNameTooLong(300)),
 		);
 		assert_eq!(
 			MionIdentity::new(
@@ -646,7 +638,7 @@ mod unit_tests {
 				// Cannot be empty!
 				String::new(),
 			),
-			Err(APIError::DeviceNameCannotBeEmpty),
+			Err(MIONAPIError::DeviceNameCannotBeEmpty),
 		);
 		// Success!
 		assert!(MionIdentity::new(
@@ -709,12 +701,7 @@ mod unit_tests {
 
 			assert!(matches!(
 				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone())),
-				Err(NetworkError::ParseError(NetworkParseError::NotEnoughData(
-					"MionIdentity",
-					17,
-					16,
-					_,
-				))),
+				Err(NetworkParseError::NotEnoughData("MionIdentity", 17, 16, _,)),
 			));
 		}
 
@@ -746,12 +733,12 @@ mod unit_tests {
 				101,
 			]);
 
-			let result = MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone()));
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(value, NetworkParseError::UnknownCommand(0x3F));
-			}
+			assert_eq!(
+				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone())),
+				Err(NetworkParseError::MION(MIONProtocolError::Control(
+					MIONControlProtocolError::UnknownCommand(0x3F)
+				))),
+			);
 		}
 
 		// Name is not long enough.
@@ -782,15 +769,16 @@ mod unit_tests {
 				101,
 			]);
 
-			let result = MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone()));
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::FieldNotLongEnough("MionIdentity", "name", 1, 0, buff)
-				);
-			}
+			assert_eq!(
+				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone())),
+				Err(NetworkParseError::FieldNotLongEnough(
+					"MionIdentity",
+					"name",
+					1,
+					0,
+					buff
+				)),
+			);
 		}
 
 		// Name not UTF-8.
@@ -826,15 +814,14 @@ mod unit_tests {
 				0xFF,
 			]);
 
-			let result = MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone()));
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::FieldEncodedIncorrectly("MionIdentity", "name", "ASCII")
-				);
-			}
+			assert_eq!(
+				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone())),
+				Err(NetworkParseError::FieldEncodedIncorrectly(
+					"MionIdentity",
+					"name",
+					"ASCII"
+				)),
+			);
 		}
 
 		// Name UTF-8 but not ascii.
@@ -866,15 +853,14 @@ mod unit_tests {
 				0x98,
 			]);
 
-			let result = MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone()));
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::FieldEncodedIncorrectly("MionIdentity", "name", "ASCII")
-				);
-			}
+			assert_eq!(
+				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone())),
+				Err(NetworkParseError::FieldEncodedIncorrectly(
+					"MionIdentity",
+					"name",
+					"ASCII"
+				)),
+			);
 		}
 
 		// Unexpected trailer that isn't detailed.
@@ -909,18 +895,13 @@ mod unit_tests {
 			// Unexpected trailers...
 			buff.extend_from_slice(b"abcd");
 
-			let result = MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.freeze()));
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::UnexpectedTrailer(
-						"MionIdentity",
-						Bytes::from(b"abcd".iter().cloned().collect::<Vec<u8>>())
-					)
-				);
-			}
+			assert_eq!(
+				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.freeze())),
+				Err(NetworkParseError::UnexpectedTrailer(
+					"MionIdentity",
+					Bytes::from(b"abcd".iter().cloned().collect::<Vec<u8>>())
+				)),
+			);
 		}
 
 		// Unexpected trailing data on fully detailed packet.
@@ -957,18 +938,13 @@ mod unit_tests {
 			// Unexpected trailers...
 			buff.extend_from_slice(b"abcd");
 
-			let result = MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.freeze()));
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::UnexpectedTrailer(
-						"MionIdentity",
-						Bytes::from(b"abcd".iter().cloned().collect::<Vec<u8>>())
-					)
-				);
-			}
+			assert_eq!(
+				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.freeze())),
+				Err(NetworkParseError::UnexpectedTrailer(
+					"MionIdentity",
+					Bytes::from(b"abcd".iter().cloned().collect::<Vec<u8>>())
+				)),
+			);
 		}
 	}
 
@@ -1088,15 +1064,15 @@ mod unit_tests {
 				0x0,
 			]);
 
-			let result = MionIdentity::try_from((Ipv4Addr::LOCALHOST, packet.clone()));
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::NotEnoughData("MionIdentity", 17, 3, packet)
-				);
-			}
+			assert_eq!(
+				MionIdentity::try_from((Ipv4Addr::LOCALHOST, packet.clone())),
+				Err(NetworkParseError::NotEnoughData(
+					"MionIdentity",
+					17,
+					3,
+					packet
+				)),
+			);
 		}
 
 		// Packet too long.
@@ -1150,18 +1126,13 @@ mod unit_tests {
 				0x0,
 			]);
 
-			let result = MionIdentityAnnouncement::try_from(packet.clone());
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::UnexpectedTrailer(
-						"MionIdentityAnnouncement",
-						packet.slice(33..),
-					)
-				);
-			}
+			assert_eq!(
+				MionIdentityAnnouncement::try_from(packet.clone()),
+				Err(NetworkParseError::UnexpectedTrailer(
+					"MionIdentityAnnouncement",
+					packet.slice(33..),
+				)),
+			);
 		}
 
 		// Command Byte Incorrect.
@@ -1173,15 +1144,12 @@ mod unit_tests {
 			buff.push(0x0);
 			let packet = Bytes::from(buff);
 
-			let result = MionIdentityAnnouncement::try_from(packet);
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(
-					value,
-					NetworkParseError::UnknownCommand(u8::from(MionCommandByte::Search))
-				);
-			}
+			assert_eq!(
+				MionIdentityAnnouncement::try_from(packet),
+				Err(NetworkParseError::MION(MIONProtocolError::Control(
+					MIONControlProtocolError::UnknownCommand(u8::from(MionCommandByte::Search))
+				))),
+			);
 		}
 
 		// Packet Data incorrect data.
@@ -1217,16 +1185,14 @@ mod unit_tests {
 				0x0,
 			]);
 
-			let result = MionIdentityAnnouncement::try_from(packet);
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(value, NetworkParseError::FieldEncodedIncorrectly(
+			assert_eq!(
+				MionIdentityAnnouncement::try_from(packet),
+				Err(NetworkParseError::FieldEncodedIncorrectly(
 					"MionIdentityAnnouncement",
 					"buff",
 					"Must start with static message: `MULTI_I/O_NETWORK_BOARD` with a NUL Terminator",
-				));
-			}
+				)),
+			);
 		}
 
 		// Not ending with a NUL terminator.
@@ -1239,16 +1205,14 @@ mod unit_tests {
 			buff.push(0x1);
 			let packet = Bytes::from(buff);
 
-			let result = MionIdentityAnnouncement::try_from(packet);
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(value, NetworkParseError::FieldEncodedIncorrectly(
+			assert_eq!(
+				MionIdentityAnnouncement::try_from(packet),
+				Err(NetworkParseError::FieldEncodedIncorrectly(
 					"MionIdentityAnnouncement",
 					"buff",
 					"Must start with static message: `MULTI_I/O_NETWORK_BOARD` with a NUL Terminator",
-				));
-			}
+				)),
+			);
 		}
 
 		// `enumV1` tag is incorrect.
@@ -1264,16 +1228,14 @@ mod unit_tests {
 			buff.push(0x2);
 			let packet = Bytes::from(buff);
 
-			let result = MionIdentityAnnouncement::try_from(packet);
-			assert!(matches!(result, Err(NetworkError::ParseError(_))));
-			// Guaranteed to be taken!
-			if let Err(NetworkError::ParseError(value)) = result {
-				assert_eq!(value, NetworkParseError::FieldEncodedIncorrectly(
+			assert_eq!(
+				MionIdentityAnnouncement::try_from(packet),
+				Err(NetworkParseError::FieldEncodedIncorrectly(
 					"MionIdentityAnnouncement",
 					"buff",
 					"Only the static string `enumV1` followed by two NUL Terminators is allowed after `MULTI_I/O_NETWORK_BOARD`.",
-				));
-			}
+				)),
+			);
 		}
 	}
 

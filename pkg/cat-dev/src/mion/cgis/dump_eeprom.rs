@@ -2,8 +2,8 @@
 //! accessing the memory of the EEPROM on the MION devices.
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::cgis::do_simple_request,
+	errors::NetworkError,
+	mion::{cgis::do_simple_request, proto::cgis::MIONCGIErrors},
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use reqwest::{Client, Method};
@@ -24,7 +24,7 @@ const TABLE_END_SIGIL: &str = "</table>";
 /// - If the server does not respond with a 200.
 /// - If we cannot read the body from HTTP.
 /// - If we cannot parse the HTML response.
-pub async fn dump_eeprom(mion_ip: Ipv4Addr) -> Result<Bytes, CatBridgeError> {
+pub async fn dump_eeprom(mion_ip: Ipv4Addr) -> Result<Bytes, NetworkError> {
 	dump_eeprom_with_raw_client(&Client::default(), mion_ip).await
 }
 
@@ -40,7 +40,7 @@ pub async fn dump_eeprom(mion_ip: Ipv4Addr) -> Result<Bytes, CatBridgeError> {
 pub async fn dump_eeprom_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
-) -> Result<Bytes, CatBridgeError> {
+) -> Result<Bytes, NetworkError> {
 	let mut memory_buffer = BytesMut::with_capacity(0x2000);
 
 	while memory_buffer.len() <= EEPROM_MAX_ADDRESS {
@@ -70,17 +70,12 @@ pub async fn dump_eeprom_with_raw_client(
 				.skip(3)
 			{
 				if table_column.trim().len() != 2 {
-					return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-						NetworkParseError::HtmlResponseBadByte(table_column.to_owned()),
-					)));
+					return Err(MIONCGIErrors::HtmlResponseBadByte(table_column.to_owned()).into());
 				}
-				memory_buffer.put_u8(u8::from_str_radix(table_column.trim(), 16).map_err(
-					|_| {
-						NetworkError::ParseError(NetworkParseError::HtmlResponseBadByte(
-							table_column.to_owned(),
-						))
-					},
-				)?);
+				memory_buffer
+					.put_u8(u8::from_str_radix(table_column.trim(), 16).map_err(|_| {
+						MIONCGIErrors::HtmlResponseBadByte(table_column.to_owned())
+					})?);
 			}
 		}
 	}
@@ -88,18 +83,14 @@ pub async fn dump_eeprom_with_raw_client(
 	Ok(memory_buffer.freeze())
 }
 
-fn extract_memory_table_body(body: &str) -> Result<String, CatBridgeError> {
-	let start = body.find(TABLE_START_SIGIL).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingMemoryDumpSigil(
-			body.to_owned(),
-		))
-	})?;
+fn extract_memory_table_body(body: &str) -> Result<String, MIONCGIErrors> {
+	let start = body
+		.find(TABLE_START_SIGIL)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingMemoryDumpSigil(body.to_owned()))?;
 	let body_minus_start = &body[start + TABLE_START_SIGIL.len()..];
-	let end = body_minus_start.find(TABLE_END_SIGIL).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingMemoryDumpSigil(
-			body.to_owned(),
-		))
-	})?;
+	let end = body_minus_start
+		.find(TABLE_END_SIGIL)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingMemoryDumpSigil(body.to_owned()))?;
 
 	Ok(body_minus_start[..end].to_owned())
 }
@@ -118,7 +109,7 @@ pub async fn do_raw_eeprom_request<'key, 'value, UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<String, CatBridgeError>
+) -> Result<String, NetworkError>
 where
 	UrlEncodableType: Serialize,
 {
@@ -128,8 +119,7 @@ where
 		format!("http://{mion_ip}/dbg/eeprom_dump.cgi"),
 		Some(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)
-				.map_err(NetworkError::ParseError)?,
+				.map_err(MIONCGIErrors::FormDataEncodeError)?,
 		),
 	)
 	.await
