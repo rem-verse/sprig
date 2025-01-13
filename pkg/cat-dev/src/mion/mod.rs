@@ -654,15 +654,17 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn can_set_and_write_to_file() {
-		use std::fs::File;
 		use tempfile::tempdir;
+		use tokio::fs::File;
 
 		let temporary_directory =
 			tempdir().expect("Failed to create temporary directory for tests!");
 		let mut path = PathBuf::from(temporary_directory.path());
 		path.push("bridge_env_custom_made.ini");
 		{
-			File::create(&path).expect("Failed to create test file to write too!");
+			File::create(&path)
+				.await
+				.expect("Failed to create test file to write too!");
 		}
 		let mut host_env = BridgeHostState::load_explicit_path(path.clone())
 			.await

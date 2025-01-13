@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use futures::{stream::SplitSink, SinkExt};
 use tokio::{
 	fs::{read as fs_read, File},
-	io::AsyncReadExt,
+	io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 	net::TcpStream,
 };
 use tokio_util::codec::Framed;
@@ -24,13 +24,13 @@ pub async fn handle_read_dlf(
 	host_filesystem: &HostFilesystem,
 	output: &mut SplitSink<Framed<TcpStream, ChunkATAPIEmulatorCodec>, Bytes>,
 ) -> Result<(), CatBridgeError> {
-	let read_address = u128::from(u32::from_le_bytes([
+	let read_address = u128::from(u32::from_be_bytes([
 		packet[0x4],
 		packet[0x5],
 		packet[0x6],
 		packet[0x7],
 	])) << 11_u128;
-	let read_length = u128::from(u32::from_le_bytes([
+	let read_length = u128::from(u32::from_be_bytes([
 		packet[0x8],
 		packet[0x9],
 		packet[0xA],
@@ -51,11 +51,15 @@ pub async fn handle_read_dlf(
 		.map_err(FSError::from)?;
 	let dlf = DiskLayoutFile::try_from(Bytes::from(bytes_of_dlf))?;
 
-	if let Some(path) = dlf.get_path_for_address(read_address) {
+	if let Some((path, offset)) = dlf.get_path_and_offset_for_file(read_address).await {
 		let metadata = path.metadata().map_err(FSError::from)?;
-		let file_size_bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+		let file_size_bytes = usize::try_from(metadata.len() - offset).unwrap_or(usize::MAX);
 		// Read the file contents...
 		let mut handle = File::open(&path).await.map_err(FSError::from)?;
+		handle
+			.seek(SeekFrom::Start(offset))
+			.await
+			.map_err(FSError::from)?;
 		let mut buff = BytesMut::zeroed(std::cmp::min(file_size_bytes, rl_as_usize));
 		handle.read_exact(&mut buff).await.map_err(FSError::from)?;
 		std::mem::drop(handle);

@@ -9,7 +9,10 @@ use crate::{
 	utils::add_context_to,
 	SHOULD_LOG_JSON,
 };
-use cat_dev::fsemul::{atapi::AtapiServer, HostFilesystem};
+use cat_dev::fsemul::{
+	atapi::{AtapiServer, DEFAULT_ATAPI_PORT},
+	HostFilesystem,
+};
 use miette::miette;
 use std::net::Ipv4Addr;
 use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};
@@ -21,14 +24,11 @@ pub async fn serve_atapi(
 	host_ip: Option<Ipv4Addr>,
 	fsemul_atapi_port: Option<u16>,
 	setup_params_atapi_port: Option<u16>,
-) {
-	let atapi_server = match AtapiServer::new(
-		host_filesystem,
-		host_ip,
-		fsemul_atapi_port.or(setup_params_atapi_port),
-	)
-	.await
-	{
+) -> u16 {
+	let port = fsemul_atapi_port
+		.or(setup_params_atapi_port)
+		.unwrap_or(DEFAULT_ATAPI_PORT);
+	let atapi_server = match AtapiServer::new(host_filesystem, host_ip, Some(port)).await {
 		Ok(srv) => srv,
 		Err(cause) => {
 			if SHOULD_LOG_JSON() {
@@ -52,6 +52,7 @@ pub async fn serve_atapi(
 	};
 
 	spawn_atapi(atapi_server);
+	port
 }
 
 fn spawn_atapi(atapi_emulator: AtapiServer<'static>) {

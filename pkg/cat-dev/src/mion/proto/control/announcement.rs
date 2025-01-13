@@ -701,7 +701,7 @@ mod unit_tests {
 
 			assert!(matches!(
 				MionIdentity::try_from((Ipv4Addr::LOCALHOST, buff.clone())),
-				Err(NetworkParseError::NotEnoughData("MionIdentity", 17, 16, _,)),
+				Err(NetworkParseError::NotEnoughData("MionIdentity", 17, 16, _)),
 			));
 		}
 

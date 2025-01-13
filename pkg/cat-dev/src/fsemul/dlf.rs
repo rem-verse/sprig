@@ -16,6 +16,8 @@ use std::{
 	collections::BTreeMap,
 	path::{Path, PathBuf},
 };
+use tokio::fs::metadata as get_path_metadata;
+use tracing::warn;
 
 /// The maximum address that can be stored in a DLF file.
 const MAX_ADDRESS: u128 = 0x000F_FFFF_FFFF_FFFF_FFFF_u128;
@@ -59,7 +61,7 @@ impl DiskLayoutFile {
 	/// Get the version string that would appear in the DLF file.
 	#[must_use]
 	pub fn version(&self) -> String {
-		format!("v{}.{:02}", self.major_version, self.minor_version,)
+		format!("v{}.{:02}", self.major_version, self.minor_version)
 	}
 
 	/// Get the major version of this disk layout file.
@@ -88,8 +90,51 @@ impl DiskLayoutFile {
 
 	/// Get the path at a particular address.
 	#[must_use]
-	pub fn get_path_for_address(&self, address: u128) -> Option<&PathBuf> {
-		self.address_to_path_map.get(&address)
+	pub async fn get_path_and_offset_for_file(
+		&self,
+		requested_address: u128,
+	) -> Option<(&PathBuf, u64)> {
+		// Attempt to find an exact match.
+		if let Some(path) = self.address_to_path_map.get(&requested_address) {
+			return Some((path, 0));
+		}
+
+		// Otherwise try to find an address that might be in the middle of a file.
+		let mut last_addr = 0_u128;
+		let mut last_path = self
+			.address_to_path_map
+			.get(&self.max_address())
+			.unwrap_or_else(|| unreachable!());
+		for (addr, path) in &self.address_to_path_map {
+			if *addr < requested_address {
+				last_addr = *addr;
+				last_path = path;
+				continue;
+			}
+			let metadata = match get_path_metadata(last_path).await {
+				Ok(md) => md,
+				Err(cause) => {
+					warn!(
+						?cause,
+						path = %last_path.display(),
+						"Failed to get metadata for path, not sure if matching over SDIO, treating as non-match.",
+					);
+					break;
+				}
+			};
+			let offset = u64::try_from(requested_address - last_addr).unwrap_or(u64::MAX);
+			// Whee! We did find a match, and it's right in the middle of another
+			// file.
+			if metadata.len() > offset {
+				return Some((last_path, offset));
+			}
+
+			// Break if we can't be in the middle of a file.
+			break;
+		}
+
+		// No match found.
+		None
 	}
 
 	/// Insert, or update the path at a particular address.
@@ -308,8 +353,8 @@ mod unit_tests {
 		final_path
 	}
 
-	#[test]
-	pub fn can_parse_real_files() {
+	#[tokio::test]
+	pub async fn can_parse_real_files() {
 		// Just validate these don't error.
 		let real_life_dlf = Bytes::from(
 			std::fs::read(get_test_data_path("ppc_boot.dlf"))
@@ -336,9 +381,10 @@ mod unit_tests {
 			"Real-DLF didn't parse correct minor version!"
 		);
 		assert_eq!(
-			dlf.get_path_for_address(0x80000_u128),
-			Some(&PathBuf::from(
-				r#"/opt/cafe_sdk/temp/mythra/caferun/ppc.bsf"#
+			dlf.get_path_and_offset_for_file(0x80000_u128).await,
+			Some((
+				&PathBuf::from(r#"/opt/cafe_sdk/temp/mythra/caferun/ppc.bsf"#),
+				0
 			)),
 			"Real-DLF did not match correct path for address.",
 		);
@@ -359,8 +405,8 @@ mod unit_tests {
 			"Empty DLF didn't parse correct minor version!"
 		);
 		assert_eq!(
-			edlf.get_path_for_address(0x0_u128),
-			Some(&PathBuf::new()),
+			edlf.get_path_and_offset_for_file(0x0_u128).await,
+			Some((&PathBuf::new(), 0)),
 			"Empty dlf did not match correct path for address.",
 		);
 		assert_eq!(

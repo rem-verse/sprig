@@ -10,7 +10,10 @@ use crate::{
 	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
-	cgis::{get_info, get_setup_parameters, get_versions, set_disc_eject_state},
+	cgis::{
+		get_info, get_setup_parameters, get_versions, power_on, power_on_v2, set_disc_eject_state,
+	},
+	parameter::get_parameters as get_param_space_parameters,
 	proto::{cgis::SetupParameters, control::MIONBootType},
 };
 use fnv::FnvHashMap;
@@ -122,6 +125,7 @@ pub async fn validate_bridge_ready_for_booting(
 	bridge_ip: Ipv4Addr,
 	bridge_mac: MacAddress,
 	bridge_name: &str,
+	parameter_space_port: Option<u16>,
 ) -> (FnvHashMap<String, String>, Option<SetupParameters>, bool) {
 	if !is_modern_bridge {
 		return validate_legacy_bridge_ready_for_booting(
@@ -129,6 +133,7 @@ pub async fn validate_bridge_ready_for_booting(
 			bridge_ip,
 			bridge_mac,
 			bridge_name,
+			parameter_space_port,
 		)
 		.await;
 	}
@@ -277,6 +282,85 @@ pub async fn turn_down_for_disc(bridge_ip: Ipv4Addr) {
 	}
 }
 
+/// Call the POWER ON for this particular device. If we're talking to a modern
+/// bridge we'll use [`power_on_v2`], otherwise [`power_on`].
+///
+/// ## Exits
+///
+/// If we cannot make the HTTP request, or parse the response for powering on.
+/// Will also error if the device said it did not return okay when powering on.
+pub async fn wrap_power_on(
+	is_modern_bridge: bool,
+	bridge_ip: Ipv4Addr,
+	host_ip: Option<Ipv4Addr>,
+	final_atapi_port: u16,
+	final_sata_port: Option<u16>,
+) {
+	let res = if is_modern_bridge {
+		power_on_v2(
+			bridge_ip,
+			host_ip,
+			Some(final_atapi_port),
+			final_sata_port,
+			true,
+		)
+		.await
+	} else {
+		power_on(bridge_ip).await.map_err(Into::into)
+	};
+
+	if let Err(cause) = res {
+		if SHOULD_LOG_JSON() {
+			error!(
+				id = "bridgectl::boot::send_power_on",
+				?cause,
+				bridge.ip = %bridge_ip,
+				bridge.is_modern = is_modern_bridge,
+				host.ip_override = ?host_ip,
+				host.atapi_port = %final_atapi_port,
+				host.sata_port = ?final_sata_port,
+				"Failed to power on bridge!",
+			);
+		} else {
+			error!(
+				"\n{:?}",
+				add_context_to(
+					miette!("Could not power on bridge!"),
+					[
+						cause.into(),
+						miette!(
+							help = format!(
+								"Arguments were: Bridge IP: {bridge_ip} {modern_str}",
+								modern_str = if is_modern_bridge { "(modern)" } else { "" },
+							),
+							"Bridge Information Retrieved",
+						),
+						miette!(
+							help = format!(
+								"Arguments were: Host IP Override: {} / ATAPI: {final_atapi_port} / SATA: {}",
+								if let Some(over) = host_ip {
+									format!("{over}")
+								} else {
+									"(None)".to_owned()
+								},
+								if let Some(sp) = final_sata_port {
+									format!("{sp}")
+								} else {
+									"(Not Enabled)".to_owned()
+								},
+							),
+							"Host Information",
+						),
+					]
+					.into_iter(),
+				),
+			);
+		}
+
+		std::process::exit(BOOT_CGI_FAILURE);
+	}
+}
+
 /// Validate if a bridge is ready to be booted when running legacy MION
 /// Firmwares.
 ///
@@ -291,6 +375,7 @@ async fn validate_legacy_bridge_ready_for_booting(
 	bridge_ip: Ipv4Addr,
 	bridge_mac: MacAddress,
 	bridge_name: &str,
+	parameter_space_port: Option<u16>,
 ) -> (FnvHashMap<String, String>, Option<SetupParameters>, bool) {
 	if will_take_over {
 		if SHOULD_LOG_JSON() {
@@ -309,14 +394,42 @@ async fn validate_legacy_bridge_ready_for_booting(
 	let setup_parameters =
 		wrap_get_setup_parameters(bridge_ip, bridge_name, Some(bridge_mac)).await;
 
+	let mion_space_params =
+		match get_param_space_parameters(bridge_ip, parameter_space_port, None).await {
+			Ok(ps) => ps,
+			Err(cause) => {
+				if SHOULD_LOG_JSON() {
+					error!(
+						id = "bridgectl::boot::failed_dump_mion_param_space",
+						?cause,
+						bridge.ip = %bridge_ip,
+						bridge.override_ps_port = ?parameter_space_port,
+						"Failed to get boot mode for legacy MION of parameter space port.",
+					);
+				} else {
+					error!(
+						"\n{:?}",
+						miette!(
+							help = format!("while talking to bridge: {bridge_ip}"),
+							"Failed to get boot mode for legacy MION of parameter space port."
+						)
+						.wrap_err(cause)
+					);
+				}
+
+				std::process::exit(BOOT_COULD_NOT_CONNECT);
+			}
+		};
+	let boot_mode = MIONBootType::from(
+		mion_space_params
+			.get_parameter_by_index(2)
+			.unwrap_or_default(),
+	);
+
 	(
 		FnvHashMap::with_capacity_and_hasher(0, BuildHasherDefault::default()),
 		setup_parameters,
-		// We could get the boot type from the parameter space port, BUT
-		// with legacy mions we actually don't need to override emulation state.
-		//
-		// Which is just cool, the device just boots anyway.
-		false,
+		matches!(boot_mode, MIONBootType::PCFS | MIONBootType::DUAL),
 	)
 }
 

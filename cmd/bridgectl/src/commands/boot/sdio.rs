@@ -32,9 +32,14 @@ pub async fn serve_sdio(
 	bridge_ip: Ipv4Addr,
 	setup_params: Option<&SetupParameters>,
 	host_file_system: &'static HostFilesystem,
+	override_control_port: Option<u16>,
+	override_printf_port: Option<u16>,
+	disable_load_bearing_sleep: bool,
 ) {
-	let opt_printf_port = setup_params.map(SetupParameters::sdio_printf_port);
-	let opt_data_port = setup_params.map(SetupParameters::sdio_block_port);
+	let opt_printf_port =
+		override_printf_port.or(setup_params.map(SetupParameters::sdio_printf_port));
+	let opt_data_port =
+		override_control_port.or(setup_params.map(SetupParameters::sdio_block_port));
 
 	let sdio_client = match SdioClient::connect(
 		bridge_ip,
@@ -42,6 +47,7 @@ pub async fn serve_sdio(
 		opt_data_port,
 		*CONNECTION_TIMEOUT,
 		host_file_system,
+		disable_load_bearing_sleep,
 	)
 	.await
 	{

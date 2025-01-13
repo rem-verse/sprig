@@ -150,11 +150,13 @@ impl<'fs> AtapiServer<'fs> {
 						debug!("ATAPI Event packet sent!");
 					}
 					[0xF0, _] => {
+						debug!("ATAPI 0xF0 called");
 						sink.send(Bytes::from(vec![0x0; 4]))
 							.await
 							.map_err(NetworkError::IO)?;
 					}
 					[0xF1, 0x00 | 0x02] => {
+						debug!("ATAPI 0xF1, 0x0 | 0x02 random data called");
 						// I think this is just random data?
 						sink.send(Bytes::from(vec![0x69; 32]))
 							.await
@@ -192,7 +194,9 @@ impl<'fs> AtapiServer<'fs> {
 							debug!("Sent F6 reply!");
 						}
 					}
-					_ => {}
+					_ => {
+						debug!("Blackhole-ing: [{packet:02X?}]");
+					}
 				}
 			}
 		}

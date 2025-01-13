@@ -18,7 +18,8 @@ pub async fn handle_tail(
 		get_targeted_bridge_ip().await,
 		&serial_port_flags,
 		serial_port_positional.as_ref(),
-	);
+	)
+	.await;
 
 	if let Err(cause) = serial_reader.spawn_log_task().await {
 		if SHOULD_LOG_JSON() {

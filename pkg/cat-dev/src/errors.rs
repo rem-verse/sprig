@@ -13,9 +13,10 @@ use local_ip_address::Error as LocalIpAddressError;
 use miette::Diagnostic;
 use network_interface::Error as NetworkInterfaceError;
 use reqwest::Error as ReqwestError;
-use std::{string::FromUtf8Error, time::Duration};
+use std::{ffi::FromBytesUntilNulError, str::Utf8Error, string::FromUtf8Error, time::Duration};
 use thiserror::Error;
 use tokio::{io::Error as IoError, sync::mpsc::error::SendError, task::JoinError};
+use walkdir::Error as WalkdirError;
 
 /// The 'top-level' error type for this entire crate, all error types
 /// wrap underneath this.
@@ -121,6 +122,9 @@ pub enum FSError {
 	#[error("Error writing/reading data from the filesystem: {0}")]
 	#[diagnostic(code(cat_dev::fs::io))]
 	IO(#[from] IoError),
+	#[error("Error iterating through directory: {0:?}")]
+	#[diagnostic(code(cat_dev::fs::iterating_directory_error))]
+	IteratingDirectoryError(#[from] WalkdirError),
 	#[error("Expect file to have at least: {0} line(s), but it was only: {1} line(s) long.")]
 	#[diagnostic(code(cat_dev::fs::too_few_lines))]
 	TooFewLines(usize, usize),
@@ -220,6 +224,10 @@ impl From<SendError<Bytes>> for CatBridgeError {
 /// sent us some junk.
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
 pub enum NetworkParseError {
+	/// Failed reading C String with NUL bytes at the end.
+	#[error("Failed reading c style string from packet: {0:?}")]
+	#[diagnostic(code(cat_dev::net::parse::bad_c_string))]
+	BadCString(#[from] FromBytesUntilNulError),
 	/// We expected to read a packet containing exactly a set of bytes,
 	/// unfortunatley it did not contain those _Exact_ bytes.
 	#[error("Tried to read Packet of type ({0}) from network, must be encoded exactly as [{1:02x?}], but got [{2:02x?}]")]
@@ -260,6 +268,10 @@ pub enum NetworkParseError {
 	#[error("Data read from the network was expected to be UTF-8, but was not: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::utf8_expected))]
 	Utf8Expected(#[from] FromUtf8Error),
+	/// We expected to read UTF-8 data from the network, but it wasn't UTF-8.
+	#[error("Data read from a network slice was expected to be UTF-8, but was not: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::utf8_expected_slice))]
+	Utf8ExpectedSlice(#[from] Utf8Error),
 }
 impl From<NetworkParseError> for CatBridgeError {
 	fn from(value: NetworkParseError) -> Self {

@@ -34,13 +34,13 @@ pub struct CliOpts {
 impl CliOpts {
 	pub fn print_help() {
 		println!(
-			r#"Usage: mionps [-t timeout] [-v] [-d MION_IP] | MION_IP OFFSET [-s VALUE]
+			"Usage: mionps [-t timeout] [-v] [-d MION_IP] | MION_IP OFFSET [-s VALUE]
 where: -v        verbose
        -d        hex dump of the param space
        -t        sets timeout value in milliseconds
        MION_IP   IP address of the MION device
        OFFSET    byte offset(0-511) of the value to get/set
-       -s VALUE  set the value(0-255) at the offset"#
+       -s VALUE  set the value(0-255) at the offset"
 		);
 	}
 }

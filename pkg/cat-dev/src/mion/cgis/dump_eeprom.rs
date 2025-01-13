@@ -105,7 +105,7 @@ fn extract_memory_table_body(body: &str) -> Result<String, MIONCGIErrors> {
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_eeprom_request<'key, 'value, UrlEncodableType>(
+pub async fn do_raw_eeprom_request<UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,

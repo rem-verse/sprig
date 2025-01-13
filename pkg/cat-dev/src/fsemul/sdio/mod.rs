@@ -37,10 +37,10 @@ use tokio::{
 		Mutex,
 	},
 	task::Builder as TaskBuilder,
-	time::timeout,
+	time::{sleep, timeout},
 };
 use tokio_util::codec::Framed;
-use tracing::{error, info};
+use tracing::{error, info, trace, warn};
 
 /// The default port to use for "SDIO Printf/Control" communications.
 ///
@@ -90,6 +90,7 @@ pub struct SdioClient<'fs> {
 	data_stream: TcpStream,
 	host_ip: Ipv4Addr,
 	host_filesystem: &'fs HostFilesystem,
+	no_load_bearing_sleep: bool,
 	printf_control_buff: String,
 }
 impl<'fs> SdioClient<'fs> {
@@ -107,6 +108,7 @@ impl<'fs> SdioClient<'fs> {
 		data_port: Option<u16>,
 		connect_timeout: Option<Duration>,
 		host_filesystem: &'fs HostFilesystem,
+		no_load_bearing_sleep: bool,
 	) -> Result<Self, CatBridgeError> {
 		let control_port = control_port.unwrap_or(DEFAULT_SDIO_CONTROL_PORT);
 		let data_port = data_port.unwrap_or(DEFAULT_SDIO_BLOCK_PORT);
@@ -121,6 +123,15 @@ impl<'fs> SdioClient<'fs> {
 		let data_stream_future =
 			timeout(timeout_duration, TcpStream::connect((mion_ip, data_port)));
 
+		if no_load_bearing_sleep {
+			warn!(
+				bridge.ip = %mion_ip,
+				bridge.control_port = control_port,
+				bridge.data_port = data_port,
+				"You have disabled our LOAD-BEARING SLEEP for our SDIO connection, if talking to a REAL MION, THIS WILL CAUSE ERRORS.",
+			);
+		}
+
 		Ok(Self {
 			control_port,
 			control_stream: control_stream_future
@@ -134,6 +145,7 @@ impl<'fs> SdioClient<'fs> {
 				.map_err(NetworkError::IO)?,
 			host_ip: mion_ip,
 			host_filesystem,
+			no_load_bearing_sleep,
 			printf_control_buff: String::with_capacity(0),
 		})
 	}
@@ -152,10 +164,13 @@ impl<'fs> SdioClient<'fs> {
 	pub async fn serve(self) -> Result<(), CatBridgeError> {
 		let mut printf_buff = self.printf_control_buff;
 		let (sink, mut stream) = Framed::new(self.control_stream, ChunkSDIOControlCodec).split();
+		self.data_stream
+			.set_nodelay(true)
+			.map_err(NetworkError::IO)?;
 		let (_data_stream, data_sink) = self.data_stream.into_split();
 
 		let _control_sender = Self::spawn_control_write_task(sink)?;
-		let data_sender = Self::spawn_data_write_task(data_sink)?;
+		let data_sender = Self::spawn_data_write_task(self.no_load_bearing_sleep, data_sink)?;
 
 		while let Some(packet_result) = stream.next().await {
 			let packet = match packet_result {
@@ -224,13 +239,16 @@ impl<'fs> SdioClient<'fs> {
 				let actual_line: String = printf_buff;
 				printf_buff = remaining;
 
-				info!(
-					sdio.host_ip = %host_ip,
-					sdio.host_control_port = control_port,
-					sdio.host_data_port = data_port,
-					sdio.data.printf = %actual_line.trim(),
-					"Received SDIO message.",
-				);
+				// Ignore empty newlines they try to send.
+				if !actual_line.trim().is_empty() {
+					info!(
+						sdio.host_ip = %host_ip,
+						sdio.host_control_port = control_port,
+						sdio.host_data_port = data_port,
+						sdio.data.printf = %actual_line.trim(),
+						"Received SDIO message.",
+					);
+				}
 			}
 			while let Some(line_ending) = printf_buff.find('\r') {
 				used_one = true;
@@ -238,13 +256,16 @@ impl<'fs> SdioClient<'fs> {
 				let actual_line: String = printf_buff;
 				printf_buff = remaining;
 
-				info!(
-					sdio.host_ip = %host_ip,
-					sdio.host_control_port = control_port,
-					sdio.host_data_port = data_port,
-					sdio.data.printf = %actual_line.trim(),
-					"Received SDIO message.",
-				);
+				// Ignore empty newlines they try to send.
+				if !actual_line.trim().is_empty() {
+					info!(
+						sdio.host_ip = %host_ip,
+						sdio.host_control_port = control_port,
+						sdio.host_data_port = data_port,
+						sdio.data.printf = %actual_line.trim(),
+						"Received SDIO message.",
+					);
+				}
 			}
 
 			if !used_one {
@@ -281,7 +302,10 @@ impl<'fs> SdioClient<'fs> {
 	}
 
 	/// Spawn a task that will watch a channel, and send it out over a channel.
-	fn spawn_data_write_task(mut sink: OwnedWriteHalf) -> Result<Sender<Bytes>, CatBridgeError> {
+	fn spawn_data_write_task(
+		disable_load_bearing_sleep: bool,
+		mut sink: OwnedWriteHalf,
+	) -> Result<Sender<Bytes>, CatBridgeError> {
 		let (sender, mut receiver) = channel::<Bytes>(SDIO_TCP_PACKET_BUFFER_SIZE);
 
 		TaskBuilder::new()
@@ -294,6 +318,25 @@ impl<'fs> SdioClient<'fs> {
 						"Failed to send packet over SDIO Data, error in write channel, shutting down",
 					);
 						break;
+					}
+
+					if !disable_load_bearing_sleep {
+						// Yes, this is a very load bearing sleep.
+						//
+						// Without this sleep, when sending large amounts of data such as the
+						// initial `fw.img` packet which is 15360 blocks (or 7,864,320
+						// bytes), you'll send all the bytes, the cat-dev will ack them all,
+						// and you'll see the following line in debug logs:
+						//
+						// `24, TS - 8226, Msg - --- DBG: [SDIO]  >CH1 Read 6717440 / 7864320 byte`
+						//
+						// Yes that's right, it only read about 6 million of the bytes, not all 7
+						// million. EVEN THOUGH IT TCP ACKED ALL 7 MILLION.
+						//
+						// A user can techincally turn this off, BUT you will notice spurious
+						// errors.
+						trace!("sleeping to work around MION SDIO buffer-bug...");
+						sleep(Duration::from_millis(25)).await;
 					}
 				}
 			})
@@ -327,7 +370,7 @@ impl SdioClient<'static> {
 		let (_data_stream, data_sink) = self.data_stream.into_split();
 
 		let _control_sender = Self::spawn_control_write_task(sink)?;
-		let data_sender = Self::spawn_data_write_task(data_sink)?;
+		let data_sender = Self::spawn_data_write_task(self.no_load_bearing_sleep, data_sink)?;
 
 		while let Some(packet_result) = stream.next().await {
 			let packet = match packet_result {

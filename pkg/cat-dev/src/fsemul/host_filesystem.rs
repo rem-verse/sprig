@@ -3,13 +3,30 @@
 
 use crate::{
 	errors::{CatBridgeError, FSError},
-	fsemul::{bsf::BootSystemFile, dlf::DiskLayoutFile, errors::FSEmulFSError},
+	fsemul::{
+		bsf::BootSystemFile, dlf::DiskLayoutFile, errors::FSEmulFSError, pcfs::errors::PCFSApiError,
+	},
 	TitleID,
 };
 use bytes::{Bytes, BytesMut};
-use std::path::{Path, PathBuf};
-use tokio::fs::{create_dir_all, write as fs_write};
+use scc::{hash_map::OccupiedEntry as CMOccupiedEntry, HashMap as ConcurrentMap};
+use std::{
+	collections::HashMap,
+	hash::RandomState,
+	io::{Error as IOError, SeekFrom},
+	os::fd::AsRawFd,
+	path::{Path, PathBuf},
+	sync::atomic::{AtomicI32, Ordering as AtomicOrdering},
+};
+use tokio::{
+	fs::{create_dir_all, read_dir, write as fs_write, File, OpenOptions, ReadDir},
+	io::{AsyncReadExt, AsyncSeekExt},
+};
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 use whoami::username;
+
+/// Current "FD" for directories. Just a counter going up.
+static DIRECTORY_FD: AtomicI32 = AtomicI32::new(1);
 
 /// A wrapper around interacting with the 'host' or PC filesystem for the
 /// various times a cat-dev will reach out to the host.
@@ -18,10 +35,18 @@ use whoami::username;
 /// methods to make getting files/generating default files/etc. easy. Most of
 /// the actual logic for turning a request from `SDIO`, `ATAPI`, etc. all come
 /// from those client/server implementations rather than the logic living here.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct HostFilesystem {
 	/// The path to the base data directory to serve a filesystem out of.
 	cafe_sdk_path: PathBuf,
+	/// List of open file handles.
+	///
+	/// This contains a value of (file, file size, path).
+	open_file_handles: ConcurrentMap<i32, (File, u64, PathBuf)>,
+	/// List of open directory "handles".
+	///
+	/// This contains a value of (read directory, is end, path)
+	open_folder_handles: ConcurrentMap<i32, (ReadDir, bool, PathBuf)>,
 }
 
 impl HostFilesystem {
@@ -80,7 +105,11 @@ impl HostFilesystem {
 			return Err(FSEmulFSError::CafeSdkPathCorrupt);
 		}
 
-		Ok(Self { cafe_sdk_path })
+		Ok(Self {
+			cafe_sdk_path,
+			open_file_handles: ConcurrentMap::new(),
+			open_folder_handles: ConcurrentMap::new(),
+		})
 	}
 
 	/// The root path to the Cafe SDK.
@@ -91,6 +120,190 @@ impl HostFilesystem {
 	#[must_use]
 	pub const fn cafe_sdk_path(&self) -> &PathBuf {
 		&self.cafe_sdk_path
+	}
+
+	/// Open a file, and return it's file descriptor number.
+	///
+	/// ## Errors
+	///
+	/// If we cannot open our file with the open options provided.
+	pub async fn open_file(
+		&self,
+		open_options: OpenOptions,
+		path: &PathBuf,
+	) -> Result<i32, FSError> {
+		let fd = open_options.open(path).await?;
+		let raw_fd = fd.as_raw_fd();
+		let md = fd.metadata().await?;
+
+		self.open_file_handles
+			.insert(raw_fd, (fd, md.len(), path.clone()))
+			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
+		Ok(raw_fd)
+	}
+
+	/// Get a file from a file descriptor number.
+	///
+	/// This file must already be opened (in order to get the file descriptor).
+	pub async fn get_file(
+		&self,
+		fd: i32,
+	) -> Option<CMOccupiedEntry<i32, (File, u64, PathBuf), RandomState>> {
+		self.open_file_handles.get_async(&fd).await
+	}
+
+	/// Get the file length from a file descriptor number.
+	///
+	/// This file must already be opened (in order to get the file descriptor).
+	pub async fn file_length(&self, fd: i32) -> Option<u64> {
+		self.open_file_handles.get_async(&fd).await.map(|e| e.1)
+	}
+
+	/// Read from a file descriptor that is actively open.
+	///
+	/// This will read from a currently open file descriptor, in it's current
+	/// location. You might want to set your file location for this FD before
+	/// if you aren't already in the same location.
+	///
+	/// ## Errors
+	///
+	/// If the file descriptor is open, but we could not read from the open file
+	/// descriptor.
+	pub async fn read_file(
+		&self,
+		fd: i32,
+		total_data_to_read: usize,
+	) -> Result<Option<Bytes>, FSError> {
+		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
+			return Ok(None);
+		};
+		let file_reader = &mut real_entry.0;
+		let mut file_buff = BytesMut::zeroed(total_data_to_read);
+		let bytes_read = file_reader.read(&mut file_buff).await?;
+		if bytes_read < total_data_to_read {
+			file_buff[bytes_read..].fill(0xCD);
+		}
+
+		Ok(Some(file_buff.freeze()))
+	}
+
+	/// Seek to the beginning or end of a file.
+	///
+	/// If `begin` is true then we will seek to the beginning of the file
+	/// otherwise we will sync to the end of the file. Precise seeking is _not_
+	/// supported at this time.
+	///
+	/// ## Errors
+	///
+	/// If we cannot seek to the beginning or end of the file.
+	pub async fn seek_file(&self, fd: i32, begin: bool) -> Result<(), FSError> {
+		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
+			return Ok(());
+		};
+		let file_reader = &mut real_entry.0;
+
+		if begin {
+			file_reader.seek(SeekFrom::Start(0)).await?;
+		} else {
+			file_reader.seek(SeekFrom::End(0)).await?;
+		}
+
+		Ok(())
+	}
+
+	/// Decrement the ref count of handles to a file.
+	///
+	/// If ref count reaches 0 close the underlying file handle.
+	///
+	/// ## Errors
+	///
+	/// If we cannot close our file handle when our ref count reaches 0, or if
+	/// the file isn't open at all.
+	pub async fn close_file(&self, fd: i32) {
+		self.open_file_handles.remove_async(&fd).await;
+	}
+
+	/// "Open" a folder, or an iterator over a directory.
+	///
+	/// There's no real "open file handle", or reversible directory iterator,
+	/// so we just create an id from scratch.
+	///
+	/// ## Errors
+	///
+	/// If the path doesn't exist, then we can't open the directory.
+	pub async fn open_folder(&self, path: &PathBuf) -> Result<i32, FSError> {
+		let dhandle = read_dir(path).await?;
+		let fake_fd = DIRECTORY_FD.fetch_add(1, AtomicOrdering::SeqCst);
+		self.open_folder_handles
+			.insert(fake_fd, (dhandle, false, path.clone()))
+			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
+		Ok(fake_fd)
+	}
+
+	/// Get the next filename/foldername available in a particular folder, and
+	/// how many pieces to remove to get just the filename.
+	///
+	/// This will always return none even if it's already at the end, unlike a
+	/// particular iterator.
+	///
+	/// ## Errors
+	///
+	/// If we get an IO error from the underlying filesystem.
+	pub async fn next_in_folder(&self, fd: i32) -> Result<Option<(PathBuf, usize)>, FSError> {
+		let Some(mut entry) = self.open_folder_handles.get_async(&fd).await else {
+			return Ok(None);
+		};
+
+		let component_count = entry.2.components().count();
+		let mut value: Option<PathBuf> = None;
+		if !entry.1 {
+			let iter = &mut entry.0;
+			loop {
+				value = iter.next_entry().await?.map(|de| de.path());
+				if let Some(ref_value) = value.as_ref() {
+					if (!ref_value.is_file() && !ref_value.is_dir()) || ref_value.is_symlink() {
+						continue;
+					}
+				}
+				break;
+			}
+			if value.is_none() {
+				entry.1 = true;
+			}
+		}
+
+		Ok(value.map(|val| (val, component_count)))
+	}
+
+	/// Reverse a particular iterator over a folder by one.
+	///
+	/// Note: This will recreate the directory iterator, and will temporarily
+	/// hold _two_ references to [`ReadDir`] at a time because the underlying
+	/// iterator from read directory is not a reversible iterator.
+	///
+	/// ## Errors
+	///
+	/// If opening another read dir call does not work.
+	pub async fn reverse_directory(&self, fd: i32) -> Result<(), FSError> {
+		let Some(mut real_entry) = self.open_folder_handles.get_async(&fd).await else {
+			return Ok(());
+		};
+
+		real_entry.0 = read_dir(&real_entry.2).await?;
+		real_entry.1 = false;
+		Ok(())
+	}
+
+	/// Decrement the ref count of handles to a folder.
+	///
+	/// If ref count reaches 0 close the underlying folder handle.
+	///
+	/// ## Errors
+	///
+	/// If we cannot close our folder handle when our ref count reaches 0, or if
+	/// the folder isn't open at all.
+	pub async fn close_folder(&self, fd: i32) {
+		self.open_folder_handles.remove_async(&fd).await;
 	}
 
 	/// Get the path to the current boot1 `.bsf` file.
@@ -189,6 +402,90 @@ impl HostFilesystem {
 		Ok(path)
 	}
 
+	/// Check if a path is allowed to be writable.
+	pub fn path_allows_writes(&self, path: &Path) -> bool {
+		// TODO(mythra): check FSEmulAttributeRules
+		!path.to_string_lossy().contains("%DISC_EMU_DIR")
+			&& !path.starts_with(Self::join_many(&self.cafe_sdk_path, ["data", "disc"]))
+	}
+
+	/// Given a UTF-8 string path, get a pathbuf reference.
+	///
+	/// This understands the current following implementations:
+	///
+	/// - `/%MLC_EMU_DIR`
+	/// - `/%SLC_EMU_DIR`
+	/// - `/%DISC_EMU_DIR`
+	/// - `/%SAVE_EMU_DIR`
+	/// - `/%NETWORK`
+	///
+	/// Most of these are just quick ways of referncing the current set of
+	/// directories, within cafe sdk. `%NETWORK` is the special one which
+	/// references a currently mounted network share.
+	///
+	/// ## Errors
+	///
+	/// If the path requested is not in a mounted path.
+	pub fn resolve_path(
+		&self,
+		potentially_prefixed_path: &str,
+	) -> Result<ResolvedLocation, CatBridgeError> {
+		// Requests coming may optionally have `/vol/pc` prefixed if they're built
+		// wrong.
+		//
+		// Or if a user is trying to get cat-dev style paths working with this api
+		// directly. CLean it up.
+		let path = potentially_prefixed_path.trim_start_matches("/vol/pc");
+		if path.starts_with("/%NETWORK") {
+			todo!("NETWORK shares not yet implemented :( sorry!")
+		}
+
+		let non_canonical_path = if path.starts_with("/%MLC_EMU_DIR") {
+			self.replace_emu_dir(path, "mlc")
+		} else if path.starts_with("/%SLC_EMU_DIR") {
+			self.replace_emu_dir(path, "slc")
+		} else if path.starts_with("/%DISC_EMU_DIR") {
+			self.replace_emu_dir(path, "disc")
+		} else if path.starts_with("/%SAVE_EMU_DIR") {
+			self.replace_emu_dir(path, "save")
+		} else {
+			PathBuf::from(path)
+		};
+
+		// We can't actually just call `canonicalize`, as that will fail if the
+		// file doesn't exist, and we could be requesting to resolve a path we want
+		// to turn around and create.
+		//
+		// So instead we try to canonicalize to the closest possible directory, and
+		// check if it is underneath our directory.
+		let mut closest_canonical_directory = non_canonical_path.clone();
+		let mut changed_at_all = false;
+		while !closest_canonical_directory.as_os_str().is_empty() {
+			if let Ok(canonicalized) = closest_canonical_directory.canonicalize() {
+				closest_canonical_directory = canonicalized;
+				break;
+			}
+
+			changed_at_all = true;
+			closest_canonical_directory.pop();
+		}
+		// We failed to find any directory, which means we're nowhere close to
+		// where we want to be.
+		if closest_canonical_directory.as_os_str().is_empty() {
+			return Err(PCFSApiError::PathNotMapped(path.to_owned()).into());
+		}
+		// Check for mapped directories...
+		if !closest_canonical_directory.starts_with(self.cafe_sdk_path()) {
+			return Err(PCFSApiError::PathNotMapped(path.to_owned()).into());
+		}
+
+		Ok(ResolvedLocation::Filesystem(FilesystemLocation::new(
+			non_canonical_path,
+			closest_canonical_directory,
+			!changed_at_all,
+		)))
+	}
+
 	/// Get a file from the SLC.
 	///
 	/// The SLC always serves "sys" files, and are relative to a title id, almost
@@ -238,6 +535,20 @@ impl HostFilesystem {
 		as_owned
 	}
 
+	/// Replace a particular emu directory string in a path.
+	fn replace_emu_dir(&self, path: &str, dir: &str) -> PathBuf {
+		let path_minus = path
+			.trim_start_matches(&format!("/%{}_EMU_DIR", dir.to_ascii_uppercase()))
+			.trim_start_matches('/')
+			.trim_start_matches('\\')
+			.replace('\\', "/");
+
+		Self::join_many(
+			&Self::join_many(self.cafe_sdk_path(), ["data", dir]),
+			path_minus.split('/'),
+		)
+	}
+
 	/// Get the current OS's default directory path.
 	///
 	/// For Windows this is: `C:\cafe_sdk`.
@@ -268,14 +579,613 @@ impl HostFilesystem {
 	}
 }
 
+const HOST_FILESYSTEM_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("cafe_sdk_path"),
+	NamedField::new("open_file_handles"),
+	NamedField::new("open_folder_handles"),
+];
+
+impl Structable for HostFilesystem {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static("HostFilesystem", Fields::Named(HOST_FILESYSTEM_FIELDS))
+	}
+}
+
+impl Valuable for HostFilesystem {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		let mut values = HashMap::with_capacity(self.open_file_handles.len());
+		self.open_file_handles.scan(|k, v| {
+			values.insert(*k, format!("{}", v.2.display()));
+		});
+		let mut folder_values = HashMap::with_capacity(self.open_folder_handles.len());
+		self.open_folder_handles.scan(|k, v| {
+			folder_values.insert(*k, format!("{}", v.2.display()));
+		});
+
+		visitor.visit_named_fields(&NamedValues::new(
+			HOST_FILESYSTEM_FIELDS,
+			&[
+				Valuable::as_value(&self.cafe_sdk_path),
+				Valuable::as_value(&values),
+				Valuable::as_value(&folder_values),
+			],
+		));
+	}
+}
+
+/// A resolved location given an arbitrary path.
+#[derive(Clone, Debug, PartialEq, Eq, Valuable)]
+pub enum ResolvedLocation {
+	/// A location on a particular filesystem.
+	///
+	/// This contains a tuple of:
+	///
+	/// `(ResolvedPath, ClosestExistingCanonicalDirectory)`
+	Filesystem(FilesystemLocation),
+	/// A network location to fetch.
+	///
+	/// TODO(mythra): figure out type.
+	Network(()),
+}
+
+/// A location that's been resolved, and is guaranteed to be in one of our
+/// mounted paths.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilesystemLocation {
+	/// The final resolved path (may not exist).
+	resolved_path: PathBuf,
+	/// The resolved path that may not be the same as the final path, but is
+	/// enough to confirm we're in the same directory.
+	closest_resolved_path: PathBuf,
+	/// If the canonicalized path is the same as the resolved path.
+	canonicalized_is_exact: bool,
+}
+impl FilesystemLocation {
+	#[must_use]
+	pub const fn new(
+		resolved_path: PathBuf,
+		closest_resolved_path: PathBuf,
+		canonicalized_is_exact: bool,
+	) -> Self {
+		Self {
+			resolved_path,
+			closest_resolved_path,
+			canonicalized_is_exact,
+		}
+	}
+
+	#[must_use]
+	pub const fn resolved_path(&self) -> &PathBuf {
+		&self.resolved_path
+	}
+	#[must_use]
+	pub const fn closest_resolved_path(&self) -> &PathBuf {
+		&self.closest_resolved_path
+	}
+	#[must_use]
+	pub const fn canonicalized_is_exact(&self) -> bool {
+		self.canonicalized_is_exact
+	}
+}
+
+const FILESYSTEM_LOCATION_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("resolved_path"),
+	NamedField::new("closest_resolved_path"),
+	NamedField::new("canonicalized_is_exact"),
+];
+
+impl Structable for FilesystemLocation {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"FilesystemLocation",
+			Fields::Named(FILESYSTEM_LOCATION_FIELDS),
+		)
+	}
+}
+
+impl Valuable for FilesystemLocation {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			FILESYSTEM_LOCATION_FIELDS,
+			&[
+				Valuable::as_value(&self.resolved_path),
+				Valuable::as_value(&self.closest_resolved_path),
+				Valuable::as_value(&self.canonicalized_is_exact),
+			],
+		));
+	}
+}
+
+#[cfg(test)]
+pub mod test_helpers {
+	use super::*;
+	use std::fs::{create_dir_all, File};
+	use tempfile::{tempdir, TempDir};
+
+	/// Test helper that creates a simple host filesystem.
+	pub fn create_temporary_host_filesystem() -> (TempDir, HostFilesystem) {
+		let dir = tempdir().expect("Failed to create temporary directory!");
+
+		for directory_to_create in vec![
+			// Create data directories
+			vec!["data", "slc"],
+			vec!["data", "mlc"],
+			vec!["data", "disc"],
+			vec!["data", "save"],
+			// Create necessary to pass checks.
+			vec![
+				"data", "mlc", "sys", "title", "00050030", "1001000A", "code",
+			],
+			vec![
+				"data", "mlc", "sys", "title", "00050030", "1001010A", "code",
+			],
+			vec![
+				"data", "mlc", "sys", "title", "00050030", "1001020A", "code",
+			],
+			vec![
+				"data", "slc", "sys", "title", "00050010", "1000400A", "code",
+			],
+		] {
+			create_dir_all(HostFilesystem::join_many(dir.path(), directory_to_create))
+				.expect("Failed to create directories necessary for host filesystem to work.");
+		}
+
+		// Place files that need to exist, they are not real, but enough to "fool"
+		// our basic check.
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data", "mlc", "sys", "title", "00050030", "1001000A", "code", "app.xml",
+			],
+		))
+		.expect("Failed to create needed app.xml!");
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data", "mlc", "sys", "title", "00050030", "1001010A", "code", "app.xml",
+			],
+		))
+		.expect("Failed to create needed app.xml!");
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data", "mlc", "sys", "title", "00050030", "1001020A", "code", "app.xml",
+			],
+		))
+		.expect("Failed to create needed app.xml!");
+
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data", "slc", "sys", "title", "00050010", "1000400A", "code", "fw.img",
+			],
+		))
+		.expect("Failed to create needed fw.img!");
+
+		let fs = HostFilesystem::from_cafe_dir(Some(PathBuf::from(dir.path())))
+			.expect("Failed to load empty host filesystem!");
+
+		(dir, fs)
+	}
+
+	/// Re-export host file system join many for tests.
+	#[must_use]
+	pub fn join_many<PathTy, IterTy>(base: &Path, parts: IterTy) -> PathBuf
+	where
+		PathTy: AsRef<Path>,
+		IterTy: IntoIterator<Item = PathTy>,
+	{
+		HostFilesystem::join_many(base, parts)
+	}
+}
+
 #[cfg(test)]
 mod unit_tests {
+	use super::test_helpers::*;
 	use super::*;
+	use std::fs::read;
 
 	fn only_accepts_send_sync<T: Send + Sync>(_opt: Option<T>) {}
 
 	#[test]
 	pub fn is_send_sync() {
 		only_accepts_send_sync::<HostFilesystem>(None);
+	}
+
+	#[test]
+	pub fn can_find_default_cafe_directory() {
+		assert!(
+			HostFilesystem::default_cafe_directory().is_some(),
+			"Failed to find default cafe directory for your OS",
+		);
+	}
+
+	#[tokio::test]
+	pub async fn creatable_files() {
+		// Validate that our functions that create files can actually, well, create
+		// those files.
+		let (tempdir, fs) = create_temporary_host_filesystem();
+
+		let expected_bsf_path = HostFilesystem::join_many(
+			tempdir.path(),
+			[
+				"temp".to_owned(),
+				username(),
+				"caferun".to_owned(),
+				"ppc.bsf".to_owned(),
+			],
+		);
+		assert!(
+			!expected_bsf_path.exists(),
+			"ppc.bsf existed before we asked for it?"
+		);
+		let bsf_path = fs
+			.boot1_sytstem_path()
+			.await
+			.expect("Failed to create bsf!");
+		assert_eq!(expected_bsf_path, bsf_path);
+		assert!(
+			BootSystemFile::try_from(Bytes::from(
+				read(bsf_path).expect("Failed to read written boot system file!")
+			))
+			.is_ok(),
+			"Failed to read generated boot system file!"
+		);
+
+		let expected_diskid_path = HostFilesystem::join_many(
+			tempdir.path(),
+			[
+				"temp".to_owned(),
+				username(),
+				"caferun".to_owned(),
+				"diskid.bin".to_owned(),
+			],
+		);
+		assert!(
+			!expected_diskid_path.exists(),
+			"diskid.bin existed before we asked for it?"
+		);
+		let diskid_path = fs
+			.disk_id_path()
+			.await
+			.expect("Failed to create diskid.bin!");
+		assert_eq!(expected_diskid_path, diskid_path);
+		assert_eq!(
+			read(diskid_path).expect("Failed to read written diskid.bin!"),
+			vec![0; 32],
+			"Failed to read generated diskid.bin!"
+		);
+
+		// Can't generate firmware files for now.
+		assert_eq!(
+			fs.firmware_file_path(),
+			HostFilesystem::join_many(
+				tempdir.path(),
+				["data", "slc", "sys", "title", "00050010", "1000400A", "code", "fw.img"],
+			),
+		);
+
+		let expected_ppc_boot_dlf_path = HostFilesystem::join_many(
+			tempdir.path(),
+			[
+				"temp".to_owned(),
+				username(),
+				"caferun".to_owned(),
+				"ppc_boot.dlf".to_owned(),
+			],
+		);
+		assert!(
+			!expected_ppc_boot_dlf_path.exists(),
+			"ppc_boot.dlf existed before we asked for it?"
+		);
+		let ppc_boot_dlf_path = fs
+			.ppc_boot_dlf_path()
+			.await
+			.expect("Failed to create ppc_boot.dlf!");
+		assert_eq!(expected_ppc_boot_dlf_path, ppc_boot_dlf_path);
+		assert!(
+			DiskLayoutFile::try_from(Bytes::from(
+				read(ppc_boot_dlf_path).expect("Failed to read written ppc_boot.dlf!")
+			))
+			.is_ok(),
+			"Failed to read generated ppc_boot.dlf!"
+		);
+	}
+
+	#[test]
+	pub fn path_allows_writes() {
+		let (_tempdir, fs) = create_temporary_host_filesystem();
+
+		// DIRECTORIES BESIDES DISC should allow writes.
+		// unless excluded by fsemul attrs.
+		assert!(fs.path_allows_writes(&PathBuf::from("/vol/pc/%MLC_EMU_DIR/")));
+		assert!(fs.path_allows_writes(&PathBuf::from("/vol/pc/%SLC_EMU_DIR/")));
+		assert!(fs.path_allows_writes(&PathBuf::from("/vol/pc/%SAVE_EMU_DIR/")));
+		assert!(!fs.path_allows_writes(&PathBuf::from("/vol/pc/%DISC_EMU_DIR/")));
+		assert!(!fs.path_allows_writes(&PathBuf::from("/vol/pc/%DISC_EMU_DIR/")));
+	}
+
+	#[test]
+	pub fn resolve_path() {
+		// Validate that our functions that create files can actually, well, create
+		// those files.
+		let (tempdir, fs) = create_temporary_host_filesystem();
+
+		// Validate each of the regular directories work.
+		for (dir, name) in [
+			("/%MLC_EMU_DIR", "mlc"),
+			("/%SLC_EMU_DIR", "slc"),
+			("/%DISC_EMU_DIR", "disc"),
+			("/%SAVE_EMU_DIR", "save"),
+		] {
+			assert!(
+				fs.resolve_path(&format!("{dir}")).is_ok(),
+				"Failed to resolve: `/{}`",
+				dir,
+			);
+			assert!(
+				fs.resolve_path(&format!("{dir}/")).is_ok(),
+				"Failed to resolve: `/{}/`",
+				dir,
+			);
+			assert!(
+				fs.resolve_path(&format!("{dir}/./")).is_ok(),
+				"Failed to resolve: `/{}/./`",
+				dir,
+			);
+			assert!(
+				fs.resolve_path(&format!("{dir}/../{name}")).is_ok(),
+				"Failed to resolve: `/{}/../{}`",
+				dir,
+				name,
+			);
+		}
+
+		// Validate that paths outside of our root directory don't work.
+		let mut out_of_path = PathBuf::from(tempdir.path());
+		// We now left tempdir, and this path isn't mounted, so we should error out
+		// on this.
+		out_of_path.pop();
+
+		// We shouldn't be able to resolve paths outside of our directory.
+		assert!(fs
+			.resolve_path(
+				&out_of_path
+					.clone()
+					.into_os_string()
+					.into_string()
+					.expect("Failed to convert pathbuf to string!")
+			)
+			.is_err());
+		assert!(fs.resolve_path("/%MLC_EMU_DIR/../../../").is_err());
+
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::symlink;
+
+			let mut tempdir_symlink = PathBuf::from(tempdir.path());
+			tempdir_symlink.push("symlink");
+			symlink(out_of_path, tempdir_symlink.clone()).expect("Failed to do symlink!");
+			assert!(fs
+				.resolve_path(&format!(
+					"{}/symlink",
+					tempdir_symlink
+						.into_os_string()
+						.into_string()
+						.expect("tempdir symlink wasn't utf8?"),
+				))
+				.is_err());
+		}
+
+		#[cfg(target_os = "windows")]
+		{
+			use std::os::windows::fs::symlink_dir;
+
+			let mut tempdir_symlink = PathBuf::from(tempdir.path());
+			tempdir_symlink.push("symlink");
+			symlink_dir(out_of_path, tempdir_symlink.clone()).expect("Failed to do symlink!");
+			assert!(fs
+				.resolve_path(&format!(
+					"{}/symlink",
+					tempdir_symlink
+						.into_os_string()
+						.into_string()
+						.expect("tempdir symlink wasn't utf8?"),
+				))
+				.is_err());
+		}
+	}
+
+	#[tokio::test]
+	pub async fn opening_files() {
+		let (tempdir, fs) = create_temporary_host_filesystem();
+		let path = HostFilesystem::join_many(tempdir.path(), ["file.txt"]);
+		tokio::fs::write(path.clone(), vec![0; 1307])
+			.await
+			.expect("Failed to write test file!");
+		let create_path = HostFilesystem::join_many(tempdir.path(), ["new-file.txt"]);
+
+		let mut oo = OpenOptions::new();
+		oo.create(false).write(true).read(true);
+		assert!(
+			fs.open_file(oo, &create_path).await.is_err(),
+			"Somehow succeeding opening a file that doesn't exist with no create flag?",
+		);
+		oo = OpenOptions::new();
+		oo.create(true).write(true).truncate(true);
+		let fd = fs
+			.open_file(oo, &create_path)
+			.await
+			.expect("Failed opening a file that doesn't exist with a create flag?");
+		assert!(
+			fs.open_file_handles.len() == 1 && fs.open_file_handles.get(&fd).is_some(),
+			"Open file wasn't in open files list!",
+		);
+		fs.close_file(fd).await;
+		assert!(
+			fs.open_file_handles.is_empty(),
+			"Somehow after opening/closing, open file handles was not empty?",
+		);
+	}
+
+	#[tokio::test]
+	pub async fn seek_and_read() {
+		let (tempdir, fs) = create_temporary_host_filesystem();
+		let path = HostFilesystem::join_many(tempdir.path(), ["file.txt"]);
+		tokio::fs::write(path.clone(), vec![0; 1307])
+			.await
+			.expect("Failed to write test file!");
+
+		let mut oo = OpenOptions::new();
+		oo.read(true).create(false).write(false);
+		let fd = fs
+			.open_file(oo, &path)
+			.await
+			.expect("Failed to open existing file!");
+
+		// Should be possible to read all bytes.
+		assert_eq!(
+			Some(BytesMut::zeroed(1307).freeze()),
+			fs.read_file(fd, 1307)
+				.await
+				.expect("Failed to read from FD!"),
+		);
+		fs.seek_file(fd, true)
+			.await
+			.expect("Failed to sync to beginning of file!");
+		// Can read all bytes again!
+		assert_eq!(
+			Some(BytesMut::zeroed(1307).freeze()),
+			fs.read_file(fd, 1307)
+				.await
+				.expect("Failed to read from FD!"),
+		);
+		fs.close_file(fd).await;
+		assert!(
+			fs.open_file_handles.is_empty(),
+			"Somehow after opening/closing, open file handles was not empty?",
+		);
+	}
+
+	#[tokio::test]
+	pub async fn open_and_close_folder() {
+		let (tempdir, fs) = create_temporary_host_filesystem();
+		let path = HostFilesystem::join_many(tempdir.path(), ["a", "b"]);
+		tokio::fs::create_dir_all(path.clone())
+			.await
+			.expect("Failed to create test directory!");
+
+		let fd = fs
+			.open_folder(&path)
+			.await
+			.expect("Failed to open existing folder!");
+		assert!(
+			fs.open_folder_handles.len() == 1,
+			"Expected one open folder handle",
+		);
+		fs.close_folder(fd).await;
+
+		assert!(
+			fs.open_folder_handles.is_empty(),
+			"Somehow after opening/closing, open folder handles was not empty?",
+		);
+	}
+
+	#[tokio::test]
+	pub async fn seek_within_folder() {
+		let (tempdir, fs) = create_temporary_host_filesystem();
+		let path = HostFilesystem::join_many(tempdir.path(), ["a", "b"]);
+		tokio::fs::create_dir_all(path.clone())
+			.await
+			.expect("Failed to create test directory!");
+
+		// Only `c`, `d`, and `f` should be returned.
+		//
+		// `e` is a symlink   (ignored)
+		// `d/a` is an item in a subdirectory (ignored)
+		_ = tokio::fs::File::create(HostFilesystem::join_many(&path, ["c"]))
+			.await
+			.expect("Failed to create file to use!");
+		tokio::fs::create_dir(HostFilesystem::join_many(&path, ["d"]))
+			.await
+			.expect("Failed to create directory to use!");
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::symlink;
+
+			let mut tempdir_symlink = path.clone();
+			tempdir_symlink.push("e");
+			symlink(tempdir.path(), tempdir_symlink).expect("Failed to do symlink!");
+		}
+		#[cfg(target_os = "windows")]
+		{
+			use std::os::windows::fs::symlink_dir;
+
+			let mut tempdir_symlink = path.clone();
+			tempdir_symlink.push("e");
+			symlink_dir(tempdir.path(), tempdir_symlink).expect("Failed to do symlink!");
+		}
+		_ = tokio::fs::File::create(HostFilesystem::join_many(&path, ["f"]))
+			.await
+			.expect("Failed to create file to use!");
+		_ = tokio::fs::File::create(HostFilesystem::join_many(&path, ["d", "a"]))
+			.await
+			.expect("Failed to create file to use!");
+
+		let dfd = fs.open_folder(&path).await.expect("Failed to open file!");
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 1.1!")
+			.is_some());
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 1.2!")
+			.is_some());
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 1.3!")
+			.is_some());
+		// We should have hit the end...
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 1.4!")
+			.is_none());
+		// We can call as many times as we want.
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 1.5!")
+			.is_none());
+		// Rewind to get to reads again!
+		fs.reverse_directory(dfd)
+			.await
+			.expect("Failed to reverse directory search!");
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 2.1!")
+			.is_some());
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 2.2!")
+			.is_some());
+		assert!(fs
+			.next_in_folder(dfd)
+			.await
+			.expect("Failed to query for next in folder! 2.3!")
+			.is_some());
 	}
 }

@@ -1,4 +1,5 @@
 use crate::{
+	commands::argv_helpers::lease_fsemul_config_optionally,
 	exit_codes::{
 		ARGV_SERIAL_CONFLICTING_ARGUMENTS, SERIAL_PORT_CONNECTION_FAILURE,
 		SHOULD_NEVER_HAPPEN_FAILURE,
@@ -20,6 +21,9 @@ use tokio::{
 	task::{Builder as TaskBuilder, JoinHandle},
 };
 use tracing::{debug, error, error_span, field::valuable, info, warn, Instrument};
+
+/// The amount of times we'll try reconnecting to debug out.
+const DEBUG_OUT_RETRY_COUNT: usize = 5_usize;
 
 /// Determines if a positional argument that could be a path, or something
 /// not a path, should be interpreted as a path.
@@ -64,7 +68,7 @@ pub fn should_interpret_arg_as_port_path(arg: Option<&String>) -> bool {
 /// - If conflicting arguments (conflicting arg + env do not panic) are specified
 ///   for a serial port.
 /// - If we cannot open a handle/descriptor to the associated serial device.
-pub fn coalesce_serial_ports(
+pub async fn coalesce_serial_ports(
 	mion_ip: Ipv4Addr,
 	serial_port_flags: &SharedSerialPortFlags,
 	serial_port_positional: Option<&PathBuf>,
@@ -108,12 +112,16 @@ pub fn coalesce_serial_ports(
 	} else if let Some(env) = BRIDGECTL_SERIAL_PORT.as_ref() {
 		env
 	} else {
+		let fsemul_port = lease_fsemul_config_optionally()
+			.await
+			.and_then(|config| config.get_debug_out_port());
 		// Connect to the debug out port.
 		return SerialLogger::new_from_debug_out_port(
 			mion_ip,
 			serial_port_flags
 				.debug_out_port()
 				.or(*SESSION_DEBUG_OUT_PORT)
+				.or(fsemul_port)
 				.unwrap_or(6001),
 		);
 	};
@@ -202,17 +210,55 @@ impl SerialLogger {
 		match TaskBuilder::new()
 			.name("bridgectl::serial_log::debug_out_watcher")
 			.spawn(async move {
-				info!(
-					id = "bridgectl::serial::debug_out::start_connection",
-					"Connecting to MION DEBUG_OUT port..."
-				);
-				let stream = match tokio::time::timeout(
-					Duration::from_secs(30),
-					TcpStream::connect((ip, port)),
-				)
-				.await
+				tokio::select! {
+					 () = Self::do_remote_serial_connect_and_process(ip, port) => {}
+					 _ = ctrl_c_signal() => if SHOULD_LOG_JSON() {
+							info!(
+								id = "bridgectl::serial::debug_out_detected_ctrlc",
+								"ctrl-c has been hit, shutting down serial logger for DEBUG_OUT!",
+							);
+						} else {
+							info!(
+								"Ctrl-C has been detected as being hit! Shutting down serial logger for DEBUG_OUT!"
+							);
+						}
+				}
+			}) {
+			Ok(port) => port,
+			Err(cause) => {
+				if SHOULD_LOG_JSON() {
+					warn!(
+						id = "bridgectl::serial::debug_out_watcher_spawn_failure",
+						?cause,
+						"failed to spawn task to watch serial logs; internal",
+					);
+				} else {
+					warn!(
+						?cause,
+						"internal error: failed to spawn task to watch for debug out serial logs, serial logs will not be watched for.",
+					);
+				}
+
+				std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
+			}
+		}
+	}
+
+	/// Actually spawn a connection to a `DEBUG_OUT` port, and process any log
+	/// messages that come in.
+	async fn do_remote_serial_connect_and_process(ip: Ipv4Addr, port: u16) {
+		info!(
+			id = "bridgectl::serial::debug_out::start_connection",
+			"Connecting to MION DEBUG_OUT port..."
+		);
+		let mut stream_opt = None;
+
+		for _ in 0..DEBUG_OUT_RETRY_COUNT {
+			stream_opt =
+				match tokio::time::timeout(Duration::from_secs(30), TcpStream::connect((ip, port)))
+					.await
 				{
-					Ok(Ok(stream)) => stream,
+					Ok(Ok(stream)) => Some(stream),
 					Ok(Err(cause)) => {
 						if SHOULD_LOG_JSON() {
 							warn!(
@@ -233,7 +279,7 @@ impl SerialLogger {
 							);
 						}
 
-						return;
+						None
 					}
 					Err(cause) => {
 						if SHOULD_LOG_JSON() {
@@ -255,40 +301,35 @@ impl SerialLogger {
 							);
 						}
 
-						return;
+						None
 					}
 				};
 
-				info!(
-					id = "bridgectl::serial::debug_out::setup_connection",
-					"Connected to DEBUG_OUT! Now streaming logs..."
-				);
-				Self::do_serial_read_loop(BufReader::new(stream))
-					.instrument(error_span!(
-						"bridgectl::serial::watch_debug_out",
-						debug_out.ip = %ip,
-						debug_out.port = port,
-					))
-					.await;
-			}) {
-			Ok(port) => port,
-			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					warn!(
-						id = "bridgectl::serial::debug_out_watcher_spawn_failure",
-						?cause,
-						"failed to spawn task to watch serial logs; internal",
-					);
-				} else {
-					warn!(
-						?cause,
-						"internal error: failed to spawn task to watch for debug out serial logs, serial logs will not be watched for.",
-					);
-				}
-
-				std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
+			if stream_opt.is_some() {
+				break;
 			}
 		}
+
+		let Some(stream) = stream_opt else {
+			info!(
+				id = "bridgectl::serial::debug_out::setup_connection",
+				"Failed to find debug out connection! Not trying again...."
+			);
+			return;
+		};
+
+		info!(
+			id = "bridgectl::serial::debug_out::setup_connection",
+			"Connected to DEBUG_OUT! Now streaming logs..."
+		);
+
+		Self::do_serial_read_loop(BufReader::new(stream))
+			.instrument(error_span!(
+				"bridgectl::serial::watch_debug_out",
+				debug_out.ip = %ip,
+				debug_out.port = port,
+			))
+			.await;
 	}
 
 	/// Spawn a task that reads from a physical serial port over, and over again.
@@ -314,9 +355,9 @@ impl SerialLogger {
 					);
 				} else {
 					warn!(
-					?cause,
-					"internal error: failed to spawn task to watch for serial logs, serial logs will not be watched for.",
-				);
+						?cause,
+						"internal error: failed to spawn task to watch for serial logs, serial logs will not be watched for.",
+					);
 				}
 
 				std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);

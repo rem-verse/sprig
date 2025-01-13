@@ -109,6 +109,11 @@ fn parse_result_from_body(body: &str, operation_name: &str) -> Result<bool, MION
 	let start_tag_location = body
 		.find("<body>")
 		.map(|num| num + 6)
+		.or(
+			// Some pages don't have a start body tag, because MION's HTML stack
+			// is absolute trash.
+			body.find("<HTML>").map(|num| num + 6),
+		)
 		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body.to_owned()))?;
 	let body_without_start_tag = body.split_at(start_tag_location).1;
 	let end_tag_location = body_without_start_tag
@@ -161,4 +166,25 @@ fn parse_result_from_body(body: &str, operation_name: &str) -> Result<bool, MION
 	}
 
 	Ok(was_successful)
+}
+
+#[cfg(test)]
+mod unit_tests {
+	use super::*;
+
+	#[test]
+	pub fn can_parse_response_from_power_on_v2_on_14_80() {
+		// Yes. This is a real HTML response, returned from a real MION running,
+		// real, official firmware.
+		//
+		// Yes it is invalid HTML. Yes it is a mess. Yes it is not always returned
+		// based off the parameters passed.
+		assert!(
+			parse_result_from_body(
+				"<HTML>\r\nINFO: Enabling CATDEV mode...<br>\nINFO: no change in parameters<br>\nINFO: Enabling HSATA keep alive<br/>\nRESULT:OK<br>cafe powered on successfully, nAtt=0<br>\n</body>\n</HTML>",
+				"power_on_v2"
+			).expect("Failed to parse result from body!"),
+			"Expected successful responsee."
+		);
+	}
 }

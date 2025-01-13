@@ -70,7 +70,7 @@ pub async fn set_disc_eject_state_with_raw_client(
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_status_request<'key, 'value, UrlEncodableType>(
+pub async fn do_raw_status_request<UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,

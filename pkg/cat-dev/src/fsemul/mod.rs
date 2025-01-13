@@ -32,14 +32,14 @@ pub use host_filesystem::HostFilesystem;
 /// simple ini file without much configuration. All official nintendo tools
 /// will read from this file as opposed to querying the actual device itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FsEmulConfig {
+pub struct FSEmulConfig {
 	/// The fully existing configuration as we know it.
 	configuration: Ini,
 	/// The path we originally loaded ourselves from.
 	loaded_from_path: PathBuf,
 }
 
-impl FsEmulConfig {
+impl FSEmulConfig {
 	/// Attempt to load the fsemul configuration from the filesystem.
 	///
 	/// This is commonly referred to as `fsemul.ini`, stored normally in
@@ -107,6 +107,260 @@ impl FsEmulConfig {
 					None
 				}
 			})
+	}
+
+	/// Set the current ATAPI Emulation port.
+	pub fn set_atapi_emulation_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "ATAPI_EMUL", Some(format!("{port}")));
+	}
+
+	/// Get the configured debug out port if one has been configured.
+	#[must_use]
+	pub fn get_debug_out_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "DEBUG_OUT")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "DEBUG_OUT",
+						fsemul.value_raw = data,
+						"Failed to parse Debug OUT port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current Debug Out port.
+	pub fn set_debug_out_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "DEBUG_OUT", Some(format!("{port}")));
+	}
+
+	/// Get the configured debug control port if one has been configured.
+	#[must_use]
+	pub fn get_debug_control_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "DEBUG_CONTROL")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "DEBUG_CONTROL",
+						fsemul.value_raw = data,
+						"Failed to parse Debug CTRL port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current Debug Control port.
+	pub fn set_debug_ctrl_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "DEBUG_CONTROL", Some(format!("{port}")));
+	}
+
+	/// Get the configured HIO out port if one has been configured.
+	#[must_use]
+	pub fn get_hio_out_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "HIO_OUT")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "HIO_OUT",
+						fsemul.value_raw = data,
+						"Failed to parse HIO OUT port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current HIO OUT port.
+	pub fn set_hio_out_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "HIO_OUT", Some(format!("{port}")));
+	}
+
+	/// Get the configured PCFS Character port if one has been configured.
+	#[must_use]
+	pub fn get_pcfs_character_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "CHAR_PCFS")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "CHAR_PCFS",
+						fsemul.value_raw = data,
+						"Failed to parse PCFS Character port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current PCFS Character port.
+	pub fn set_pcfs_character_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "CHAR_PCFS", Some(format!("{port}")));
+	}
+
+	/// Get the configured PCFS Block port if one has been configured.
+	#[must_use]
+	pub fn get_pcfs_block_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "PCFS_INOUT")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "PCFS_INOUT",
+						fsemul.value_raw = data,
+						"Failed to parse PCFS Block port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current PCFS Block port.
+	pub fn set_pcfs_block_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "PCFS_INOUT", Some(format!("{port}")));
+	}
+
+	/// Get the configured Launch Control port if one has been configured.
+	#[must_use]
+	pub fn get_launch_control_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "LAUNCH_CTRL")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "LAUNCH_CTRL",
+						fsemul.value_raw = data,
+						"Failed to parse Launch Control port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current Launch Control port.
+	pub fn set_launch_control_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "LAUNCH_CTRL", Some(format!("{port}")));
+	}
+
+	/// Get the configured Net Manage port if one has been configured.
+	#[must_use]
+	pub fn get_net_manage_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "NET_MANAGE")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "NET_MANAGE",
+						fsemul.value_raw = data,
+						"Failed to parse Net Manage port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current Net Manage port.
+	pub fn set_net_manage_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "NET_MANAGE", Some(format!("{port}")));
+	}
+
+	/// Get the configured PCFS Sata port if one has been configured.
+	#[must_use]
+	pub fn get_pcfs_sata_port(&self) -> Option<u16> {
+		self.configuration
+			.get("DEBUG_PORTS", "PCFS_SATA")
+			.and_then(|data| match data.parse::<u16>() {
+				Ok(value) => Some(value),
+				Err(cause) => {
+					warn!(
+						?cause,
+						fsemul.path = %self.loaded_from_path.display(),
+						fsemul.section_name = "DEBUG_PORTS",
+						fsemul.value_name = "PCFS_SATA",
+						fsemul.value_raw = data,
+						"Failed to parse PCFS Sata port as number, ignoring!",
+					);
+					None
+				}
+			})
+	}
+
+	/// Set the current PCFS Sata port.
+	pub fn set_pcfs_sata_port(&mut self, port: u16) {
+		self.configuration
+			.set("DEBUG_PORTS", "PCFS_SATA", Some(format!("{port}")));
+	}
+
+	/// Write the current configuration to disk as a Windows INI file.
+	///
+	/// We always write the file with carriage returns `\r\n` (windows line
+	/// endings), and in UTF-8. So we can always copy-paste the file onto
+	/// a windows host and have it be read by the official tools without issue.
+	///
+	/// ## Errors
+	///
+	/// If we run into a system error when writing the file to the disk.
+	pub async fn write_to_disk(&self) -> Result<(), FSError> {
+		let mut serialized_configuration = self.configuration.writes();
+		// Multiline is disabled -- so this is safe to check if we have actual carriage returns.
+		if !serialized_configuration.contains("\r\n") {
+			serialized_configuration = serialized_configuration.replace('\n', "\r\n");
+		}
+
+		let parent_dir = {
+			let mut path = self.loaded_from_path.clone();
+			path.pop();
+			path
+		};
+		tokio::fs::create_dir_all(&parent_dir).await?;
+
+		tokio::fs::write(
+			&self.loaded_from_path,
+			serialized_configuration.into_bytes(),
+		)
+		.await?;
+
+		Ok(())
 	}
 
 	/// Get the default path that the bridge host state is supposed to be stored
@@ -196,28 +450,62 @@ mod unit_tests {
 		{
 			let mut base_path = test_data_dir.clone();
 			base_path.push("orig-fsemul.ini");
-			let loaded = FsEmulConfig::load_explicit_path(base_path).await;
+			let loaded = FSEmulConfig::load_explicit_path(base_path).await;
 
 			assert!(
 				loaded.is_ok(),
 				"Failed to load a real original `fsemul.ini`: {:?}",
 				loaded,
 			);
+			let fsemul = loaded.unwrap();
+
+			assert_eq!(fsemul.get_atapi_emulation_port(), None);
+			assert_eq!(fsemul.get_debug_out_port(), Some(6001));
+			assert_eq!(fsemul.get_debug_control_port(), Some(6002));
+			assert_eq!(fsemul.get_hio_out_port(), None);
+			assert_eq!(fsemul.get_pcfs_character_port(), None);
+			assert_eq!(fsemul.get_pcfs_block_port(), None);
+			assert_eq!(fsemul.get_launch_control_port(), None);
+			assert_eq!(fsemul.get_net_manage_port(), None);
+			assert_eq!(fsemul.get_pcfs_sata_port(), None);
 		}
 	}
-}
-/*
-Known unhandled config items:
 
-```ini
-[DEBUG_PORTS]
-DEBUG_OUT
-DEBUG_CONTROL
-HIO_OUT
-CHAR_PCFS
-PCFS_INOUT
-LAUNCH_CTRL
-NET_MANAGE
-PCFS_SATA
-```
-*/
+	#[test]
+	pub fn can_get_default_path_for_os() {
+		assert!(
+			FSEmulConfig::get_default_host_path().is_some(),
+			"Failed to get default FSEMul.ini path for your os!",
+		);
+	}
+
+	#[tokio::test]
+	pub async fn can_set_and_write_to_file() {
+		use tempfile::tempdir;
+		use tokio::fs::File;
+
+		let temporary_directory =
+			tempdir().expect("Failed to create temporary directory for tests!");
+		let mut path = PathBuf::from(temporary_directory.path());
+		path.push("fsemul_custom_made.ini");
+		{
+			File::create(&path)
+				.await
+				.expect("Failed to create test file to write too!");
+		}
+		let mut conf = FSEmulConfig::load_explicit_path(path.clone())
+			.await
+			.expect("Failed to load empty file to write too!");
+
+		conf.set_atapi_emulation_port(8000);
+		assert!(conf.write_to_disk().await.is_ok());
+
+		let read_data = String::from_utf8(
+			tokio::fs::read(path)
+				.await
+				.expect("Failed to read written data!"),
+		)
+		.expect("Written INI file wasn't UTF8?");
+		assert_eq!(read_data, "[DEBUG_PORTS]\r\nATAPI_EMUL=8000\r\n");
+	}
+}

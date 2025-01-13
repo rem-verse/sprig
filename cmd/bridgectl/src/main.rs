@@ -119,8 +119,9 @@ async fn main() {
 			serial_port_positional,
 			shared_serial_port_flags,
 			disable_sata,
-			without_pcfs,
+			parameter_space_port,
 			take_ownership,
+			without_pcfs,
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
@@ -130,7 +131,7 @@ async fn main() {
 				serial_port_positional.is_some(),
 			)
 			.await;
-			initialize_fsemul_config(fsemul_flags).await;
+			initialize_fsemul_config(&fsemul_flags).await;
 			initialize_shared_server_flags(shared_server_flags).await;
 
 			let positional_for_serial = if used_positional {
@@ -140,9 +141,11 @@ async fn main() {
 			};
 
 			handle_boot(
+				fsemul_flags,
 				disable_sata,
 				without_pcfs,
 				(shared_serial_port_flags, positional_for_serial.as_ref()),
+				parameter_space_port,
 				take_ownership,
 			)
 			.await;
@@ -333,6 +336,7 @@ async fn main() {
 			.await;
 		}
 		Subcommands::Tail {
+			fsemul_flags,
 			bridge_config_flags,
 			scan_flags,
 			target_flags,
@@ -347,6 +351,7 @@ async fn main() {
 				should_interpret_arg_as_port_path(bridge_name_or_serial_port_path.as_ref());
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
+			initialize_fsemul_config(&fsemul_flags).await;
 			_ = target_bridge(
 				target_flags,
 				if interpret_as_path {

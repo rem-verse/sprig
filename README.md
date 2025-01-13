@@ -70,12 +70,16 @@ Official Tool Replacements:
                     default so you don't have to set it everytime.
   - [x] `setbridgeconfig`: the actual executable that `setbridge` ends up
                             reaching out too.
-  - [ ] `SessionManagerUtil`: ???
+  - [ ] `SessionManagerUtil`: _seems like a utility to manage multiple cat-dev
+                               PCFS connections at once._
 - [ ] `hostdisplayversion`: Display the current emulated Host Bridge
                             installation version, and the firmware installed
                             on your actual CAT-DEV. It is typically only used
                             for diagnostics.
-  - [ ] `FSEmul``: ???
+  - [ ] `FSEmul`: FSEmul is the 'core' proccess for handling emulation of
+                  various filesystem components for the CAT-DEV. Specifically
+                  FSEmul handles various block level protocols (SDIO/ATAPI),
+                  and provides information to `PCFSServer`
 - [ ] `updatebridges`: a command used to update the firmware on a particular
                        Host Bridge.
 - [ ] `imageuploader`: allow uploading mastered `WUMAD`/`WUM`'s to the internal

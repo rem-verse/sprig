@@ -11,6 +11,7 @@ use crate::{errors::NetworkParseError, fsemul::sdio::errors::SDIOProtocolError};
 use bytes::{Bytes, BytesMut};
 use tokio::io::Error as IoError;
 use tokio_util::codec::{Decoder, Encoder};
+use tracing::debug;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 /// The size of an SDIO Block we end up serving.
@@ -131,7 +132,7 @@ impl TryFrom<Bytes> for SdioControlReadRequest {
 	type Error = SDIOProtocolError;
 
 	fn try_from(value: Bytes) -> Result<Self, Self::Error> {
-		if value.len() < 512 {
+		if value.len() != 512 {
 			return Err(SDIOProtocolError::PrintfInvalidSize(value.len()));
 		}
 		if value[0] != 0 {
@@ -331,9 +332,18 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 					buff.truncate(eol);
 				}
 				messages.push(SdioControlMessage::Printf(
-					String::from_utf8(buff.into()).map_err(NetworkParseError::Utf8Expected)?,
+					// Yes they sometimes dump junk to us.
+					//
+					// But alas, what can you do.
+					String::from_utf8_lossy(&buff).to_string(),
 				));
 				// These message types consume the whole buffer probably idk
+				break;
+			} else if message_ty == 9 {
+				debug!(
+					buff = format!("{:02X}", value),
+					"Unknown message type == 9 for SDIO, Not Sure How to Respond?"
+				);
 				break;
 			}
 

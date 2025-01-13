@@ -45,24 +45,33 @@
 //! pre `0.00.14.77`, where `power_on_v2` exists.
 
 mod atapi;
+mod sata;
 mod sdio;
 mod utils;
 
 use crate::{
 	commands::{
 		argv_helpers::{
-			coalesce_serial_ports, get_host_bind_address, get_targeted_bridge_ip,
+			coalesce_serial_ports, get_atapi_port, get_host_bind_address, get_pcfs_sata_port,
+			get_sdio_control_port, get_sdio_printf_port, get_targeted_bridge_ip,
 			get_targeted_bridge_mac, get_targeted_bridge_name, lease_fsemul_config_optionally,
 			lease_host_file_system,
 		},
 		boot::{
 			atapi::serve_atapi,
+			sata::serve_sata,
 			sdio::serve_sdio,
-			utils::{is_modern_bridge, turn_down_for_disc, validate_bridge_ready_for_booting},
+			utils::{
+				is_modern_bridge, turn_down_for_disc, validate_bridge_ready_for_booting,
+				wrap_power_on,
+			},
 		},
 	},
 	exit_codes::BOOT_CGI_FAILURE,
-	knobs::{cli::SharedSerialPortFlags, env::PCFS_IS_SATA},
+	knobs::{
+		cli::{FSEmulConfigurationFlags, SharedSerialPortFlags},
+		env::PCFS_IS_SATA,
+	},
 	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
@@ -77,9 +86,11 @@ use tracing::{error, field::valuable, info, warn};
 /// Actually process the "boot" command, and boot up a cat-dev with all
 /// associated servers (if necessary).
 pub async fn handle_boot(
+	fsemul_flags: FSEmulConfigurationFlags,
 	disable_sata: bool,
 	no_pcfs: bool,
 	serial_port_args: (SharedSerialPortFlags, Option<&PathBuf>),
+	parameter_space_port: Option<u16>,
 	take_ownership: bool,
 ) {
 	let bridge_ip = get_targeted_bridge_ip().await;
@@ -89,7 +100,9 @@ pub async fn handle_boot(
 
 	let is_modern_bridge = is_modern_bridge(bridge_ip).await;
 	let serial_task_handle =
-		coalesce_serial_ports(bridge_ip, &serial_port_args.0, serial_port_args.1).spawn_log_task();
+		coalesce_serial_ports(bridge_ip, &serial_port_args.0, serial_port_args.1)
+			.await
+			.spawn_log_task();
 
 	let (_info_request, setup_params, needs_pcfs) = validate_bridge_ready_for_booting(
 		is_modern_bridge,
@@ -97,6 +110,7 @@ pub async fn handle_boot(
 		bridge_ip,
 		bridge_mac,
 		&bridge_name,
+		parameter_space_port,
 	)
 	.await;
 
@@ -111,20 +125,58 @@ pub async fn handle_boot(
 		return;
 	}
 
-	let fsemul = lease_fsemul_config_optionally().await;
 	let file_system = lease_host_file_system().await;
-	serve_atapi(
+
+	let final_atapi_port = serve_atapi(
 		file_system,
 		host_ip,
-		fsemul.and_then(|emul| emul.get_atapi_emulation_port()),
+		get_atapi_port().await.or(lease_fsemul_config_optionally()
+			.await
+			.and_then(|emul| emul.get_atapi_emulation_port())),
 		setup_params
 			.as_ref()
 			.map(SetupParameters::atapi_emulator_port),
 	)
 	.await;
-	serve_sdio(bridge_ip, setup_params.as_ref(), file_system).await;
-	let _will_use_sata = get_will_use_sata(disable_sata);
-	todo!()
+	serve_sdio(
+		bridge_ip,
+		setup_params.as_ref(),
+		file_system,
+		get_sdio_control_port().await,
+		get_sdio_printf_port().await,
+		fsemul_flags.disable_load_bearing_sleep_for_sdio(),
+	)
+	.await;
+	let will_use_sata = get_will_use_sata(disable_sata);
+
+	let sata_port = if will_use_sata {
+		let p = serve_sata(
+			file_system,
+			host_ip,
+			get_pcfs_sata_port()
+				.await
+				.or(lease_fsemul_config_optionally()
+					.await
+					.and_then(|emul| emul.get_pcfs_sata_port())),
+			fsemul_flags.disable_real_removal(),
+			fsemul_flags.disable_ffio(),
+			fsemul_flags.disable_csr(),
+		)
+		.await;
+		Some(p)
+	} else {
+		None
+	};
+
+	wrap_power_on(
+		is_modern_bridge,
+		bridge_ip,
+		host_ip,
+		final_atapi_port,
+		sata_port,
+	)
+	.await;
+	_ = serial_task_handle.await;
 }
 
 /// Boot without PCFS for a MION running at least FW

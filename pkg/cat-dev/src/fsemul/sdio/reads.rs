@@ -19,7 +19,7 @@ use bytes::{Bytes, BytesMut};
 use std::path::PathBuf;
 use tokio::{
 	fs::{read as fs_read, File},
-	io::{AsyncReadExt, BufReader},
+	io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom},
 	sync::mpsc::Sender,
 };
 use tracing::{info, warn};
@@ -41,8 +41,14 @@ pub async fn serve_read_request(
 	if address_to_read == 0xFFFF_0000 {
 		info!("Requested special ppc_boot.bsf file address");
 		let ppc_boot = file_system.boot1_sytstem_path().await?;
-		return serve_padded_file_sdio(&ppc_boot, request.blocks(), response_channel).await;
-	// PRobably another special address like diskid or something.
+		return serve_padded_file_sdio(
+			&ppc_boot,
+			SeekFrom::Start(0),
+			request.blocks(),
+			response_channel,
+		)
+		.await;
+	// Probably another special address like diskid or something.
 	} else if address_to_read == 0x00F9_0000 {
 		info!("Unknown special large address... serving 0 blocks");
 		return serve_zeroed_blocks(request.blocks(), response_channel).await;
@@ -61,16 +67,26 @@ pub async fn serve_read_request(
 		.into());
 	}
 
-	if let Some(path) = dlf.get_path_for_address(u128::from(address_to_read)) {
+	if let Some((path, offset)) = dlf
+		.get_path_and_offset_for_file(u128::from(address_to_read))
+		.await
+	{
 		info!(
 			sdio.blocks = request.blocks(),
 			sdio.path = %path.display(),
+			sdio.path_offset = format!("{:06x}", offset),
 			"Serving known file over SDIO",
 		);
-		serve_padded_file_sdio(path, request.blocks(), response_channel).await
+		serve_padded_file_sdio(
+			path,
+			SeekFrom::Start(offset),
+			request.blocks(),
+			response_channel,
+		)
+		.await
 	} else {
 		warn!(
-			sdio.address = address_to_read,
+			sdio.address = format!("{:02x}", address_to_read),
 			sdio.blocks = request.blocks(),
 			"Serving unknown address over SDIO",
 		);
@@ -93,21 +109,23 @@ pub async fn serve_read_request(
 /// - If we cannot send content over the `response_channel`.
 async fn serve_padded_file_sdio(
 	path: &PathBuf,
+	offset: SeekFrom,
 	blocks_requested: u32,
 	response_channel: &Sender<Bytes>,
 ) -> Result<(), CatBridgeError> {
 	let mut fd = File::open(path).await.map_err(FSError::IO)?;
-
-	let mut blocks_as_size =
+	fd.seek(offset).await.map_err(FSError::IO)?;
+	let mut blocks_left_to_serve =
 		usize::try_from(blocks_requested).map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
 	// Small enough, ready to just be read one-shot.
-	if blocks_as_size <= SDIO_BLOCKS_PER_PACKET {
-		let mut file_buff = BytesMut::with_capacity(blocks_as_size * SDIO_BLOCK_SIZE);
+	if blocks_left_to_serve <= SDIO_BLOCKS_PER_PACKET {
+		let mut file_buff = BytesMut::with_capacity(blocks_left_to_serve * SDIO_BLOCK_SIZE);
 		let read_bytes = fd.read_buf(&mut file_buff).await.map_err(FSError::IO)?;
-		if read_bytes < blocks_as_size * SDIO_BLOCK_SIZE {
-			let padding = BytesMut::zeroed((blocks_as_size * SDIO_BLOCK_SIZE) - read_bytes);
+		if read_bytes < blocks_left_to_serve * SDIO_BLOCK_SIZE {
+			let padding = BytesMut::zeroed((blocks_left_to_serve * SDIO_BLOCK_SIZE) - read_bytes);
 			file_buff.extend(padding);
 		}
+
 		response_channel
 			.send(file_buff.freeze())
 			.await
@@ -116,31 +134,27 @@ async fn serve_padded_file_sdio(
 		let mut exhausted_file = false;
 		let mut reader = BufReader::new(fd);
 
-		while blocks_as_size > 0 {
-			let blocks_to_read = std::cmp::min(blocks_as_size, SDIO_BLOCKS_PER_PACKET);
+		while blocks_left_to_serve > 0 {
+			let blocks_to_read = std::cmp::min(blocks_left_to_serve, SDIO_BLOCKS_PER_PACKET);
 			let bytes_to_read = blocks_to_read * SDIO_BLOCK_SIZE;
 			let mut file_buff = BytesMut::with_capacity(bytes_to_read);
 
-			let read_bytes = if exhausted_file {
-				0
-			} else {
+			if !exhausted_file {
 				let read_bytes = reader.read_buf(&mut file_buff).await.map_err(FSError::IO)?;
 				if read_bytes == 0 {
 					exhausted_file = true;
 				}
-				read_bytes
-			};
+			}
 
-			if read_bytes < bytes_to_read {
-				let padding = BytesMut::zeroed(bytes_to_read - read_bytes);
-				file_buff.extend(padding);
+			if file_buff.len() < bytes_to_read {
+				file_buff.extend(BytesMut::zeroed(bytes_to_read - file_buff.len()));
 			}
 
 			response_channel
 				.send(file_buff.freeze())
 				.await
 				.map_err(NetworkError::SendQueueFailure)?;
-			blocks_as_size -= blocks_to_read;
+			blocks_left_to_serve -= blocks_to_read;
 		}
 	}
 

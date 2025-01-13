@@ -3,12 +3,13 @@
 use crate::{
 	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
 	fsemul::{
-		pcfs::errors::{PCFSApiError, PCFSSataProtocolError},
+		pcfs::errors::{PCFSApiError, SataProtocolError},
 		sdio::errors::SDIOProtocolError,
 	},
 };
 use bytes::Bytes;
 use miette::Diagnostic;
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors related to API errors for `FSEmul`.
@@ -29,6 +30,9 @@ pub enum FSEmulAPIError {
 	#[error("You tried to place a disk item past the current ending, please update the ending, before updating the new item.")]
 	#[diagnostic(code(cat_dev::api::fsemul::dlf_update_ending_first))]
 	DlfUpsertEndingFirst,
+	#[error("Failed to interact with path, file must be open first: {0:?}")]
+	#[diagnostic(code(cat_dev::api::fsemul::path_not_open))]
+	PathNotOpen(PathBuf),
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	PCFS(#[from] PCFSApiError),
@@ -92,7 +96,7 @@ impl From<FSEmulFSError> for CatBridgeError {
 pub enum FSEmulProtocolError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
-	PCFSSata(#[from] PCFSSataProtocolError),
+	PCFSSata(#[from] SataProtocolError),
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	SDIO(#[from] SDIOProtocolError),
@@ -109,18 +113,18 @@ impl From<FSEmulProtocolError> for CatBridgeError {
 	}
 }
 
-impl From<PCFSSataProtocolError> for NetworkParseError {
-	fn from(value: PCFSSataProtocolError) -> Self {
+impl From<SataProtocolError> for NetworkParseError {
+	fn from(value: SataProtocolError) -> Self {
 		Self::FSEmul(value.into())
 	}
 }
-impl From<PCFSSataProtocolError> for NetworkError {
-	fn from(value: PCFSSataProtocolError) -> Self {
+impl From<SataProtocolError> for NetworkError {
+	fn from(value: SataProtocolError) -> Self {
 		Self::Parse(value.into())
 	}
 }
-impl From<PCFSSataProtocolError> for CatBridgeError {
-	fn from(value: PCFSSataProtocolError) -> Self {
+impl From<SataProtocolError> for CatBridgeError {
+	fn from(value: SataProtocolError) -> Self {
 		Self::Network(value.into())
 	}
 }

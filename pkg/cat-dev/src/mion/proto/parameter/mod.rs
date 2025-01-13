@@ -613,7 +613,7 @@ mod unit_tests {
 
 			assert_eq!(
 				DumpedMionParameters::try_from(packet_with_bad_data),
-				Err(MIONParamProtocolError::PacketType(1).into(),),
+				Err(MIONParamProtocolError::PacketType(1).into()),
 			);
 		}
 
@@ -858,7 +858,7 @@ mod unit_tests {
 					0x5, 0x0, 0x0, 0x0, // return code
 					0x0, 0x0, 0x0, 0x0,
 				])),
-				Err(MIONParamProtocolError::ErrorCode(5).into(),),
+				Err(MIONParamProtocolError::ErrorCode(5).into()),
 			);
 		}
 

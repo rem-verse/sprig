@@ -12,19 +12,19 @@ use crate::{
 		ARGV_NO_FSEMUL_PATH,
 	},
 	knobs::{
-		cli::FsEmulConfigurationFlags,
+		cli::FSEmulConfigurationFlags,
 		env::{CAFE_ROOT, FSMEUL_CONFIG_PATH as FSEMUL_CONFIG_PATH_ENV_ARG},
 	},
 	utils::add_context_to,
 	SHOULD_LOG_JSON,
 };
-use cat_dev::fsemul::{FsEmulConfig, HostFilesystem};
+use cat_dev::fsemul::{FSEmulConfig, HostFilesystem};
 use miette::miette;
 use std::{path::PathBuf, sync::OnceLock};
 use tokio::sync::{RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 use tracing::{error, field::valuable, info};
 
-static FSEMUL_CONFIG: RwLock<Option<FsEmulConfig>> = RwLock::const_new(None);
+static FSEMUL_CONFIG: RwLock<Option<FSEmulConfig>> = RwLock::const_new(None);
 static HOST_FILE_SYSTEM: OnceLock<HostFilesystem> = OnceLock::new();
 
 static FSEMUL_CONFIG_PATH: RwLock<Option<PathBuf>> = RwLock::const_new(None);
@@ -35,8 +35,8 @@ static CAFE_DATA_PATH: RwLock<Option<PathBuf>> = RwLock::const_new(None);
 ///
 /// This just sets everything up, it doesn't actually open the bridge
 /// configuration file, until someone actually requests it for the first time.
-pub async fn initialize_fsemul_config(fsemul_config_flags: FsEmulConfigurationFlags) {
-	let fsemul_default_path = FsEmulConfig::get_default_host_path();
+pub async fn initialize_fsemul_config(fsemul_config_flags: &FSEmulConfigurationFlags) {
+	let fsemul_default_path = FSEmulConfig::get_default_host_path();
 	if fsemul_default_path.is_none() {
 		if SHOULD_LOG_JSON() {
 			info!(
@@ -84,7 +84,7 @@ pub async fn initialize_fsemul_config(fsemul_config_flags: FsEmulConfigurationFl
 
 /// Optionally lease the file system emulation configuration if it was able
 /// to be parsed, but you don't want to exit if it's not present.
-pub async fn lease_fsemul_config_optionally<'lf>() -> Option<RwLockReadGuard<'lf, FsEmulConfig>> {
+pub async fn lease_fsemul_config_optionally<'lf>() -> Option<RwLockReadGuard<'lf, FSEmulConfig>> {
 	try_to_load_fsemul_config().await;
 
 	let read_lock = FSEMUL_CONFIG.read().await;
@@ -110,7 +110,7 @@ pub async fn lease_host_file_system_optionally() -> Option<&'static HostFilesyst
 /// This will exit the program if for some reason we can't load the bridge
 /// configuration file from the disk.
 #[allow(unused)]
-pub async fn lease_fsemul_config<'lf>() -> RwLockReadGuard<'lf, FsEmulConfig> {
+pub async fn lease_fsemul_config<'lf>() -> RwLockReadGuard<'lf, FSEmulConfig> {
 	validate_fsemul_config_is_populated().await;
 
 	RwLockReadGuard::map(FSEMUL_CONFIG.read().await, |inner_guard| {
@@ -132,7 +132,7 @@ pub async fn lease_host_file_system() -> &'static HostFilesystem {
 /// This will exit the program if for some reason we can't load the filesystem
 /// configuration file from the disk.
 #[allow(unused)]
-pub async fn lease_fsemul_config_mut<'lf>() -> RwLockMappedWriteGuard<'lf, FsEmulConfig> {
+pub async fn lease_fsemul_config_mut<'lf>() -> RwLockMappedWriteGuard<'lf, FSEmulConfig> {
 	validate_fsemul_config_is_populated().await;
 
 	RwLockWriteGuard::map(FSEMUL_CONFIG.write().await, |inner_guard| {
@@ -182,7 +182,7 @@ async fn try_to_load_fsemul_config() {
 		}
 		let fsemul_path = read_env_path.as_ref().expect("impossible");
 
-		match FsEmulConfig::load_explicit_path(fsemul_path.clone()).await {
+		match FSEmulConfig::load_explicit_path(fsemul_path.clone()).await {
 			Ok(state) => {
 				_ = write_lock.insert(state);
 			}
@@ -325,7 +325,7 @@ async fn validate_fsemul_config_is_populated() {
 		}
 		let fsemul_config_path = read_env_path.as_ref().expect("impossible");
 
-		match FsEmulConfig::load_explicit_path(fsemul_config_path.clone()).await {
+		match FSEmulConfig::load_explicit_path(fsemul_config_path.clone()).await {
 			Ok(state) => {
 				_ = write_lock.insert(state);
 			}
