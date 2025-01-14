@@ -519,7 +519,10 @@ impl HostFilesystem {
 			return Err(PCFSApiError::PathNotMapped(path.to_owned()).into());
 		}
 		// Check for mapped directories...
-		let canonicalized_cafe = self.cafe_sdk_path().canonicalize().unwrap_or_else(|_| self.cafe_sdk_path().clone());
+		let canonicalized_cafe = self
+			.cafe_sdk_path()
+			.canonicalize()
+			.unwrap_or_else(|_| self.cafe_sdk_path().clone());
 		if !closest_canonical_directory.starts_with(canonicalized_cafe) {
 			return Err(PCFSApiError::PathNotMapped(path.to_owned()).into());
 		}
