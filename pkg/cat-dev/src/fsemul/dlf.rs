@@ -393,6 +393,16 @@ mod unit_tests {
 			0,
 			"Real-DLF didn't parse correct minor version!"
 		);
+		#[cfg(target_os = "windows")]
+		assert_eq!(
+			dlf.get_path_and_offset_for_file(0x80000_u128).await,
+			Some((
+				&PathBuf::from(r#"C:\cafe_sdk\temp\mythra\caferun\ppc.bsf"#),
+				0
+			)),
+			"Real-DLF did not match correct path for address.",
+		);
+		#[cfg(not(target_os = "windows"))]
 		assert_eq!(
 			dlf.get_path_and_offset_for_file(0x80000_u128).await,
 			Some((

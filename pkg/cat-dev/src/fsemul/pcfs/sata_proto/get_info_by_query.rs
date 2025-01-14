@@ -209,10 +209,12 @@ impl SataGetInfoByQueryPacketBody {
 		//
 		// E.g. find the mountpoint that is _most specific_.
 		for potential_disk in &disks {
-			if fs_location
-				.closest_resolved_path()
-				.starts_with(potential_disk.mount_point())
-			{
+			let mount_point = potential_disk.mount_point();
+			if fs_location.closest_resolved_path().starts_with(
+				mount_point
+					.canonicalize()
+					.unwrap_or_else(|_| mount_point.to_path_buf()),
+			) {
 				let mut should_insert = true;
 				if let Some(other_potential_source) = disk_holding_path {
 					if other_potential_source.mount_point().components().count()
