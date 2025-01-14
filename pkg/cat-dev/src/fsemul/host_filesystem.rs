@@ -1059,8 +1059,9 @@ mod unit_tests {
 		] {
 			assert!(
 				fs.resolve_path(&format!("{dir}")).is_ok(),
-				"Failed to resolve: `{}`",
+				"Failed to resolve: `{}`: {:?}",
 				dir,
+				fs.resolve_path(&format!("{dir}"))
 			);
 			assert!(
 				fs.resolve_path(&format!("{dir}/")).is_ok(),
