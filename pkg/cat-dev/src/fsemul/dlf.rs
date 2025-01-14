@@ -356,10 +356,23 @@ mod unit_tests {
 	#[tokio::test]
 	pub async fn can_parse_real_files() {
 		// Just validate these don't error.
-		let real_life_dlf = Bytes::from(
-			std::fs::read(get_test_data_path("ppc_boot.dlf"))
-				.expect("Failed to read `ppc_boot.dlf` test data file!"),
-		);
+		let real_life_dlf;
+
+		#[cfg(target_os = "windows")]
+		{
+			real_life_dlf = Bytes::from(
+				std::fs::read(get_test_data_path("ppc_boot_win.dlf"))
+					.expect("Failed to read `ppc_boot.dlf` test data file!"),
+			);
+		}
+		#[cfg(not(target_os = "windows"))]
+		{
+			real_life_dlf = Bytes::from(
+				std::fs::read(get_test_data_path("ppc_boot.dlf"))
+					.expect("Failed to read `ppc_boot.dlf` test data file!"),
+			);
+		}
+
 		let empty_dlf = Bytes::from(
 			std::fs::read(get_test_data_path("minimal.dlf"))
 				.expect("Failed to read `minimal.dlf` test data file!"),
