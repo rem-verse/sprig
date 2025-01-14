@@ -398,6 +398,6 @@ mod unit_tests {
 			!base_dir.exists(),
 			"Base directory still exists post 'removal'",
 		);
-		assert!(renamed_dir.exists(), "Renamed directory doesn't exist?",);
+		assert!(renamed_dir.exists(), "Renamed directory doesn't exist?");
 	}
 }

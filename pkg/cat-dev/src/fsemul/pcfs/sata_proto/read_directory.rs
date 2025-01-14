@@ -195,11 +195,11 @@ mod unit_tests {
 		);
 		assert_ne!(
 			&actual_file_response[0x48..0x54],
-			&[0_u8, 0, 0, 0, 0, 0, 0, 0,],
+			&[0_u8, 0, 0, 0, 0, 0, 0, 0],
 		);
 		assert_ne!(
 			&actual_file_response[0x54..0x5C],
-			&[0_u8, 0, 0, 0, 0, 0, 0, 0,],
+			&[0_u8, 0, 0, 0, 0, 0, 0, 0],
 		);
 		assert_eq!(
 			&actual_file_response[0x5C..0x78],
@@ -238,7 +238,7 @@ mod unit_tests {
 			.handle(&mocked_header, &fs)
 			.await
 			.expect("Failed to get file information back from directory that was opened!");
-		assert_eq!(&new_response[0x20..0x24], &[0xFF, 0xF0, 0xFF, 0xFC,]);
+		assert_eq!(&new_response[0x20..0x24], &[0xFF, 0xF0, 0xFF, 0xFC]);
 		fs.close_folder(dfd).await;
 	}
 }

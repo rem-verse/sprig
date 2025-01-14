@@ -14,7 +14,6 @@ use std::{
 	collections::HashMap,
 	hash::RandomState,
 	io::{Error as IOError, SeekFrom},
-	os::fd::AsRawFd,
 	path::{Path, PathBuf},
 	sync::atomic::{AtomicI32, Ordering as AtomicOrdering},
 };
@@ -147,7 +146,18 @@ impl HostFilesystem {
 		path: &PathBuf,
 	) -> Result<i32, FSError> {
 		let fd = open_options.open(path).await?;
-		let raw_fd = fd.as_raw_fd();
+		let raw_fd;
+		#[cfg(unix)]
+		{
+			use std::os::fd::AsRawFd;
+			raw_fd = fd.as_raw_fd();
+		}
+		#[cfg(target_os = "windows")]
+		{
+			use std::os::windows::io::AsRawHandle;
+			raw_fd = fd.as_raw_handle() as i32;
+		}
+
 		let md = fd.metadata().await?;
 
 		self.open_file_handles
@@ -1049,22 +1059,22 @@ mod unit_tests {
 		] {
 			assert!(
 				fs.resolve_path(&format!("{dir}")).is_ok(),
-				"Failed to resolve: `/{}`",
+				"Failed to resolve: `{}`",
 				dir,
 			);
 			assert!(
 				fs.resolve_path(&format!("{dir}/")).is_ok(),
-				"Failed to resolve: `/{}/`",
+				"Failed to resolve: `{}/`",
 				dir,
 			);
 			assert!(
 				fs.resolve_path(&format!("{dir}/./")).is_ok(),
-				"Failed to resolve: `/{}/./`",
+				"Failed to resolve: `{}/./`",
 				dir,
 			);
 			assert!(
 				fs.resolve_path(&format!("{dir}/../{name}")).is_ok(),
-				"Failed to resolve: `/{}/../{}`",
+				"Failed to resolve: `{}/../{}`",
 				dir,
 				name,
 			);
