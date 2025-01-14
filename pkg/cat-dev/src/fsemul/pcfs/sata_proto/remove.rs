@@ -291,7 +291,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn test_real_removal() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
 		let base_dir = join_many(tempdir.path(), ["a", "b", "c"]);
 		tokio::fs::create_dir_all(&base_dir)
@@ -331,7 +331,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn test_fake_removal() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
 		let base_dir = join_many(tempdir.path(), ["a", "b", "c"]);
 		tokio::fs::create_dir_all(&base_dir)

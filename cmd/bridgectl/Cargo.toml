@@ -13,6 +13,7 @@ publish = false
 cat-dev = { path = "../../pkg/cat-dev" }
 clap = { version = "^4.5.26", features = ["color", "derive", "env", "error-context", "help", "suggestions", "unicode", "usage", "wrap_help"] }
 fnv.workspace = true
+futures.workspace = true
 log = { path = "../../pkg/log" }
 mac_address.workspace = true
 miette.workspace = true

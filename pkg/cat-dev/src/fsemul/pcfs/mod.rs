@@ -22,7 +22,10 @@ use crate::{
 };
 use futures::{SinkExt, StreamExt};
 use local_ip_address::local_ip;
-use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use std::{
+	net::{IpAddr, Ipv4Addr, SocketAddrV4},
+	sync::{atomic::AtomicUsize, Arc},
+};
 use tokio::{
 	net::{TcpListener, TcpStream},
 	task::Builder as TaskBuilder,
@@ -201,7 +204,10 @@ impl<'fs> PCFSSataServer<'fs> {
 		mut supports_ffio: bool,
 		mut supports_csr: bool,
 	) -> Result<(), CatBridgeError> {
-		let (mut sink, mut stream) = Framed::new(connection, SataProtoChunker).split();
+		connection.set_nodelay(true).map_err(NetworkError::IO)?;
+		let bypass_buff_to_read = Arc::new(AtomicUsize::new(0));
+		let (mut sink, mut stream) =
+			Framed::new(connection, SataProtoChunker(bypass_buff_to_read.clone())).split();
 		let mut first_packet = true;
 
 		loop {
@@ -232,6 +238,11 @@ impl<'fs> PCFSSataServer<'fs> {
 				match parsed_packet.body() {
 					SataRequestBody::ChangeMode(ref mode) => {
 						sink.send(mode.handle(parsed_packet.header(), host_filesystem)?)
+							.await
+							.map_err(NetworkError::IO)?;
+					}
+					SataRequestBody::ChangeOwner(ref co) => {
+						sink.send(co.handle(parsed_packet.header())?)
 							.await
 							.map_err(NetworkError::IO)?;
 					}
@@ -333,6 +344,20 @@ impl<'fs> PCFSSataServer<'fs> {
 								parsed_packet.header(),
 								host_filesystem,
 								st.file_descriptor(),
+							)
+							.await?,
+						)
+						.await
+						.map_err(NetworkError::IO)?;
+					}
+					SataRequestBody::WriteFile(ref wf) => {
+						sink.send(
+							wf.handle(
+								parsed_packet.header(),
+								host_filesystem,
+								supports_ffio,
+								&mut stream,
+								&bypass_buff_to_read,
 							)
 							.await?,
 						)
@@ -420,8 +445,10 @@ impl PCFSSataServer<'static> {
 		mut supports_ffio: bool,
 		mut supports_csr: bool,
 	) -> Result<(), CatBridgeError> {
-		debug!("PCFS Client has connected to SATA");
-		let (mut sink, mut stream) = Framed::new(connection, SataProtoChunker).split();
+		connection.set_nodelay(true).map_err(NetworkError::IO)?;
+		let bypass_buff_to_read = Arc::new(AtomicUsize::new(0));
+		let (mut sink, mut stream) =
+			Framed::new(connection, SataProtoChunker(bypass_buff_to_read.clone())).split();
 		let mut first_packet = true;
 
 		loop {
@@ -444,6 +471,11 @@ impl PCFSSataServer<'static> {
 				match parsed_packet.body() {
 					SataRequestBody::ChangeMode(ref mode) => {
 						sink.send(mode.handle(parsed_packet.header(), host_filesystem)?)
+							.await
+							.map_err(NetworkError::IO)?;
+					}
+					SataRequestBody::ChangeOwner(ref co) => {
+						sink.send(co.handle(parsed_packet.header())?)
 							.await
 							.map_err(NetworkError::IO)?;
 					}
@@ -545,6 +577,20 @@ impl PCFSSataServer<'static> {
 								parsed_packet.header(),
 								host_filesystem,
 								st.file_descriptor(),
+							)
+							.await?,
+						)
+						.await
+						.map_err(NetworkError::IO)?;
+					}
+					SataRequestBody::WriteFile(ref wf) => {
+						sink.send(
+							wf.handle(
+								parsed_packet.header(),
+								host_filesystem,
+								supports_ffio,
+								&mut stream,
+								&bypass_buff_to_read,
 							)
 							.await?,
 						)

@@ -1,24 +1,33 @@
-//! Definitions, and handlers for the `ReadFile` packet type.
+//! Definitions, and handlers for the `WriteFile` packet type.
 //!
-//! This is what actively handles reading bytes out of a file. With either
+//! This is what actively handles writing bytes to a file. With either
 //! FFIO, and Combined Send/Recv options being turned on/off.
 
 use crate::{
-	errors::{CatBridgeError, NetworkParseError},
+	errors::{CatBridgeError, NetworkError, NetworkParseError},
 	fsemul::{
-		pcfs::sata_proto::{construct_sata_response, MoveToFileLocation, SataPacketHeader},
+		pcfs::sata_proto::{
+			construct_sata_response, MoveToFileLocation, SataPacketHeader, SataProtoChunker,
+		},
 		HostFilesystem,
 	},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use futures::{stream::SplitStream, StreamExt};
+use std::sync::{
+	atomic::{AtomicUsize, Ordering as AtomicOrdering},
+	Arc,
+};
+use tokio::net::TcpStream;
+use tokio_util::codec::Framed;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
 
-/// A packet to read the contents of an already open file.
+/// A packet to write to an already open file.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SataReadFilePacketBody {
+pub struct SataWriteFilePacketBody {
 	block_count: u32,
 	block_size: u32,
 	handle: i32,
@@ -26,7 +35,7 @@ pub struct SataReadFilePacketBody {
 	should_move: bool,
 }
 
-impl SataReadFilePacketBody {
+impl SataWriteFilePacketBody {
 	#[must_use]
 	pub const fn block_count(&self) -> u32 {
 		self.block_count
@@ -48,7 +57,7 @@ impl SataReadFilePacketBody {
 		self.should_move
 	}
 
-	/// Handle reading from a file that is already open.
+	/// Handle writing to a file that is already open.
 	///
 	/// ## Errors
 	///
@@ -60,6 +69,8 @@ impl SataReadFilePacketBody {
 		request_header: &SataPacketHeader,
 		host_filesystem: &HostFilesystem,
 		ffio_supported: bool,
+		socket: &mut SplitStream<Framed<TcpStream, SataProtoChunker>>,
+		override_ptr: &Arc<AtomicUsize>,
 	) -> Result<Bytes, CatBridgeError> {
 		if self.should_move {
 			match self.move_to_pointer {
@@ -79,32 +90,24 @@ impl SataReadFilePacketBody {
 			}
 		}
 
-		let Some(file_size) = host_filesystem.file_length(self.handle).await else {
-			return Self::construct_error(request_header, FS_ERROR);
-		};
-		let Ok(Some(read_file)) = host_filesystem
-			.read_file(
-				self.handle,
-				usize::try_from(self.block_size)
-					.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?
-					* usize::try_from(self.block_count)
-						.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?,
-			)
-			.await
-		else {
-			return Self::construct_error(request_header, FS_ERROR);
-		};
-
 		if ffio_supported {
-			let mut buff = BytesMut::with_capacity(read_file.len() + 0x24);
-			// The header is normally just 'malloc'd and not cleared between
-			// buffers. Luckily for us we can just zero it out, and it's easier than
-			// actually dealing with whatever random bytes PCFSServer would normally
-			// send.
-			buff.extend_from_slice(&[0; 0x20]);
-			buff.put_u32(u32::try_from(file_size).unwrap_or(u32::MAX));
-			buff.extend(read_file);
-			Ok(buff.freeze())
+			let len_needed = usize::try_from(self.block_count * self.block_size)
+				.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
+			// Bypass header and such checks...
+			override_ptr.store(len_needed, AtomicOrdering::Release);
+			let buff = socket
+				.next()
+				.await
+				.ok_or_else(|| NetworkError::ExpectedData)?
+				.map_err(NetworkError::IO)?
+				.freeze();
+			host_filesystem
+				.write_file(self.file_descriptor(), buff)
+				.await?;
+
+			let mut result = BytesMut::with_capacity(4);
+			result.put_u32(self.block_count * self.block_size);
+			Ok(construct_sata_response(request_header, 0, result.freeze())?)
 		} else {
 			todo!("Implement non-FFIO support.")
 		}
@@ -120,13 +123,13 @@ impl SataReadFilePacketBody {
 	}
 }
 
-impl TryFrom<Bytes> for SataReadFilePacketBody {
+impl TryFrom<Bytes> for SataWriteFilePacketBody {
 	type Error = NetworkParseError;
 
 	fn try_from(mut value: Bytes) -> Result<Self, Self::Error> {
 		if value.len() < 20 {
 			return Err(NetworkParseError::FieldNotLongEnough(
-				"SataReadFile",
+				"SataWriteFile",
 				"Body",
 				20,
 				value.len(),
@@ -135,7 +138,7 @@ impl TryFrom<Bytes> for SataReadFilePacketBody {
 		}
 		if value.len() > 20 {
 			return Err(NetworkParseError::UnexpectedTrailer(
-				"SataReadFile",
+				"SataWriteFile",
 				value.slice(20..),
 			));
 		}
@@ -156,7 +159,7 @@ impl TryFrom<Bytes> for SataReadFilePacketBody {
 	}
 }
 
-const SATA_READ_FILE_PACKET_BODY_FIELDS: &[NamedField<'static>] = &[
+const SATA_WRITE_FILE_PACKET_BODY_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("block_count"),
 	NamedField::new("block_size"),
 	NamedField::new("handle"),
@@ -164,23 +167,23 @@ const SATA_READ_FILE_PACKET_BODY_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("should_move"),
 ];
 
-impl Structable for SataReadFilePacketBody {
+impl Structable for SataWriteFilePacketBody {
 	fn definition(&self) -> StructDef<'_> {
 		StructDef::new_static(
-			"SataReadFilePacketBody",
-			Fields::Named(SATA_READ_FILE_PACKET_BODY_FIELDS),
+			"SataWriteFilePacketBody",
+			Fields::Named(SATA_WRITE_FILE_PACKET_BODY_FIELDS),
 		)
 	}
 }
 
-impl Valuable for SataReadFilePacketBody {
+impl Valuable for SataWriteFilePacketBody {
 	fn as_value(&self) -> Value<'_> {
 		Value::Structable(self)
 	}
 
 	fn visit(&self, visitor: &mut dyn Visit) {
 		visitor.visit_named_fields(&NamedValues::new(
-			SATA_READ_FILE_PACKET_BODY_FIELDS,
+			SATA_WRITE_FILE_PACKET_BODY_FIELDS,
 			&[
 				Valuable::as_value(&self.block_count),
 				Valuable::as_value(&self.block_size),
@@ -189,63 +192,5 @@ impl Valuable for SataReadFilePacketBody {
 				Valuable::as_value(&self.should_move),
 			],
 		));
-	}
-}
-
-#[cfg(test)]
-mod unit_tests {
-	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
-	};
-	use tokio::fs::OpenOptions;
-
-	#[tokio::test]
-	pub async fn simple_ffio_read_file_request() {
-		let (tempdir, fs) = create_temporary_host_filesystem().await;
-
-		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
-		tokio::fs::create_dir(&base_dir)
-			.await
-			.expect("Failed to create temporary directory for test!");
-		tokio::fs::write(join_many(&base_dir, ["file.txt"]), vec![0; 2])
-			.await
-			.expect("Failed to write test file!");
-		let mocked_header = SataPacketHeader {
-			packet_data_len: 0,
-			packet_id: 0,
-			flags: 0,
-			version: 0,
-			timestamp_on_host: 0,
-			pid_on_host: 0,
-		};
-
-		let mut open_options = OpenOptions::new();
-		open_options.read(true).create(false).write(false);
-		let fd = fs
-			.open_file(open_options, &join_many(&base_dir, ["file.txt"]))
-			.await
-			.expect("Failed to open file!");
-
-		let read_request = SataReadFilePacketBody {
-			block_count: 4,
-			block_size: 1,
-			handle: fd,
-			move_to_pointer: MoveToFileLocation::Begin,
-			should_move: false,
-		};
-
-		let response = read_request
-			.handle(&mocked_header, &fs, true)
-			.await
-			.expect("Failed to handle read request!");
-		let mut expected_response = BytesMut::new();
-		// Header
-		expected_response.extend_from_slice(&[0; 0x20]);
-		// File length.
-		expected_response.extend_from_slice(&2_u32.to_be_bytes());
-		// File data, and padding.
-		expected_response.extend_from_slice(&[0x00, 0x00, 0xCD, 0xCD]);
-		assert_eq!(response, expected_response.freeze());
 	}
 }

@@ -223,7 +223,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn simple_open_file_request() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataOpenFilePacketBody {
 			path: "/%SLC_EMU_DIR/to-query/file.txt".to_owned(),
 			mode_string: "r".to_owned(),

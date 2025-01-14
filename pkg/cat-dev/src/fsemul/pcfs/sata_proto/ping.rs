@@ -158,7 +158,7 @@ mod unit_tests {
 		};
 		let example_command_info = SataCommandInfo {
 			user: (0, 0),
-			capabilities: (0, 1),
+			capabilities: (1, 0),
 			command: 0x14,
 		};
 

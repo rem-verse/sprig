@@ -187,7 +187,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn change_mode_request() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataChangeModePacketBody {
 			path: "/%SLC_EMU_DIR/to-query/file.txt".to_owned(),
 			set_write_mode: false,

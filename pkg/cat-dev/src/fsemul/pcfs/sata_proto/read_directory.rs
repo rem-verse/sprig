@@ -33,7 +33,8 @@ impl SataReadDirPacketBody {
 		self.file_descriptor
 	}
 
-	/// Actually process the packet.
+	/// Create a packet to then get the file information in the next file in a
+	/// folder.
 	///
 	/// ## Errors
 	///
@@ -145,7 +146,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn can_handle_read_directory() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let mocked_header = SataPacketHeader {
 			packet_data_len: 0,
 			packet_id: 0,

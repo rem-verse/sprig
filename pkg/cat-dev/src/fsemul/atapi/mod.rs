@@ -133,6 +133,7 @@ impl<'fs> AtapiServer<'fs> {
 		host_filesystem: &'fs HostFilesystem,
 		connection: TcpStream,
 	) -> Result<(), CatBridgeError> {
+		connection.set_nodelay(true).map_err(NetworkError::IO)?;
 		let (mut sink, mut stream) = Framed::new(connection, ChunkATAPIEmulatorCodec).split();
 
 		loop {
@@ -264,6 +265,7 @@ impl AtapiServer<'static> {
 		host_filesystem: &'static HostFilesystem,
 		connection: TcpStream,
 	) -> Result<(), CatBridgeError> {
+		connection.set_nodelay(true).map_err(NetworkError::IO)?;
 		let (mut sink, mut stream) = Framed::new(connection, ChunkATAPIEmulatorCodec).split();
 
 		loop {

@@ -163,6 +163,9 @@ pub enum NetworkError {
 	#[error("Failed to bind to a local address to receive packets.")]
 	#[diagnostic(code(cat_dev::net::bind_failure))]
 	BindFailure,
+	#[error("Expected some sort of data from other side, but got none.")]
+	#[diagnostic(code(cat_dev::net::expected_data))]
+	ExpectedData,
 	/// See [`reqwest::Error`] for details.
 	#[error("Underlying HTTP client error: {0}")]
 	#[diagnostic(code(cat_dev::net::http_failure))]

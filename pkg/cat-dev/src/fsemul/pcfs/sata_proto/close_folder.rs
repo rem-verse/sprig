@@ -1,6 +1,6 @@
 //! Definitions, and handlers for the `CloseFolder` packet type.
 //!
-//! Thise closes an already existing open folder given just a handle.
+//! This closes an already existing open folder given just a handle.
 
 use crate::{
 	errors::NetworkParseError,
@@ -105,7 +105,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn simple_ffio_read_file_request() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
 		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
 		tokio::fs::create_dir(&base_dir)

@@ -150,7 +150,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn simple_open_folder_request() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataOpenFolderPacketBody {
 			path: "/%SLC_EMU_DIR/to-query/".to_owned(),
 		};

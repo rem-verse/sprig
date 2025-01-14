@@ -19,8 +19,11 @@ use std::{
 	sync::atomic::{AtomicI32, Ordering as AtomicOrdering},
 };
 use tokio::{
-	fs::{create_dir_all, read_dir, write as fs_write, File, OpenOptions, ReadDir},
-	io::{AsyncReadExt, AsyncSeekExt},
+	fs::{
+		create_dir_all, read_dir, remove_file, rename, write as fs_write, File, OpenOptions,
+		ReadDir,
+	},
+	io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 use whoami::username;
@@ -58,6 +61,15 @@ impl HostFilesystem {
 	/// - `C:\cafe_sdk` on windows.
 	/// - `/opt/cafe_sdk` on any unix/bsd like OS.
 	///
+	/// NOTE: This will validate that all title id paths are lowercase, as
+	/// files are always expected to be lowercase when dealing with CAFE. Other
+	/// files are usually kept in the correct naming format. HOWEVER, users may
+	/// notice spurious errors with case-insensitivity on linux specifically. If
+	/// transferring an SDK from a Windows/Mac Case Insensitive to a Mac/Linux
+	/// case sensitive file system. It is recommended users
+	/// create their own directory using our recovery tools, rather than
+	/// rsync'ing a path over from case-insensitive, to case-sensitive.
+	///
 	/// ## Errors
 	///
 	/// If the Cafe SDK directory is corrupt, or can't be found. A Cafe SDK
@@ -65,44 +77,46 @@ impl HostFilesystem {
 	/// _need_ to be able to serve a Cafe-OS distribution. These file
 	/// requirements may change from version to version of this crate, but should
 	/// always be compatible with a clean cafe sdk directory.
-	pub fn from_cafe_dir(cafe_dir: Option<PathBuf>) -> Result<Self, FSEmulFSError> {
+	pub async fn from_cafe_dir(cafe_dir: Option<PathBuf>) -> Result<Self, FSError> {
 		let Some(cafe_sdk_path) = cafe_dir.or_else(Self::default_cafe_directory) else {
-			return Err(FSEmulFSError::CantFindCafeSdkPath);
+			return Err(FSEmulFSError::CantFindCafeSdkPath.into());
 		};
+
+		Self::patch_case_sensitive_title_ids(&cafe_sdk_path).await?;
 
 		if !Self::join_many(
 			&cafe_sdk_path,
 			[
-				"data", "mlc", "sys", "title", "00050030", "1001000A", "code", "app.xml",
+				"data", "mlc", "sys", "title", "00050030", "1001000a", "code", "app.xml",
 			],
 		)
 		.exists() || !Self::join_many(
 			&cafe_sdk_path,
 			[
-				"data", "mlc", "sys", "title", "00050030", "1001010A", "code", "app.xml",
+				"data", "mlc", "sys", "title", "00050030", "1001010a", "code", "app.xml",
 			],
 		)
 		.exists() || !Self::join_many(
 			&cafe_sdk_path,
 			[
-				"data", "mlc", "sys", "title", "00050030", "1001020A", "code", "app.xml",
+				"data", "mlc", "sys", "title", "00050030", "1001020a", "code", "app.xml",
 			],
 		)
 		.exists()
 		{
-			return Err(FSEmulFSError::CafeSdkPathCorrupt);
+			return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
 		}
 
 		// Can't generate a `fw.img` file for now :(
 		if !Self::join_many(
 			&cafe_sdk_path,
 			[
-				"data", "slc", "sys", "title", "00050010", "1000400A", "code", "fw.img",
+				"data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img",
 			],
 		)
 		.exists()
 		{
-			return Err(FSEmulFSError::CafeSdkPathCorrupt);
+			return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
 		}
 
 		Ok(Self {
@@ -185,6 +199,26 @@ impl HostFilesystem {
 		}
 
 		Ok(Some(file_buff.freeze()))
+	}
+
+	/// Write to a file descriptor that is actively open.
+	///
+	/// This will write from a currently open file descriptor, in it's current
+	/// location. You might want to set your file location for this FD before
+	/// if you aren't already in the same location.
+	///
+	/// ## Errors
+	///
+	/// If the file descriptor is open, but we could not write to the open file
+	/// descriptor.
+	pub async fn write_file(&self, fd: i32, data_to_write: Bytes) -> Result<(), FSError> {
+		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
+			return Err(FSError::IO(IOError::other("file not open")));
+		};
+		let file_writer = &mut real_entry.0;
+		file_writer.write_all(&data_to_write).await?;
+
+		Ok(())
 	}
 
 	/// Seek to the beginning or end of a file.
@@ -501,8 +535,8 @@ impl HostFilesystem {
 				"slc".to_owned(),
 				"sys".to_owned(),
 				"title".to_owned(),
-				format!("{:08X?}", title_id.0),
-				format!("{:08X?}", title_id.1),
+				format!("{:08x}", title_id.0),
+				format!("{:08x}", title_id.1),
 			],
 		)
 	}
@@ -514,7 +548,10 @@ impl HostFilesystem {
 	///
 	/// - If the temporary path does not exist and could not be created.
 	async fn temp_path(&self) -> Result<PathBuf, FSError> {
-		let temp_path = Self::join_many(&self.cafe_sdk_path, ["temp".to_owned(), username()]);
+		let temp_path = Self::join_many(
+			&self.cafe_sdk_path,
+			["temp".to_owned(), username().to_lowercase()],
+		);
 		if !temp_path.exists() {
 			create_dir_all(&temp_path).await?;
 		}
@@ -576,6 +613,88 @@ impl HostFilesystem {
 		}
 
 		None
+	}
+
+	async fn patch_case_sensitive_title_ids(cafe_sdk_path: &Path) -> Result<(), FSError> {
+		// First we need to check if we're even on a temporary filesystem/path.
+		if !cafe_sdk_path.exists() {
+			return Ok(());
+		}
+		let capital_path = Self::join_many(cafe_sdk_path, ["InsensitiveCheck.txt"]);
+		let _ = File::create(&capital_path).await?;
+		let is_insensitive = File::open(Self::join_many(cafe_sdk_path, ["insensitivecheck.txt"]))
+			.await
+			.is_ok();
+		remove_file(capital_path).await?;
+		if is_insensitive {
+			return Ok(());
+		}
+
+		for directory in [
+			Self::join_many(cafe_sdk_path, ["data", "slc", "sys", "title"]),
+			Self::join_many(cafe_sdk_path, ["data", "slc", "usr", "title"]),
+			Self::join_many(cafe_sdk_path, ["data", "mlc", "sys", "title"]),
+			Self::join_many(cafe_sdk_path, ["data", "mlc", "usr", "title"]),
+		] {
+			if !directory.exists() {
+				// Don't need to patch directories that don't exist.
+				continue;
+			}
+
+			// Now we need to scan, and lowercase all title ids. So those are the
+			// next two sub dirs as they're split into `title/{upper}/{lower}`.
+			let mut iter = read_dir(&directory).await?;
+			let lossy_cafe_dir = cafe_sdk_path.as_os_str().to_string_lossy().to_string();
+			while let Ok(Some(entry)) = iter.next_entry().await {
+				let p = entry.path();
+				if !p.is_dir() || !p.exists() {
+					continue;
+				}
+
+				let mut inner_iter = read_dir(&p).await?;
+				while let Ok(Some(inner_entry)) = inner_iter.next_entry().await {
+					let ip = inner_entry.path();
+					if !ip.is_dir() || !ip.exists() {
+						continue;
+					}
+
+					// Doing a lossy conversion is safe here cause we know all title ids are valid ascii + utf-8.
+					let new_path = ip
+						.as_os_str()
+						.to_string_lossy()
+						.trim_start_matches(&lossy_cafe_dir)
+						.to_ascii_lowercase();
+					if ip
+						.as_os_str()
+						.to_string_lossy()
+						.trim_start_matches(&lossy_cafe_dir)
+						!= new_path
+					{
+						let mut final_new_path = cafe_sdk_path.as_os_str().to_owned();
+						final_new_path.push(&new_path);
+						let new = PathBuf::from(final_new_path);
+						rename(ip, new).await?;
+					}
+				}
+
+				let new_path = p
+					.as_os_str()
+					.to_string_lossy()
+					.trim_start_matches(&lossy_cafe_dir)
+					.to_ascii_lowercase();
+				if p.as_os_str()
+					.to_string_lossy()
+					.trim_start_matches(&lossy_cafe_dir)
+					!= new_path
+				{
+					let mut final_new_path = cafe_sdk_path.as_os_str().to_owned();
+					final_new_path.push(&new_path);
+					rename(p, final_new_path).await?;
+				}
+			}
+		}
+
+		Ok(())
 	}
 }
 
@@ -711,7 +830,7 @@ pub mod test_helpers {
 	use tempfile::{tempdir, TempDir};
 
 	/// Test helper that creates a simple host filesystem.
-	pub fn create_temporary_host_filesystem() -> (TempDir, HostFilesystem) {
+	pub async fn create_temporary_host_filesystem() -> (TempDir, HostFilesystem) {
 		let dir = tempdir().expect("Failed to create temporary directory!");
 
 		for directory_to_create in vec![
@@ -722,16 +841,17 @@ pub mod test_helpers {
 			vec!["data", "save"],
 			// Create necessary to pass checks.
 			vec![
-				"data", "mlc", "sys", "title", "00050030", "1001000A", "code",
+				"data", "mlc", "sys", "title", "00050030", "1001000a", "code",
 			],
+			// Purposefully create capital so we can validate renaming works!
 			vec![
 				"data", "mlc", "sys", "title", "00050030", "1001010A", "code",
 			],
 			vec![
-				"data", "mlc", "sys", "title", "00050030", "1001020A", "code",
+				"data", "mlc", "sys", "title", "00050030", "1001020a", "code",
 			],
 			vec![
-				"data", "slc", "sys", "title", "00050010", "1000400A", "code",
+				"data", "slc", "sys", "title", "00050010", "1000400a", "code",
 			],
 		] {
 			create_dir_all(HostFilesystem::join_many(dir.path(), directory_to_create))
@@ -743,7 +863,7 @@ pub mod test_helpers {
 		File::create(HostFilesystem::join_many(
 			dir.path(),
 			[
-				"data", "mlc", "sys", "title", "00050030", "1001000A", "code", "app.xml",
+				"data", "mlc", "sys", "title", "00050030", "1001000a", "code", "app.xml",
 			],
 		))
 		.expect("Failed to create needed app.xml!");
@@ -757,7 +877,7 @@ pub mod test_helpers {
 		File::create(HostFilesystem::join_many(
 			dir.path(),
 			[
-				"data", "mlc", "sys", "title", "00050030", "1001020A", "code", "app.xml",
+				"data", "mlc", "sys", "title", "00050030", "1001020a", "code", "app.xml",
 			],
 		))
 		.expect("Failed to create needed app.xml!");
@@ -765,12 +885,13 @@ pub mod test_helpers {
 		File::create(HostFilesystem::join_many(
 			dir.path(),
 			[
-				"data", "slc", "sys", "title", "00050010", "1000400A", "code", "fw.img",
+				"data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img",
 			],
 		))
 		.expect("Failed to create needed fw.img!");
 
 		let fs = HostFilesystem::from_cafe_dir(Some(PathBuf::from(dir.path())))
+			.await
 			.expect("Failed to load empty host filesystem!");
 
 		(dir, fs)
@@ -812,7 +933,7 @@ mod unit_tests {
 	pub async fn creatable_files() {
 		// Validate that our functions that create files can actually, well, create
 		// those files.
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
 		let expected_bsf_path = HostFilesystem::join_many(
 			tempdir.path(),
@@ -869,7 +990,7 @@ mod unit_tests {
 			fs.firmware_file_path(),
 			HostFilesystem::join_many(
 				tempdir.path(),
-				["data", "slc", "sys", "title", "00050010", "1000400A", "code", "fw.img"],
+				["data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img"],
 			),
 		);
 
@@ -900,9 +1021,9 @@ mod unit_tests {
 		);
 	}
 
-	#[test]
-	pub fn path_allows_writes() {
-		let (_tempdir, fs) = create_temporary_host_filesystem();
+	#[tokio::test]
+	pub async fn path_allows_writes() {
+		let (_tempdir, fs) = create_temporary_host_filesystem().await;
 
 		// DIRECTORIES BESIDES DISC should allow writes.
 		// unless excluded by fsemul attrs.
@@ -913,11 +1034,11 @@ mod unit_tests {
 		assert!(!fs.path_allows_writes(&PathBuf::from("/vol/pc/%DISC_EMU_DIR/")));
 	}
 
-	#[test]
-	pub fn resolve_path() {
+	#[tokio::test]
+	pub async fn resolve_path() {
 		// Validate that our functions that create files can actually, well, create
 		// those files.
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
 		// Validate each of the regular directories work.
 		for (dir, name) in [
@@ -1006,7 +1127,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn opening_files() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let path = HostFilesystem::join_many(tempdir.path(), ["file.txt"]);
 		tokio::fs::write(path.clone(), vec![0; 1307])
 			.await
@@ -1038,7 +1159,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn seek_and_read() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let path = HostFilesystem::join_many(tempdir.path(), ["file.txt"]);
 		tokio::fs::write(path.clone(), vec![0; 1307])
 			.await
@@ -1077,7 +1198,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn open_and_close_folder() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let path = HostFilesystem::join_many(tempdir.path(), ["a", "b"]);
 		tokio::fs::create_dir_all(path.clone())
 			.await
@@ -1101,7 +1222,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn seek_within_folder() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let path = HostFilesystem::join_many(tempdir.path(), ["a", "b"]);
 		tokio::fs::create_dir_all(path.clone())
 			.await

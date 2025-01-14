@@ -513,7 +513,7 @@ mod unit_tests {
 		// We don't know what your actual disk size here is in tests.
 		//
 		// BUT, we can confirm it populates the right bytes.
-		let (_tempdir, fs) = create_temporary_host_filesystem();
+		let (_tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%MLC_EMU_DIR/".to_owned(),
 			typ: QueryType::FreeDiskSpace,
@@ -552,7 +552,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn size_of_folder_query_type() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%MLC_EMU_DIR/my-directory/".to_owned(),
 			typ: QueryType::SizeOfFolder,
@@ -620,7 +620,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn file_count_query_type() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%SLC_EMU_DIR/my-directory/".to_owned(),
 			typ: QueryType::FileCount,
@@ -681,7 +681,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn file_info_query_type() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%SLC_EMU_DIR/to-query/file.txt".to_owned(),
 			typ: QueryType::FileDetails,

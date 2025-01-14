@@ -16,7 +16,7 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
 
-/// A packet to get information about another file within a directory.
+/// A packet to rewind to the beginning of a directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SataRewindDirPacketBody {
 	file_descriptor: i32,
@@ -28,7 +28,7 @@ impl SataRewindDirPacketBody {
 		self.file_descriptor
 	}
 
-	/// Actually process the packet.
+	/// Actually process by rewinding an open directory iterator.
 	///
 	/// ## Errors
 	///
@@ -124,7 +124,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn can_handle_rewind_directory() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let mocked_header = SataPacketHeader {
 			packet_data_len: 0,
 			packet_id: 0,

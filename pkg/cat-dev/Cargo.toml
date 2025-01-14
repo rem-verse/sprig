@@ -15,7 +15,7 @@ cipher = { version = "^0.4.4", features = ["alloc", "block-padding"] }
 configparser = "^3.1.0"
 ecb = "^0.1.2"
 fnv.workspace = true
-futures = "^0.3.31"
+futures.workspace = true
 local-ip-address = "^0.6.3"
 mac_address.workspace = true
 miette.workspace = true

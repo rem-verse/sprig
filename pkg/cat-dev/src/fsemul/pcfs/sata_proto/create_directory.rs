@@ -19,7 +19,7 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
 
-/// A packet to create a file.
+/// A packet to create a new directory.
 ///
 /// This will create a directory if it does not exist.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,7 +49,7 @@ impl SataCreateDirectoryPacketBody {
 		self.set_write_mode
 	}
 
-	/// Handle removing a file upon request.
+	/// Handle creating a directory upon request.
 	///
 	/// ## Errors
 	///
@@ -74,13 +74,15 @@ impl SataCreateDirectoryPacketBody {
 			return Self::construct_error(request_header, FS_ERROR);
 		}
 
-		if let Err(cause) = create_dir_all(fs_location.resolved_path()).await {
-			error!(
-			  ?cause,
-			  path = %fs_location.resolved_path().display(),
-			  "Failed to create directory for PCFS.",
-			);
-			return Self::construct_error(request_header, FS_ERROR);
+		if !fs_location.resolved_path().exists() {
+			if let Err(cause) = create_dir_all(fs_location.resolved_path()).await {
+				error!(
+				  ?cause,
+				  path = %fs_location.resolved_path().display(),
+				  "Failed to create directory for PCFS.",
+				);
+				return Self::construct_error(request_header, FS_ERROR);
+			}
 		}
 		// Mark as read only.
 		if !self.set_write_mode {
@@ -180,7 +182,7 @@ mod unit_tests {
 
 	#[tokio::test]
 	pub async fn test_simple_create_directory() {
-		let (tempdir, fs) = create_temporary_host_filesystem();
+		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
 		let base_dir = join_many(tempdir.path(), ["a", "b", "c"]);
 

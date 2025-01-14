@@ -245,7 +245,7 @@ async fn try_to_load_host_file_system() {
 
 		let host_fs_path = read_env_path.as_ref().expect("impossible");
 
-		match HostFilesystem::from_cafe_dir(Some(host_fs_path.clone())) {
+		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(host_fs_path.clone()))) {
 			Ok(state) => state,
 			Err(cause) => {
 				if SHOULD_LOG_JSON() {
@@ -390,7 +390,7 @@ async fn validate_host_file_system_is_populated() {
 		}
 		let cafe_root_path = read_env_path.as_ref().expect("impossible");
 
-		match HostFilesystem::from_cafe_dir(Some(cafe_root_path.clone())) {
+		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(cafe_root_path.clone()))) {
 			Ok(state) => state,
 			Err(cause) => {
 				if SHOULD_LOG_JSON() {

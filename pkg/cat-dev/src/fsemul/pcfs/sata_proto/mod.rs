@@ -5,6 +5,7 @@
 //! in it's own sub-file.
 
 mod change_mode;
+mod change_owner;
 mod close_file;
 mod close_folder;
 mod create_directory;
@@ -17,6 +18,7 @@ mod read_file;
 mod remove;
 mod rewind_directory;
 mod stat_file;
+mod write_file;
 
 use crate::{
 	errors::NetworkParseError,
@@ -25,7 +27,10 @@ use crate::{
 use bytes::{BufMut, Bytes, BytesMut};
 use std::{
 	fmt::{Display, Formatter, Result as FmtResult},
-	sync::LazyLock,
+	sync::{
+		atomic::{AtomicUsize, Ordering as AtomicOrdering},
+		Arc, LazyLock,
+	},
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::io::Error as IoError;
@@ -34,9 +39,9 @@ use tracing::debug;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 pub use crate::fsemul::pcfs::sata_proto::{
-	change_mode::*, close_file::*, close_folder::*, create_directory::*, get_info_by_query::*,
-	open_file::*, open_folder::*, ping::*, read_directory::*, read_file::*, remove::*,
-	rewind_directory::*, stat_file::*,
+	change_mode::*, change_owner::*, close_file::*, close_folder::*, create_directory::*,
+	get_info_by_query::*, open_file::*, open_folder::*, ping::*, read_directory::*, read_file::*,
+	remove::*, rewind_directory::*, stat_file::*, write_file::*,
 };
 
 /// The Default PCFS Version we claim to be.
@@ -48,14 +53,27 @@ static PID: LazyLock<u32> = LazyLock::new(std::process::id);
 ///
 /// PCFS will have a data header of `0x20` bytes, and then a data length
 /// defined as the first four bytes in a packet.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct SataProtoChunker;
+///
+/// This chunker also allows an `AtomicUsize` that allows bypassing ALL checks
+/// for a packet, and just returning N number of bytes. This is useful for when
+/// we are using Fast File I/O, and need to bypass all the shennagins going on.,
+#[derive(Clone, Debug)]
+pub struct SataProtoChunker(pub Arc<AtomicUsize>);
 
 impl Decoder for SataProtoChunker {
 	type Item = BytesMut;
 	type Error = IoError;
 
 	fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+		let num = self.0.load(AtomicOrdering::Acquire);
+		if num != 0 {
+			if src.len() < num {
+				return Ok(None);
+			}
+
+			self.0.store(0, AtomicOrdering::Release);
+			return Ok(Some(src.split_to(num)));
+		}
 		// We don't yet have a complete header...
 		if src.len() < 0x20 {
 			return Ok(None);
@@ -479,6 +497,8 @@ impl Display for SataCommandInfo {
 pub enum SataRequestBody {
 	/// A request to set readonly/not-readonly for a path.
 	ChangeMode(SataChangeModePacketBody),
+	/// A request to change the active owner for a path, always errors.
+	ChangeOwner(SataChangeOwnerPacketBody),
 	/// A request to create a directory.
 	CreateDirectory(SataCreateDirectoryPacketBody),
 	/// Close an already open file.
@@ -503,6 +523,8 @@ pub enum SataRequestBody {
 	Rewind(SataRewindDirPacketBody),
 	/// Get file information about a particular file.
 	StatFile(SataStatFilePacketBody),
+	/// Write to a file that is already open.
+	WriteFile(SataWriteFilePacketBody),
 }
 
 impl SataRequestBody {
@@ -523,12 +545,14 @@ impl SataRequestBody {
 			0x4 => SataCloseFolderPacketBody::try_from(body).map(SataRequestBody::CloseFolder),
 			0x5 => SataOpenFilePacketBody::try_from(body).map(SataRequestBody::OpenFile),
 			0x6 => SataReadFilePacketBody::try_from(body).map(SataRequestBody::ReadFile),
+			0x7 => SataWriteFilePacketBody::try_from(body).map(SataRequestBody::WriteFile),
 			0xB => SataStatFilePacketBody::try_from(body).map(SataRequestBody::StatFile),
 			0xD => SataCloseFilePacketBody::try_from(body).map(SataRequestBody::CloseFile),
 			0xE => SataRemovePacketBody::try_from(body).map(SataRequestBody::Remove),
 			0x10 => {
 				SataGetInfoByQueryPacketBody::try_from(body).map(SataRequestBody::GetInfoByQuery)
 			}
+			0x12 => SataChangeOwnerPacketBody::try_from(body).map(SataRequestBody::ChangeOwner),
 			0x13 => SataChangeModePacketBody::try_from(body).map(SataRequestBody::ChangeMode),
 			0x14 => SataPingPacketBody::try_from(body).map(SataRequestBody::Ping),
 			val => {
@@ -584,10 +608,66 @@ fn construct_sata_response<Ty: Into<Bytes>>(
 	Ok(new_buff.freeze())
 }
 
+/// Move to a particular location inside of a file.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Valuable)]
+pub enum MoveToFileLocation {
+	/// Move to the beginning of the file.
+	Begin,
+	/// Move nowhere.
+	Current,
+	/// Move to the end of a file.
+	End,
+}
+
+impl From<&MoveToFileLocation> for u32 {
+	fn from(value: &MoveToFileLocation) -> u32 {
+		match *value {
+			MoveToFileLocation::Begin => 0,
+			MoveToFileLocation::Current => 1,
+			MoveToFileLocation::End => 2,
+		}
+	}
+}
+
+impl From<MoveToFileLocation> for u32 {
+	fn from(value: MoveToFileLocation) -> u32 {
+		Self::from(&value)
+	}
+}
+
+impl TryFrom<u32> for MoveToFileLocation {
+	type Error = SataProtocolError;
+
+	fn try_from(value: u32) -> Result<Self, Self::Error> {
+		match value {
+			0 => Ok(Self::Begin),
+			1 => Ok(Self::Current),
+			2 => Ok(Self::End),
+			val => Err(SataProtocolError::UnknownFileLocation(val)),
+		}
+	}
+}
+
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
 	use crate::fsemul::pcfs::SataCapabilitiesFlags;
+
+	#[test]
+	pub fn move_to_file_location_conversions() {
+		for mtfl in vec![
+			MoveToFileLocation::Begin,
+			MoveToFileLocation::Current,
+			MoveToFileLocation::End,
+		] {
+			assert_eq!(
+				mtfl,
+				MoveToFileLocation::try_from(u32::from(mtfl))
+					.expect("MTFL turned into u32 could not be parsed"),
+				"MoveToFileLocation wasn't the same after being converted back n forth!",
+			);
+		}
+	}
 
 	#[test]
 	pub fn decode_real_ping_packet() {
