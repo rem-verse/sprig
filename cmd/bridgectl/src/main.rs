@@ -14,12 +14,20 @@ pub mod utils;
 
 use crate::{
 	commands::{
-		argv_helpers::{initialize_host_bridge, initialize_scan_flags, target_bridge},
+		argv_helpers::{
+			initialize_fsemul_config, initialize_host_bridge, initialize_scan_flags,
+			initialize_shared_server_flags, should_interpret_arg_as_port_path, target_bridge,
+		},
 		handle_add_or_update, handle_boot, handle_dump_parameters, handle_get,
 		handle_get_parameters, handle_help, handle_list, handle_list_serial_ports,
 		handle_remove_bridge, handle_set_default_bridge, handle_set_parameters, handle_tail,
-		mion::handle_dump_eeprom as mion_handle_dump_eeprom,
-		mion::handle_dump_memory as mion_handle_dump_memory,
+		mion::{
+			handle_decrypt_firmware as mion_handle_decrypt_firmware,
+			handle_dump_eeprom as mion_handle_dump_eeprom,
+			handle_dump_firmware_from_memory as mion_handle_dump_firmware_fromm_memory,
+			handle_dump_memory as mion_handle_dump_memory,
+			handle_encrypt_firmware as mion_handle_encrypt_firmware,
+		},
 	},
 	exit_codes::{
 		ARGV_NO_COMMAND_SPECIFIED, ARGV_PARSE_FAILURE, LOGGING_HANDLER_INSTALL_FAILURE,
@@ -33,6 +41,7 @@ use crate::{
 use clap::Parser;
 use log::install_logging_handlers;
 use miette::miette;
+use std::path::PathBuf;
 use tracing::error;
 
 /// Whether or not we're logging in JSON.
@@ -96,7 +105,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_add_or_update(set_default).await;
 		}
@@ -105,18 +114,38 @@ async fn main() {
 			scan_flags,
 			target_flags,
 			bridge_name_positional,
-			serial_port_flag,
+			fsemul_flags,
+			shared_server_flags,
 			serial_port_positional,
-			without_pcfs,
+			shared_serial_port_flags,
+			disable_sata,
+			parameter_space_port,
 			take_ownership,
+			without_pcfs,
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			let used_positional = target_bridge(
+				target_flags,
+				bridge_name_positional.as_deref(),
+				serial_port_positional.is_some(),
+			)
+			.await;
+			initialize_fsemul_config(&fsemul_flags).await;
+			initialize_shared_server_flags(shared_server_flags).await;
+
+			let positional_for_serial = if used_positional {
+				serial_port_positional
+			} else {
+				bridge_name_positional.map(PathBuf::from)
+			};
 
 			handle_boot(
+				fsemul_flags,
+				disable_sata,
 				without_pcfs,
-				(serial_port_flag, serial_port_positional),
+				(shared_serial_port_flags, positional_for_serial.as_ref()),
+				parameter_space_port,
 				take_ownership,
 			)
 			.await;
@@ -130,7 +159,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_dump_parameters(parameter_space_port).await;
 		}
@@ -143,7 +172,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_get(output_as_table).await;
 		}
@@ -187,33 +216,74 @@ async fn main() {
 		Subcommands::ListSerialPorts {} => {
 			handle_list_serial_ports();
 		}
-		Subcommands::Mion(mion_subcommands) => match mion_subcommands {
-			MionSubcommands::DumpEeprom {
+		Subcommands::Mion { subcommand } => match subcommand {
+			Some(MionSubcommands::DecryptFirmware {
+				output_path_flag,
+				firmware_path,
+				output_path_positional,
+			}) => {
+				mion_handle_decrypt_firmware(
+					firmware_path,
+					output_path_flag,
+					output_path_positional,
+				)
+				.await;
+			}
+			Some(MionSubcommands::DumpEeprom {
 				bridge_config_flags,
 				scan_flags,
 				target_flags,
 				bridge_name_positional,
 				output_path,
-			} => {
+			}) => {
 				initialize_host_bridge(bridge_config_flags).await;
 				initialize_scan_flags(scan_flags).await;
-				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 				mion_handle_dump_eeprom(output_path).await;
 			}
-			MionSubcommands::DumpMemory {
+			Some(MionSubcommands::DumpMemory {
 				bridge_config_flags,
 				scan_flags,
 				target_flags,
 				bridge_name_positional,
 				output_path,
 				resume_at,
-			} => {
+			}) => {
 				initialize_host_bridge(bridge_config_flags).await;
 				initialize_scan_flags(scan_flags).await;
-				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 				mion_handle_dump_memory(output_path, resume_at).await;
+			}
+			Some(MionSubcommands::DumpFirmwareFromMemory {
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_positional,
+				output_path,
+			}) => {
+				initialize_host_bridge(bridge_config_flags).await;
+				initialize_scan_flags(scan_flags).await;
+				_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
+
+				mion_handle_dump_firmware_fromm_memory(output_path).await;
+			}
+			Some(MionSubcommands::EncryptFirmware {
+				output_path_flag,
+				firmware_path,
+				output_path_positional,
+			}) => {
+				mion_handle_encrypt_firmware(
+					firmware_path,
+					output_path_flag,
+					output_path_positional,
+				)
+				.await;
+			}
+			None => {
+				handle_help(Some(Subcommands::Mion { subcommand }));
+				std::process::exit(ARGV_NO_COMMAND_SPECIFIED);
 			}
 		},
 		Subcommands::Remove {
@@ -224,7 +294,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_remove_bridge().await;
 		}
@@ -236,7 +306,7 @@ async fn main() {
 		} => {
 			initialize_host_bridge(bridge_config_flags).await;
 			initialize_scan_flags(scan_flags).await;
-			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), false).await;
+			_ = target_bridge(target_flags, bridge_name_positional.as_deref(), true).await;
 
 			handle_set_default_bridge().await;
 		}
@@ -266,10 +336,42 @@ async fn main() {
 			.await;
 		}
 		Subcommands::Tail {
-			serial_port_flag,
-			serial_port_positional,
+			fsemul_flags,
+			bridge_config_flags,
+			scan_flags,
+			target_flags,
+			bridge_name_or_serial_port_path,
+			shared_serial_port_flags,
 		} => {
-			handle_tail(serial_port_flag, serial_port_positional).await;
+			// If a user supplied a positional argument, it may be a PATH, or
+			// a bridge name (to connect on debug out), but cannot be both.
+			//
+			// So we do some seperation here.
+			let interpret_as_path =
+				should_interpret_arg_as_port_path(bridge_name_or_serial_port_path.as_ref());
+			initialize_host_bridge(bridge_config_flags).await;
+			initialize_scan_flags(scan_flags).await;
+			initialize_fsemul_config(&fsemul_flags).await;
+			_ = target_bridge(
+				target_flags,
+				if interpret_as_path {
+					None
+				} else {
+					bridge_name_or_serial_port_path.as_deref()
+				},
+				true,
+			)
+			.await;
+
+			handle_tail(
+				if interpret_as_path {
+					bridge_name_or_serial_port_path.map(PathBuf::from)
+				} else {
+					None
+				},
+				shared_serial_port_flags,
+			)
+			.await;
 		}
 	}
 }

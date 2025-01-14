@@ -1,7 +1,7 @@
 //! Parameters that are well known, and can be referred to by their name
 //! rather than just their index.
 
-use crate::errors::APIError;
+use crate::mion::proto::{control::MIONBootType, parameter::MIONParameterAPIError};
 use bytes::Bytes;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
@@ -15,25 +15,25 @@ pub enum ParameterLocationSpecification {
 }
 
 impl TryFrom<&str> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: &str) -> Result<Self, Self::Error> {
 		if index_from_parameter_name(value).is_some() {
 			Ok(Self::NameLike(value.to_owned()))
 		} else {
-			Err(APIError::MIONParameterNameNotKnown(value.to_owned()))
+			Err(MIONParameterAPIError::NameNotKnown(value.to_owned()))
 		}
 	}
 }
 impl TryFrom<&String> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: &String) -> Result<Self, Self::Error> {
 		Self::try_from(value.as_str())
 	}
 }
 impl TryFrom<String> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: String) -> Result<Self, Self::Error> {
 		Self::try_from(value.as_str())
@@ -41,13 +41,13 @@ impl TryFrom<String> for ParameterLocationSpecification {
 }
 
 impl TryFrom<u16> for ParameterLocationSpecification {
-	type Error = APIError;
+	type Error = MIONParameterAPIError;
 
 	fn try_from(value: u16) -> Result<Self, Self::Error> {
 		if value < 512 {
 			Ok(Self::Index(value))
 		} else {
-			Err(APIError::MIONParameterNotInRage(usize::from(value)))
+			Err(MIONParameterAPIError::NotInRange(usize::from(value)))
 		}
 	}
 }
@@ -73,6 +73,33 @@ pub fn index_from_parameter_name(name: &str) -> Option<usize> {
 	}
 }
 
+/// Validate the valuue at a particular index against a well known type.
+#[must_use]
+pub fn validate_value_at_index(
+	specification: &ParameterLocationSpecification,
+	byte_value: u8,
+) -> bool {
+	let index = match specification {
+		ParameterLocationSpecification::Index(idx) => usize::from(*idx),
+		ParameterLocationSpecification::NameLike(ref name) => {
+			if let Some(idx) = index_from_parameter_name(name) {
+				idx
+			} else {
+				return false;
+			}
+		}
+	};
+
+	match index {
+		2 => match MIONBootType::from(byte_value) {
+			MIONBootType::NAND | MIONBootType::PCFS | MIONBootType::DUAL => true,
+			MIONBootType::Unk(_) => false,
+		},
+		// Has no specific validation rule we know of.
+		_ => true,
+	}
+}
+
 const PARAMETER_DUMP_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("NandMode"),
 	NamedField::new("SdkMajor"),
@@ -82,7 +109,7 @@ const PARAMETER_DUMP_FIELDS: &[NamedField<'static>] = &[
 ];
 const KNOWN_INDEXES: &[usize] = &[2_usize, 3_usize, 4_usize, 5_usize];
 pub struct ValuableParameterDump<'value>(pub &'value Bytes);
-impl<'value> Structable for ValuableParameterDump<'value> {
+impl Structable for ValuableParameterDump<'_> {
 	fn definition(&self) -> StructDef<'_> {
 		StructDef::new_static(
 			"ValuableParameterDump",
@@ -90,7 +117,7 @@ impl<'value> Structable for ValuableParameterDump<'value> {
 		)
 	}
 }
-impl<'value> Valuable for ValuableParameterDump<'value> {
+impl Valuable for ValuableParameterDump<'_> {
 	fn as_value(&self) -> valuable::Value<'_> {
 		Value::Structable(self)
 	}
@@ -107,7 +134,7 @@ impl<'value> Valuable for ValuableParameterDump<'value> {
 		visitor.visit_named_fields(&NamedValues::new(
 			PARAMETER_DUMP_FIELDS,
 			&[
-				Valuable::as_value(&self.0[KNOWN_INDEXES[0]]),
+				Valuable::as_value(&MIONBootType::from(self.0[KNOWN_INDEXES[0]])),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[1]]),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[2]]),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[3]]),

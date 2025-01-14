@@ -86,25 +86,45 @@ pub enum Subcommands {
 		)]
 		bridge_name_positional: Option<String>,
 		// ///////////////////////////////////////////////////
+		// FS Emulation shared configuration flags..
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		fsemul_flags: FSEmulConfigurationFlags,
+		#[command(flatten)]
+		shared_server_flags: SharedServerFlags,
+		// ///////////////////////////////////////////////////
 		// Shared Flags for targeting a single Serial Port.
 		// ///////////////////////////////////////////////////
-		#[arg(
-			short = 's',
-			long = "serial-port-path",
-			alias = "serial_port_path",
-			help = "The path to the serial port to use (conflicts with the positional argument).",
-			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
-		)]
-		serial_port_flag: Option<PathBuf>,
 		#[arg(
 			index = 2,
 			help = "The path to the serial port to use (conflicts with the flag).",
 			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the flag)."
 		)]
 		serial_port_positional: Option<PathBuf>,
+		#[command(flatten)]
+		shared_serial_port_flags: SharedSerialPortFlags,
 		// ///////////////////////////////////////////////////
 		// Boot only command flags.
 		// ///////////////////////////////////////////////////
+		#[arg(
+			long = "disable-pcfs-over-sata",
+			alias = "disable_pcfs_over_sata",
+			help = "Do not serve the device using the 'SATA' port, and use SDIO.",
+			long_help = "Disable the 'SATA' server, and use the SDIO server (a significantly less performant server)."
+		)]
+		disable_sata: bool,
+		#[arg(
+			long = "parameter-space-port",
+			help = "The 'parameter space' port to use.",
+			long_help = "The 'parameter space' port to use. Official tools don't support changing this, but it is configurable in `setup.cgi`."
+		)]
+		parameter_space_port: Option<u16>,
+		#[arg(
+			long = "take-ownership",
+			help = "If we should take over managing a MION from another host.",
+			long_help = "This will allow us to start managing a MION 'stealing' control from another host. Without this the boot command will exit with an error if it's currently being managed by another host."
+		)]
+		take_ownership: bool,
 		#[arg(
 			long = "boot-without-pcfs",
 			alias = "boot_without_pcfs",
@@ -112,12 +132,6 @@ pub enum Subcommands {
 			long_help = "Disable almost all other options, and just boot the device without any connection to the PC."
 		)]
 		without_pcfs: bool,
-		#[arg(
-			long = "take-ownership",
-			help = "If we should take over managing a MION from another host.",
-			long_help = "This will allow us to start managing a MION 'stealing' control from another host. Without this the boot command will exit with an error if it's currently being managed by another host."
-		)]
-		take_ownership: bool,
 	},
 	/// Dump the entire parameter space of a MION.
 	#[command(
@@ -261,8 +275,12 @@ pub enum Subcommands {
 		visible_aliases = ["ls-serial-ports", "lssp", "list_serial_ports", "ls_serial_ports"],
 	)]
 	ListSerialPorts {},
-	#[clap(subcommand)]
-	Mion(MionSubcommands),
+	/// Subcommands for interacting directly with custom APIs for the small board
+	/// controlling all disc access (aka the MION).
+	Mion {
+		#[clap(subcommand)]
+		subcommand: Option<MionSubcommands>,
+	},
 	/// Remove a bridge from your local configuration file.
 	#[command(name = "remove", visible_alias = "rm")]
 	Remove {
@@ -349,22 +367,30 @@ pub enum Subcommands {
 	)]
 	Tail {
 		// ///////////////////////////////////////////////////
-		// Shared Flags for targeting a single Serial Port.
+		// FS Emulation shared configuration flags..
 		// ///////////////////////////////////////////////////
-		#[arg(
-			short = 's',
-			long = "serial-port-path",
-			alias = "serial_port_path",
-			help = "The path to the serial port to use (conflicts with the positional argument).",
-			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
-		)]
-		serial_port_flag: Option<PathBuf>,
+		#[command(flatten)]
+		fsemul_flags: FSEmulConfigurationFlags,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
 		#[arg(
 			index = 1,
-			help = "The path to the serial port to use (conflicts with the flag).",
-			long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the flag)."
+			help = "Either a bridge name, or the path to the serial port to tail.",
+			long_help = "This can be the path to the serial port, OR this can be interpreted as a bridge search parameter. If you don't want to specify what bridge you want to get parameters from with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess how to find the bridge."
 		)]
-		serial_port_positional: Option<PathBuf>,
+		bridge_name_or_serial_port_path: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single Serial Port.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		shared_serial_port_flags: SharedSerialPortFlags,
 	},
 }
 impl Subcommands {
@@ -385,10 +411,14 @@ impl Subcommands {
 				scan_flags,
 				target_flags,
 				bridge_name_positional,
-				serial_port_flag,
+				fsemul_flags,
+				shared_server_flags,
 				serial_port_positional,
-				without_pcfs,
+				shared_serial_port_flags,
+				disable_sata,
+				parameter_space_port,
 				take_ownership,
+				without_pcfs,
 			} => name == "boot" || name == "power-on" || name == "power_on",
 			Self::DumpParameters {
 				bridge_config_flags,
@@ -426,7 +456,7 @@ impl Subcommands {
 					|| name == "ls_serial_ports"
 					|| name == "lssp"
 			}
-			Self::Mion(_) => name == "mion",
+			Self::Mion { subcommand } => name == "mion",
 			Self::Remove {
 				bridge_config_flags,
 				scan_flags,
@@ -448,8 +478,12 @@ impl Subcommands {
 				parameter_names_positional,
 			} => name == "set-parameters" || name == "set_parameters" || name == "sp",
 			Self::Tail {
-				serial_port_flag,
-				serial_port_positional,
+				fsemul_flags,
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_or_serial_port_path,
+				shared_serial_port_flags,
 			} => name == "tail" || name == "tail-serial-port" || name == "tail_serial_port",
 		}
 	}
@@ -483,7 +517,7 @@ pub enum MionSubcommands {
 			long = "output-path",
 			alias = "output_path",
 			help = "The path to output the dumped EEPROM.",
-			long_help = "The path to the file to write the EEPMROM dump."
+			long_help = "The path to the file to write the EEPROM dump."
 		)]
 		output_path: Option<PathBuf>,
 	},
@@ -512,8 +546,8 @@ pub enum MionSubcommands {
 			short = 'p',
 			long = "output-path",
 			alias = "output_path",
-			help = "The path to output the dumped EEPROM.",
-			long_help = "The path to the file to write the EEPMROM dump."
+			help = "The path to output the dumped memory of the MION.",
+			long_help = "The path to the file to write the dumped memory of the MION."
 		)]
 		output_path: Option<PathBuf>,
 		#[arg(
@@ -521,9 +555,112 @@ pub enum MionSubcommands {
 			long = "resume-at",
 			alias = "resume_at",
 			help = "The byte offset to resume reading at.",
-			long_help = "The byte offset on the page to resume reading at, use debug logs to see where you are if you intend to resume."
+			long_help = "The byte offset on the page to resume reading at, use debug logs of bridgectl to see where you are if you intend to resume."
 		)]
 		resume_at: Option<usize>,
+	},
+	/// Dump the firmware from the memory of the MION.
+	///
+	/// This is useful because doing a full memory dump takes _forever_ however
+	/// the firmware files are reaalistically only the first couple MBs of memory
+	/// always loaded at 0x0.
+	///
+	/// This dumps _just_ the first 3Mb of memory to get _just_ the firmware.
+	#[command(
+		name = "dump-firmware-from-memory",
+		alias = "dump_firmware_from_memory"
+	)]
+	DumpFirmwareFromMemory {
+		// ///////////////////////////////////////////////////
+		// Shared Flags for targeting a single bridge.
+		// ///////////////////////////////////////////////////
+		#[command(flatten)]
+		bridge_config_flags: BridgeConfigurationFlags,
+		#[command(flatten)]
+		scan_flags: BridgeScanFlags,
+		#[command(flatten)]
+		target_flags: TargetBridgeFlags,
+		#[arg(
+			index = 1,
+			help = "Search for a bridge with a particular name/ip/mac address.",
+			long_help = "If you don't want to specify what type you're searching for with `--ip`, `--mac-address`, or `--name` you can just pass in a positional argument where we can guess"
+		)]
+		bridge_name_positional: Option<String>,
+		// ///////////////////////////////////////////////////
+		// Get only command flags.
+		// ///////////////////////////////////////////////////
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the partial dumped memory.",
+			long_help = "The path to the file to write the partial memory dump."
+		)]
+		output_path: Option<PathBuf>,
+	},
+	/// Decrypt a MION Firmware file.
+	#[command(
+		name = "decrypt-fw",
+		visible_aliases = [
+			"decrypt_fw",
+			"decrypt-firmware",
+			"decrypt_firmware",
+			"dfw",
+		],
+	)]
+	DecryptFirmware {
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the decrypted firmware file.",
+			long_help = "The path to output the decrypted firmware file, can also be specified with positional arguments rather than flags, or not at all."
+		)]
+		output_path_flag: Option<PathBuf>,
+		#[arg(
+			index = 1,
+			help = "The firmware file to decrypt.",
+			long_help = "The path to the mion fw that we will decrypt."
+		)]
+		firmware_path: PathBuf,
+		#[arg(
+			index = 2,
+			help = "The path to write the decrypted firmware file.",
+			long_help = "The path to write the decrypted firmware file, you can also use `--output-path`, `-o` to specify this rather than a positional argument, or not at all."
+		)]
+		output_path_positional: Option<PathBuf>,
+	},
+	/// Encrypt a MION Firmware file.
+	#[command(
+		name = "encrypt-fw",
+		visible_aliases = [
+			"encrypt_fw",
+			"encrypt-firmware",
+			"encrypt_firmware",
+			"efw",
+		],
+	)]
+	EncryptFirmware {
+		#[arg(
+			short = 'p',
+			long = "output-path",
+			alias = "output_path",
+			help = "The path to output the encrypted firmware file.",
+			long_help = "The path to output the encrypted firmware file, can also be specified with positional arguments rather than flags, or not at all."
+		)]
+		output_path_flag: Option<PathBuf>,
+		#[arg(
+			index = 1,
+			help = "The firmware file to encrypt.",
+			long_help = "The path to the mion fw that we will encrypt."
+		)]
+		firmware_path: PathBuf,
+		#[arg(
+			index = 2,
+			help = "The path to write the encrypted firmware file.",
+			long_help = "The path to write the encrypted firmware file, you can also use `--output-path`, `-o` to specify this rather than a positional argument, or not at all."
+		)]
+		output_path_positional: Option<PathBuf>,
 	},
 }
 impl MionSubcommands {
@@ -547,6 +684,37 @@ impl MionSubcommands {
 				output_path,
 				resume_at,
 			} => name == "dump-memory" || name == "dump_memory",
+			Self::DumpFirmwareFromMemory {
+				bridge_config_flags,
+				scan_flags,
+				target_flags,
+				bridge_name_positional,
+				output_path,
+			} => name == "dump-firmware-from-memory" || name == "dump_firmware_from_memory",
+			Self::DecryptFirmware {
+				output_path_flag,
+				firmware_path,
+				output_path_positional,
+			} => [
+				"decrypt-fw",
+				"decrypt_fw",
+				"decrypt-firmware",
+				"decrypt_firmware",
+				"dfw",
+			]
+			.contains(&name),
+			Self::EncryptFirmware {
+				output_path_flag,
+				firmware_path,
+				output_path_positional,
+			} => [
+				"encrypt-fw",
+				"encrypt_fw",
+				"encrypt-firmware",
+				"encrypt_firmware",
+				"efw",
+			]
+			.contains(&name),
 		}
 	}
 }
@@ -707,13 +875,13 @@ impl Display for BridgeConfigurationFlags {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		write!(
 			fmt,
-			"Config Location Override Flag --bridge-state-path: `{:?}`",
+			"Bridge Config Location Override Flag --bridge-state-path: `{:?}`",
 			self.bridge_state_path,
 		)
 	}
 }
 const BRIDGE_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] =
-	&[NamedField::new("config_location_override")];
+	&[NamedField::new("bridge_config_location_override")];
 impl Structable for BridgeConfigurationFlags {
 	fn definition(&self) -> StructDef<'_> {
 		StructDef::new_static(
@@ -801,6 +969,359 @@ impl Valuable for BridgeScanFlags {
 			&[
 				Valuable::as_value(&self.control_port_override),
 				Valuable::as_value(&self.scan_timeout),
+			],
+		));
+	}
+}
+
+/// Common flags that are present on multiple subcommands for managing the
+/// fs emulation configuration settings.
+#[allow(
+	// This struct isn't created through APIs where having more explicit types
+	// would be more beneficial.
+	//
+	// These are all CLI arguments, which are explicitly named differently, and
+	// not close.
+	clippy::struct_excessive_bools,
+)]
+#[derive(Args, Debug)]
+pub struct FSEmulConfigurationFlags {
+	#[arg(
+		long = "cafe-dir",
+		alias = "cafe_dir",
+		help = "The root path to your cafe directory, this is usually `C:\\cafe_sdk`, or `/opt/cafe_sdk`.",
+		long_help = "If you do not wish to use the default location, the explicit path to your cafe sdk directory, which should contains folders named `slc`/`mlc` under the `data` folder."
+	)]
+	cafe_dir: Option<PathBuf>,
+	#[arg(
+		long = "disable-csr",
+		visible_aliases = [
+			"disable_csr",
+			"noCSR",
+			"nocsr"
+		],
+		help = "Disable Combined Send/Recv for protocols that support it.",
+		long_help = "If you do not wish to enable Combined Send/Recv for Sata, and other protocols that support it.",
+	)]
+	disable_csr: bool,
+	#[arg(
+		long = "disable-ffio",
+		visible_aliases = [
+			"disable_ffio",
+			"noFFIO",
+			"noffio"
+		],
+		help = "Disable Fast File I/O for protocols that support it.",
+		long_help = "If you do not wish to enable Fast File I/O for Sata, and other protocols that support it.",
+	)]
+	disable_ffio: bool,
+	#[arg(
+		long = "disable-load-bearing-sleep-for-sdio",
+		alias = "disable_load_bearing_sleep_for_sdio",
+		help = "Disable a load-bearing sleep necessary for unpatched cat-devs to work.",
+		long_help = "Disable a load-bearing sleep necessary for unpatched cat-devs to work. The official cat-dev MION's will ack packets, but then throw them away, because it hates us."
+	)]
+	disable_load_bearing_sleep_for_sdio: bool,
+	#[arg(
+		long = "disable-real-removal",
+		alias = "disable_real_removal",
+		help = "Disable actually removing files from the filesystem.",
+		long_help = "Disable all removal of files/folders/symlinks from the filesystem, just rename them. Incase you're curious about it."
+	)]
+	disable_real_removal: bool,
+	#[arg(
+		long = "fsemul-config-path",
+		alias = "fsemul_config_path",
+		help = "The path to your fsemul configuration, a.k.a. `fsemul.ini`.",
+		long_help = "If you do not wish to use the default location, the explicit path to your `fsemul.ini` file that we should use."
+	)]
+	fsemul_config_path: Option<PathBuf>,
+	#[arg(
+		long = "prefer-fsemul-over-network",
+		alias = "prefer_fsemul_over_network",
+		help = "If we should prefer the `fsemul.ini` file over the web configuration.",
+		long_help = "If we should prefer the `fsemul.ini` file over the web configuration, this makes us act like nintendo's tools, but also means your configuration needs to be up to date."
+	)]
+	prefer_fsemul_over_network: bool,
+}
+impl FSEmulConfigurationFlags {
+	#[must_use]
+	pub fn cafe_dir(&self) -> Option<&PathBuf> {
+		self.cafe_dir.as_ref()
+	}
+
+	#[must_use]
+	pub const fn disable_csr(&self) -> bool {
+		self.disable_csr
+	}
+
+	#[must_use]
+	pub const fn disable_ffio(&self) -> bool {
+		self.disable_ffio
+	}
+
+	#[must_use]
+	pub const fn disable_load_bearing_sleep_for_sdio(&self) -> bool {
+		self.disable_load_bearing_sleep_for_sdio
+	}
+
+	#[must_use]
+	pub const fn disable_real_removal(&self) -> bool {
+		self.disable_real_removal
+	}
+
+	#[must_use]
+	pub fn fsemul_config_path(&self) -> Option<&PathBuf> {
+		self.fsemul_config_path.as_ref()
+	}
+
+	#[must_use]
+	pub const fn prefer_fsemul_over_network(&self) -> bool {
+		self.prefer_fsemul_over_network
+	}
+}
+impl Display for FSEmulConfigurationFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`, --disable-csr: `{}`, --disable-ffio: `{}`, --disable-load-bearing-sleep-for-sdio: `{}`, --disable-real-removal: `{}`",
+			self.fsemul_config_path,
+			self.prefer_fsemul_over_network,
+			self.cafe_dir,
+			self.disable_csr,
+			self.disable_ffio,
+			self.disable_load_bearing_sleep_for_sdio,
+			self.disable_real_removal,
+		)
+	}
+}
+const FSEMUL_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("fsemul_config_path"),
+	NamedField::new("prefer_fsemul_over_network"),
+	NamedField::new("cafe_dir"),
+	NamedField::new("disable_ffio"),
+	NamedField::new("disable_csr"),
+	NamedField::new("disable_load_bearing_sleep_for_sdio"),
+	NamedField::new("disable_real_removal"),
+];
+impl Structable for FSEmulConfigurationFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"FsEmulConfigurationFlags",
+			Fields::Named(FSEMUL_CONFIGURATION_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for FSEmulConfigurationFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			FSEMUL_CONFIGURATION_FLAG_FIELDS,
+			&[
+				Valuable::as_value(
+					&self
+						.fsemul_config_path
+						.as_ref()
+						.map(|pb| format!("{}", pb.display())),
+				),
+				Valuable::as_value(&self.prefer_fsemul_over_network),
+				Valuable::as_value(&self.cafe_dir.as_ref().map(|pb| format!("{}", pb.display()))),
+				Valuable::as_value(&self.disable_ffio),
+				Valuable::as_value(&self.disable_csr),
+				Valuable::as_value(&self.disable_load_bearing_sleep_for_sdio),
+				Valuable::as_value(&self.disable_real_removal),
+			],
+		));
+	}
+}
+
+/// Common flags that are present on multiple subcommands for managing
+/// shared server variables.
+#[derive(Args, Debug)]
+pub struct SharedServerFlags {
+	#[arg(
+		long = "atapi-port",
+		alias = "atapi_port",
+		help = "The port to bind our ATAPI server to.",
+		long_help = "The port to bind our ATAPI server to, ATAPI is what managed raw HDD style reading."
+	)]
+	atapi_port: Option<u16>,
+	#[arg(
+		long = "bind-address",
+		alias = "bind_address",
+		help = "The address to bind too for the cat-dev to connect too.",
+		long_help = "If you do not wish to use your local ip address, the ip address to bind servers too."
+	)]
+	bind_addr: Option<Ipv4Addr>,
+	#[arg(
+		long = "pcfs-sata-port",
+		alias = "pcfs_sata_port",
+		help = "The port to bind our PCFS Sata server to.",
+		long_help = "The port to bind our PCFS Sata server to. PCFS Sata is where most of the core filesystem emulation."
+	)]
+	pcfs_sata_port: Option<u16>,
+	#[arg(
+		long = "sdio-control-port",
+		alias = "sdio_control_port",
+		help = "The port to bind our SDIO/Control server to.",
+		long_help = "The port to bind our SDIO/Control server to. SDIO/Control is where the MION gets certain files that would be on internal eMMCs."
+	)]
+	sdio_control_port: Option<u16>,
+	#[arg(
+		long = "sdio-printf-port",
+		alias = "sdio_printf_port",
+		help = "The port to bind our SDIO/Printf server to.",
+		long_help = "The port to bind our SDIO/Printf server to. SDIO/Printf is where certain log messages from the MION get dumped."
+	)]
+	sdio_printf_port: Option<u16>,
+}
+impl SharedServerFlags {
+	#[must_use]
+	pub const fn atapi_port(&self) -> Option<u16> {
+		self.atapi_port
+	}
+
+	#[must_use]
+	pub fn bind_addr(&self) -> Option<&Ipv4Addr> {
+		self.bind_addr.as_ref()
+	}
+
+	#[must_use]
+	pub const fn pcfs_sata_port(&self) -> Option<u16> {
+		self.pcfs_sata_port
+	}
+
+	#[must_use]
+	pub const fn sdio_control_port(&self) -> Option<u16> {
+		self.sdio_control_port
+	}
+
+	#[must_use]
+	pub const fn sdio_printf_port(&self) -> Option<u16> {
+		self.sdio_printf_port
+	}
+}
+impl Display for SharedServerFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"Shared Server Flags --atapi-port: `{:?}`, --bind-addr: `{:?}`, --pcfs-sata-port: `{:?}`, --sdio-control-port: `{:?}`, --sdio-printf-port: `{:?}`",
+			self.atapi_port,
+			self.bind_addr,
+			self.pcfs_sata_port,
+			self.sdio_control_port,
+			self.sdio_printf_port,
+		)
+	}
+}
+const SHARED_SERVER_FLAG_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("atapi_port"),
+	NamedField::new("bind_addr"),
+	NamedField::new("pcfs_sata_port"),
+	NamedField::new("sdio_control_port"),
+	NamedField::new("sdio_printf_port"),
+];
+impl Structable for SharedServerFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"SharedServerFlags",
+			Fields::Named(SHARED_SERVER_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for SharedServerFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			SHARED_SERVER_FLAG_FIELDS,
+			&[
+				Valuable::as_value(&self.atapi_port),
+				Valuable::as_value(&self.bind_addr.map(|ip| format!("{ip}"))),
+				Valuable::as_value(&self.pcfs_sata_port),
+				Valuable::as_value(&self.sdio_control_port),
+				Valuable::as_value(&self.sdio_printf_port),
+			],
+		));
+	}
+}
+
+/// Common flags that are present on multiple subcommands for managing
+/// serial-ports.
+///
+/// *note: there are some flags that may appear as a positional outside
+/// of this.*
+#[derive(Args, Debug)]
+pub struct SharedSerialPortFlags {
+	#[arg(
+		short = 's',
+		long = "serial-port-path",
+		alias = "serial_port_path",
+		help = "The path to the serial port to use (conflicts with the positional argument).",
+		long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
+	)]
+	serial_port_flag: Option<PathBuf>,
+	#[arg(
+		long = "debug-out-port",
+		alias = "debug_out_port",
+		help = "A port override to determine where we should connect for `DEBUG_OUT` logs.",
+		long_help = "A port override to determine where we should connect for `DBEUG_OUT` logs, the default port is 6001."
+	)]
+	debug_out_port: Option<u16>,
+}
+impl SharedSerialPortFlags {
+	#[must_use]
+	pub fn serial_port_flag(&self) -> Option<&PathBuf> {
+		self.serial_port_flag.as_ref()
+	}
+
+	#[must_use]
+	pub fn debug_out_port(&self) -> Option<u16> {
+		self.debug_out_port
+	}
+}
+impl Display for SharedSerialPortFlags {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		write!(
+			fmt,
+			"Shared Serial Port Flags --serial-port-path: `{:?}`, --debug-out-port: `{:?}`",
+			self.serial_port_flag, self.debug_out_port,
+		)
+	}
+}
+const SHARED_SERIAL_PORT_FLAG_FIELDS: &[NamedField<'static>] = &[
+	NamedField::new("serial_port_flag"),
+	NamedField::new("debug_out_port"),
+];
+impl Structable for SharedSerialPortFlags {
+	fn definition(&self) -> StructDef<'_> {
+		StructDef::new_static(
+			"SharedSerialPortFlags",
+			Fields::Named(SHARED_SERIAL_PORT_FLAG_FIELDS),
+		)
+	}
+}
+impl Valuable for SharedSerialPortFlags {
+	fn as_value(&self) -> Value<'_> {
+		Value::Structable(self)
+	}
+
+	fn visit(&self, visitor: &mut dyn Visit) {
+		visitor.visit_named_fields(&NamedValues::new(
+			SHARED_SERIAL_PORT_FLAG_FIELDS,
+			&[
+				Valuable::as_value(
+					&self
+						.serial_port_flag
+						.as_ref()
+						.map(|p| format!("{}", p.display())),
+				),
+				Valuable::as_value(&self.debug_out_port),
 			],
 		));
 	}

@@ -26,12 +26,12 @@ pub struct CliOpts {
 impl CliOpts {
 	pub fn print_help() {
 		println!(
-			r#"Usage: mionparamspace [-d MION_IP] | [-v] MION_IP OFFSET [-s VALUE]
+			"Usage: mionparamspace [-d MION_IP] | [-v] MION_IP OFFSET [-s VALUE]
 where: -v        verbose
        -d        hex dump of the param space
        MION_IP   IP address of the MION device
        OFFSET    byte offset(0-511) of the value to get/set
-       -s VALUE  set the value(0-255) at the offset"#
+       -s VALUE  set the value(0-255) at the offset"
 		);
 	}
 }

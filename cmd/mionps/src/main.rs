@@ -22,8 +22,12 @@ use crate::{
 use cat_dev::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
 	mion::{
+		errors::MIONProtocolError,
 		parameter::{get_parameters_with_logging_hooks, set_parameters_with_logging_hooks},
-		proto::parameter::{well_known::ParameterLocationSpecification, DumpedMionParameters},
+		proto::parameter::{
+			well_known::ParameterLocationSpecification, DumpedMionParameters,
+			MIONParamProtocolError,
+		},
 	},
 };
 use std::{env::args, net::Ipv4Addr};
@@ -152,21 +156,22 @@ async fn do_set(ip: Ipv4Addr, timeout: Option<Duration>, offset: u16, value: u8,
 	{
 		Ok(successful_values) => successful_values,
 		Err(cause) => {
-			let size_error_code = match cause {
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::NotEnoughData(_name, _needed, got, _data),
-				)) => i32::try_from(got).unwrap_or(i32::MAX),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnexpectedTrailer(_name, trailer),
-				)) => i32::try_from(trailer.len() + 12).unwrap_or(i32::MAX),
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnknownParamsPacketType(typ),
-				)) => typ,
-				CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::ParamsPacketErrorCode(ec),
-				)) => ec,
-				_ => 0,
-			};
+			let size_error_code =
+				match cause {
+					CatBridgeError::Network(NetworkError::Parse(
+						NetworkParseError::NotEnoughData(_name, _needed, got, _data),
+					)) => i32::try_from(got).unwrap_or(i32::MAX),
+					CatBridgeError::Network(NetworkError::Parse(
+						NetworkParseError::UnexpectedTrailer(_name, trailer),
+					)) => i32::try_from(trailer.len() + 12).unwrap_or(i32::MAX),
+					CatBridgeError::Network(NetworkError::Parse(NetworkParseError::MION(
+						MIONProtocolError::Params(MIONParamProtocolError::PacketType(typ)),
+					))) => typ,
+					CatBridgeError::Network(NetworkError::Parse(NetworkParseError::MION(
+						MIONProtocolError::Params(MIONParamProtocolError::ErrorCode(ec)),
+					))) => ec,
+					_ => 0,
+				};
 
 			println!("mionps: ERROR: set response returned error (status={size_error_code}/0)");
 			if verbose {

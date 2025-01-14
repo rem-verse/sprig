@@ -121,7 +121,7 @@ bridge", which you want to use by default if no name was provided. You can
 get this bridges information from the host state.
 
 ```rust,no_run
-use cat_dev::BridgeHostState;
+use cat_dev::mion::BridgeHostState;
 
 async fn get_default_mion() {
   let host_state = BridgeHostState::load()

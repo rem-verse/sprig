@@ -71,6 +71,8 @@ jobs:
         run: rustup update stable
       - name: Run Nextest
         run: cargo nextest run
+        env:
+          RUST_BACKTRACE: full
   doc-test:
     name: Run doc tests
     strategy:
@@ -83,3 +85,5 @@ jobs:
         run: rustup update stable
       - name: Run Doc Tests
         run: cargo test --doc
+        env:
+          RUST_BACKTRACE: full

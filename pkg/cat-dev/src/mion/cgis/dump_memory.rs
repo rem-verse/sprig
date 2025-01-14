@@ -7,7 +7,7 @@
 
 use crate::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::cgis::AUTHZ_HEADER,
+	mion::{cgis::AUTHZ_HEADER, proto::cgis::MIONCGIErrors},
 };
 use bytes::{Bytes, BytesMut};
 use fnv::FnvHashMap;
@@ -47,11 +47,18 @@ const MAX_MEMORY_CONCURRENCY: usize = 4;
 pub async fn dump_memory(
 	mion_ip: Ipv4Addr,
 	resume_at: Option<usize>,
+	early_stop_at: Option<usize>,
 ) -> Result<Bytes, CatBridgeError> {
 	let mut memory_buffer = BytesMut::with_capacity(0xFFFF_FFFF);
-	dump_memory_with_raw_client(&Client::default(), mion_ip, resume_at, |bytes: Vec<u8>| {
-		memory_buffer.extend_from_slice(&bytes);
-	})
+	dump_memory_with_raw_client(
+		&Client::default(),
+		mion_ip,
+		resume_at,
+		early_stop_at,
+		|bytes: Vec<u8>| {
+			memory_buffer.extend_from_slice(&bytes);
+		},
+	)
 	.await?;
 	Ok(memory_buffer.freeze())
 }
@@ -69,12 +76,20 @@ pub async fn dump_memory(
 pub async fn dump_memory_with_writer<FnTy>(
 	mion_ip: Ipv4Addr,
 	resume_at: Option<usize>,
+	early_stop_at: Option<usize>,
 	callback: FnTy,
 ) -> Result<(), CatBridgeError>
 where
 	FnTy: FnMut(Vec<u8>) + Send + Sync,
 {
-	dump_memory_with_raw_client(&Client::default(), mion_ip, resume_at, callback).await
+	dump_memory_with_raw_client(
+		&Client::default(),
+		mion_ip,
+		resume_at,
+		early_stop_at,
+		callback,
+	)
+	.await
 }
 
 /// Perform a memory dump request, but with an already existing HTTP client.
@@ -90,6 +105,7 @@ pub async fn dump_memory_with_raw_client<FnTy>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	resume_at: Option<usize>,
+	early_stop_at: Option<usize>,
 	buff_callback: FnTy,
 ) -> Result<(), CatBridgeError>
 where
@@ -109,25 +125,20 @@ where
 	//
 	// If requests start throwing errors, the receiving channel will send
 	// a message to `stop_requests_sender` which will shut everything down.
-	let buffered_stream_future =
-		futures::stream::iter((start_address..=MEMORY_MAX_ADDRESS).step_by(512))
-			.map(|page_start| async move {
-				loop {
-					if !do_memory_page_fetch(
-						client,
-						mion_ip,
-						page_start,
-						retry_counter_ref,
-						sender_ref,
-					)
-					.await
-					{
-						break;
-					}
-				}
-			})
-			.buffered(MAX_MEMORY_CONCURRENCY)
-			.collect::<Vec<()>>();
+	let buffered_stream_future = futures::stream::iter(
+		(start_address..=early_stop_at.unwrap_or(MEMORY_MAX_ADDRESS)).step_by(512),
+	)
+	.map(|page_start| async move {
+		loop {
+			if !do_memory_page_fetch(client, mion_ip, page_start, retry_counter_ref, sender_ref)
+				.await
+			{
+				break;
+			}
+		}
+	})
+	.buffered(MAX_MEMORY_CONCURRENCY)
+	.collect::<Vec<()>>();
 
 	// As requests finish, they may not necissarily be in order.
 	// We need to reorder them to ensure they're called back in a
@@ -227,7 +238,10 @@ async fn do_memory_page_fetch(
 	let Ok(potential_response) = timeout_response else {
 		if retry_counter.fetch_add(1, AtomicOrdering::AcqRel) > MAX_RETRIES {
 			_ = result_stream
-				.send(Err(NetworkError::TimeoutError.into()))
+				.send(Err(NetworkError::Timeout(Duration::from_secs(
+					MEMORY_TIMEOUT_SECONDS,
+				))
+				.into()))
 				.await;
 			return false;
 		}
@@ -257,7 +271,10 @@ async fn do_memory_page_fetch(
 	let Ok(body_result) = timeout_body_result else {
 		if retry_counter.fetch_add(1, AtomicOrdering::AcqRel) > MAX_RETRIES {
 			_ = result_stream
-				.send(Err(NetworkError::TimeoutError.into()))
+				.send(Err(NetworkError::Timeout(Duration::from_secs(
+					MEMORY_TIMEOUT_SECONDS,
+				))
+				.into()))
 				.await;
 			return false;
 		}
@@ -270,37 +287,31 @@ async fn do_memory_page_fetch(
 	if status != 200 {
 		if let Ok(body) = body_result {
 			_ = result_stream
-				.send(Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-					NetworkParseError::UnexpectedStatusCode(status, body),
-				))))
+				.send(Err(MIONCGIErrors::UnexpectedStatusCode(status, body).into()))
 				.await;
 			return false;
 		}
 
 		_ = result_stream
-			.send(Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCodeNoBody(status),
-			))))
+			.send(Err(MIONCGIErrors::UnexpectedStatusCodeNoBody(status).into()))
 			.await;
 		return false;
 	}
-	let read_body_bytes = match body_result.map_err(NetworkError::ReqwestError) {
+	let read_body_bytes = match body_result.map_err(NetworkError::HTTP) {
 		Ok(value) => value,
 		Err(cause) => {
 			_ = result_stream.send(Err(cause.into())).await;
 			return false;
 		}
 	};
-	let body_as_string = match String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)
-	{
-		Ok(value) => value,
-		Err(cause) => {
-			_ = result_stream.send(Err(cause.into())).await;
-			return false;
-		}
-	};
+	let body_as_string =
+		match String::from_utf8(read_body_bytes.into()).map_err(NetworkParseError::Utf8Expected) {
+			Ok(value) => value,
+			Err(cause) => {
+				_ = result_stream.send(Err(cause.into())).await;
+				return false;
+			}
+		};
 
 	process_received_page(page_start, result_stream, &body_as_string).await
 }
@@ -313,7 +324,7 @@ async fn process_received_page(
 	let table = match extract_memory_table_body(body_as_string) {
 		Ok(value) => value,
 		Err(cause) => {
-			_ = result_stream.send(Err(cause)).await;
+			_ = result_stream.send(Err(cause.into())).await;
 			return false;
 		}
 	};
@@ -331,17 +342,16 @@ async fn process_received_page(
 		{
 			if table_column.trim().len() != 2 {
 				_ = result_stream
-					.send(Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-						NetworkParseError::HtmlResponseBadByte(table_column.to_owned()),
-					))))
+					.send(Err(MIONCGIErrors::HtmlResponseBadByte(
+						table_column.to_owned(),
+					)
+					.into()))
 					.await;
 				return false;
 			}
-			let byte = match u8::from_str_radix(table_column.trim(), 16).map_err(|_| {
-				NetworkError::ParseError(NetworkParseError::HtmlResponseBadByte(
-					table_column.to_owned(),
-				))
-			}) {
+			let byte = match u8::from_str_radix(table_column.trim(), 16)
+				.map_err(|_| MIONCGIErrors::HtmlResponseBadByte(table_column.to_owned()))
+			{
 				Ok(value) => value,
 				Err(cause) => {
 					_ = result_stream.send(Err(cause.into())).await;
@@ -356,18 +366,14 @@ async fn process_received_page(
 	false
 }
 
-fn extract_memory_table_body(body: &str) -> Result<String, CatBridgeError> {
-	let start = body.find(TABLE_START_SIGIL).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingMemoryDumpSigil(
-			body.to_owned(),
-		))
-	})?;
+fn extract_memory_table_body(body: &str) -> Result<String, MIONCGIErrors> {
+	let start = body
+		.find(TABLE_START_SIGIL)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingMemoryDumpSigil(body.to_owned()))?;
 	let body_minus_start = &body[start + TABLE_START_SIGIL.len()..];
-	let end = body_minus_start.find(TABLE_END_SIGIL).ok_or_else(|| {
-		NetworkError::ParseError(NetworkParseError::HtmlResponseMissingMemoryDumpSigil(
-			body.to_owned(),
-		))
-	})?;
+	let end = body_minus_start
+		.find(TABLE_END_SIGIL)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingMemoryDumpSigil(body.to_owned()))?;
 
 	Ok(body_minus_start[..end].to_owned())
 }
@@ -382,7 +388,7 @@ fn extract_memory_table_body(body: &str) -> Result<String, CatBridgeError> {
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_memory_request<'key, 'value, UrlEncodableType>(
+pub async fn do_raw_memory_request<UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
@@ -401,7 +407,7 @@ where
 		)
 		.body::<String>(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)?,
+				.map_err(MIONCGIErrors::FormDataEncodeError)?,
 		)
 		.send()
 		.await?)

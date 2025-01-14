@@ -21,12 +21,12 @@ pub async fn handle_dump_memory(output_path: Option<PathBuf>, resume_at: Option<
 		info!(
 			id = "bridgectl::mion::dump_memory::start",
 			%bridge_ip,
-			"Dumping MION Memory, this will take a LONG time...",
+			"Dumping MION Memory, this will take a LONG time (like days...)...",
 		);
 	} else {
 		info!(
 			%bridge_ip,
-			"Dumping MION Memory, this will take a LONG time...",
+			"Dumping MION Memory, this will take a LONG time (like days...)...",
 		);
 	}
 
@@ -60,7 +60,7 @@ pub async fn handle_dump_memory(output_path: Option<PathBuf>, resume_at: Option<
 	};
 	let mut buff_writer = BufWriter::new(file_writer);
 
-	if let Err(cause) = dump_memory_with_writer(bridge_ip, resume_at, |bytes: Vec<u8>| {
+	if let Err(cause) = dump_memory_with_writer(bridge_ip, resume_at, None, |bytes: Vec<u8>| {
 		if let Err(cause) = buff_writer.write(&bytes) {
 			if SHOULD_LOG_JSON() {
 				error!(

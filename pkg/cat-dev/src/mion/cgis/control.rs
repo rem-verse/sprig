@@ -2,18 +2,18 @@
 //! turning the device on & off.
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
+	errors::{APIError, CatBridgeError, NetworkError},
 	mion::{
-		cgis::AUTHZ_HEADER,
-		proto::cgis::{ControlOperation, SetParameter},
+		cgis::{do_simple_request, parse_result_from_body},
+		proto::cgis::{ControlOperation, MIONCGIErrors, SetParameter},
 	},
 };
 use fnv::FnvHashMap;
 use local_ip_address::local_ip;
-use reqwest::{Client, Response, Version};
+use reqwest::{Client, Method};
 use serde::Serialize;
 use std::net::Ipv4Addr;
-use tracing::{field::valuable, warn};
+use tracing::warn;
 
 /// Perform a `get_info` request given a host, and a name.
 ///
@@ -27,7 +27,7 @@ use tracing::{field::valuable, warn};
 pub async fn get_info(
 	mion_ip: Ipv4Addr,
 	name: &str,
-) -> Result<FnvHashMap<String, String>, CatBridgeError> {
+) -> Result<FnvHashMap<String, String>, NetworkError> {
 	get_info_with_raw_client(&Client::default(), mion_ip, name).await
 }
 
@@ -44,40 +44,26 @@ pub async fn get_info_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	name: &str,
-) -> Result<FnvHashMap<String, String>, CatBridgeError> {
-	let response = do_raw_control_request(
+) -> Result<FnvHashMap<String, String>, NetworkError> {
+	let body_as_string = do_raw_control_request(
 		client,
 		mion_ip,
 		&[
 			("operation", Into::<&str>::into(ControlOperation::GetInfo)),
 			(
 				"host",
-				&format!("{}", local_ip().map_err(NetworkError::LocalIpError)?),
+				&format!("{}", local_ip().map_err(NetworkError::LocalIp)?),
 			),
 			("shutdown", "1"),
 			("name", name),
 		],
 	)
 	.await?;
-	let status = response.status().as_u16();
-	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
-	if status != 200 {
-		if let Ok(body) = body_result {
-			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCode(status, body),
-			)));
-		}
 
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::UnexpectedStatusCodeNoBody(status),
-		)));
-	}
-	let read_body_bytes = body_result?;
-	let body_as_string = String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)?;
-
-	extract_body_tags(&body_as_string, ControlOperation::GetInfo.into())
+	Ok(extract_body_tags(
+		&body_as_string,
+		ControlOperation::GetInfo.into(),
+	)?)
 }
 
 /// Perform a `set_param` request given a host, and the parameter to set.
@@ -92,7 +78,7 @@ pub async fn get_info_with_raw_client(
 pub async fn set_param(
 	mion_ip: Ipv4Addr,
 	parameter_to_set: SetParameter,
-) -> Result<bool, CatBridgeError> {
+) -> Result<bool, NetworkError> {
 	set_param_with_raw_client(&Client::default(), mion_ip, parameter_to_set).await
 }
 
@@ -109,8 +95,8 @@ pub async fn set_param_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	parameter_to_set: SetParameter,
-) -> Result<bool, CatBridgeError> {
-	let response = do_raw_control_request(
+) -> Result<bool, NetworkError> {
+	let body_as_string = do_raw_control_request(
 		client,
 		mion_ip,
 		&[
@@ -125,28 +111,69 @@ pub async fn set_param_with_raw_client(
 		],
 	)
 	.await?;
-	let status = response.status().as_u16();
-	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
-	if status != 200 {
-		if let Ok(body) = body_result {
-			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCode(status, body),
-			)));
-		}
 
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::UnexpectedStatusCodeNoBody(status),
-		)));
-	}
-	let read_body_bytes = body_result?;
-	let body_as_string = String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)?;
-
-	parse_result_from_body(
+	Ok(parse_result_from_body(
 		&body_as_string,
 		Into::<&str>::into(ControlOperation::SetParam),
+	)?)
+}
+
+/// Initiate a power-on request to turn on the CAT-DEV machine.
+///
+/// Note: This request just starts the actual power on, by the time you get to
+/// powering on the device, if you are using things like emulation you should
+/// already be connected to the SDIO ports, and be listening for ATAPI
+/// requests.
+///
+/// This is an older power on API and ***you should always prefer
+/// `power_on_v2` if it is possible to use.***
+///
+/// ## Errors
+///
+/// - If we cannot encode the parameters as a form url encoded.
+/// - If we cannot make the HTTP request.
+/// - If the server does not respond with a 200.
+/// - If we cannot read the body from HTTP.
+/// - If we cannot parse the HTML response.
+pub async fn power_on(mion_ip: Ipv4Addr) -> Result<bool, NetworkError> {
+	power_on_with_raw_client(&Client::default(), mion_ip).await
+}
+
+/// Initiate a power-on request to turn on the CAT-DEV machine.
+///
+/// Note: This request just starts the actual power on, by the time you get to
+/// powering on the device, if you are using things like emulation you should
+/// already be connected to the SDIO ports, and be listening for ATAPI
+/// requests.
+///
+/// This is an older power on API and ***you should always prefer
+/// `power_on_v2` if it is possible to use.***
+///
+/// ## Errors
+///
+/// - If we cannot encode the parameters as a form url encoded.
+/// - If we cannot make the HTTP request.
+/// - If the server does not respond with a 200.
+/// - If we cannot read the body from HTTP.
+/// - If we cannot parse the HTML response.
+pub async fn power_on_with_raw_client(
+	client: &Client,
+	mion_ip: Ipv4Addr,
+) -> Result<bool, NetworkError> {
+	let body_as_string = do_raw_control_request(
+		client,
+		mion_ip,
+		&[(
+			"operation",
+			Into::<&str>::into(ControlOperation::PowerOn).to_owned(),
+		)],
 	)
+	.await?;
+
+	Ok(parse_result_from_body(
+		&body_as_string,
+		Into::<&str>::into(ControlOperation::PowerOnV2),
+	)?)
 }
 
 /// Initiate a power-on request to turn on the CAT-DEV machine.
@@ -160,7 +187,8 @@ pub async fn set_param_with_raw_client(
 /// a POST with emulation set to off even if PCFS is set to on, the cat-dev
 /// will techincally still boot.
 ///
-/// Power ON V2 is the power on API that the actual tools nintendo built use.
+/// ***Power ON V2 is only available on MIONs running at least 00.14.77 in
+/// terms of firmware.***
 ///
 /// ## Errors
 ///
@@ -171,6 +199,7 @@ pub async fn set_param_with_raw_client(
 /// - If we cannot parse the HTML response.
 pub async fn power_on_v2(
 	mion_ip: Ipv4Addr,
+	host_ip: Option<Ipv4Addr>,
 	atapi_port: Option<u16>,
 	pcfs_port: Option<u16>,
 	emulate_fs: bool,
@@ -178,6 +207,7 @@ pub async fn power_on_v2(
 	power_on_v2_with_raw_client(
 		&Client::default(),
 		mion_ip,
+		host_ip,
 		atapi_port,
 		pcfs_port,
 		emulate_fs,
@@ -196,7 +226,8 @@ pub async fn power_on_v2(
 /// a POST with emulation set to off even if PCFS is set to on, the cat-dev
 /// will techincally still boot.
 ///
-/// Power ON V2 is the power on API that the actual tools nintendo built use.
+/// ***Power ON V2 is only available on MIONs running at least 00.14.77 in
+/// terms of firmware.***
 ///
 /// ## Errors
 ///
@@ -208,10 +239,18 @@ pub async fn power_on_v2(
 pub async fn power_on_v2_with_raw_client(
 	client: &Client,
 	mion_ip: Ipv4Addr,
+	host_ip: Option<Ipv4Addr>,
 	atapi_port: Option<u16>,
 	pcfs_port: Option<u16>,
 	emulate_fs: bool,
 ) -> Result<bool, CatBridgeError> {
+	let host_ip_as_str = if let Some(ip) = host_ip {
+		format!("{ip}")
+	} else {
+		let ip = local_ip().map_err(|_| APIError::NoHostIpFound)?;
+		format!("{ip}")
+	};
+
 	let mut parameters = vec![
 		(
 			"operation",
@@ -225,10 +264,7 @@ pub async fn power_on_v2_with_raw_client(
 				"off".to_owned()
 			},
 		),
-		(
-			"host",
-			format!("{}", local_ip().map_err(NetworkError::LocalIpError)?),
-		),
+		("host", host_ip_as_str),
 	];
 	if let Some(port) = atapi_port {
 		parameters.push(("atapi_port", format!("{port}")));
@@ -237,30 +273,11 @@ pub async fn power_on_v2_with_raw_client(
 		parameters.push(("pcfs_port", format!("{port}")));
 	}
 
-	let response = do_raw_control_request(client, mion_ip, &parameters).await?;
-
-	let status = response.status().as_u16();
-	let body_result = response.bytes().await.map_err(NetworkError::ReqwestError);
-	if status != 200 {
-		if let Ok(body) = body_result {
-			return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-				NetworkParseError::UnexpectedStatusCode(status, body),
-			)));
-		}
-
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::UnexpectedStatusCodeNoBody(status),
-		)));
-	}
-	let read_body_bytes = body_result?;
-	let body_as_string = String::from_utf8(read_body_bytes.into())
-		.map_err(NetworkParseError::InvalidDataNeedsUTF8)
-		.map_err(NetworkError::ParseError)?;
-
-	parse_result_from_body(
+	let body_as_string = do_raw_control_request(client, mion_ip, &parameters).await?;
+	Ok(parse_result_from_body(
 		&body_as_string,
 		Into::<&str>::into(ControlOperation::PowerOnV2),
-	)
+	)?)
 }
 
 /// Perform a raw operation on the MION board's `control.cgi` page.
@@ -273,29 +290,24 @@ pub async fn power_on_v2_with_raw_client(
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_control_request<'key, 'value, UrlEncodableType>(
+pub async fn do_raw_control_request<UrlEncodableType>(
 	client: &Client,
 	mion_ip: Ipv4Addr,
 	url_parameters: UrlEncodableType,
-) -> Result<Response, NetworkError>
+) -> Result<String, NetworkError>
 where
 	UrlEncodableType: Serialize,
 {
-	Ok(client
-		.post(format!("http://{mion_ip}/mion/control.cgi"))
-		.version(Version::HTTP_11)
-		.header("authorization", format!("Basic {AUTHZ_HEADER}"))
-		.header("content-type", "application/x-www-form-urlencoded")
-		.header(
-			"user-agent",
-			format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
-		)
-		.body::<String>(
+	do_simple_request::<String>(
+		client,
+		Method::POST,
+		format!("http://{mion_ip}/mion/control.cgi"),
+		Some(
 			serde_urlencoded::to_string(&url_parameters)
-				.map_err(NetworkParseError::FormDataEncodeError)?,
-		)
-		.send()
-		.await?)
+				.map_err(MIONCGIErrors::FormDataEncodeError)?,
+		),
+	)
+	.await
 }
 
 /// Extract tags from body request.
@@ -309,18 +321,15 @@ where
 fn extract_body_tags(
 	body: &str,
 	operation_name: &str,
-) -> Result<FnvHashMap<String, String>, CatBridgeError> {
-	let start_tag_location = body.find("<body>").map(|num| num + 6).ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
+) -> Result<FnvHashMap<String, String>, MIONCGIErrors> {
+	let start_tag_location = body
+		.find("<body>")
+		.map(|num| num + 6)
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body.to_owned()))?;
 	let body_without_start_tag = body.split_at(start_tag_location).1;
-	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
+	let end_tag_location = body_without_start_tag
+		.find("</body>")
+		.ok_or_else(|| MIONCGIErrors::HtmlResponseMissingBody(body.to_owned()))?;
 	let just_inner_body = body_without_start_tag.split_at(end_tag_location).0;
 
 	let without_newlines = just_inner_body.replace('\n', "");
@@ -346,62 +355,4 @@ fn extract_body_tags(
 		.collect::<FnvHashMap<String, String>>();
 
 	Ok(fields)
-}
-
-fn parse_result_from_body(body: &str, operation_name: &str) -> Result<bool, CatBridgeError> {
-	let start_tag_location = body.find("<body>").map(|num| num + 6).ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
-	let body_without_start_tag = body.split_at(start_tag_location).1;
-	let end_tag_location = body_without_start_tag.find("</body>").ok_or_else(|| {
-		CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::HtmlResponseMissingBody(body.to_owned()),
-		))
-	})?;
-	let just_inner_body = body_without_start_tag.split_at(end_tag_location).0;
-	let without_newlines = just_inner_body.replace('\n', "");
-
-	let mut was_successful = false;
-	let mut returned_result_code = "";
-	let mut log_lines = Vec::with_capacity(0);
-	let mut extra_lines = Vec::with_capacity(0);
-	for line in without_newlines
-		.split("<br>")
-		.fold(Vec::new(), |mut accum, item| {
-			accum.extend(item.split("<br/>"));
-			accum
-		}) {
-		let trimmed_line = line.trim();
-		if trimmed_line.is_empty() {
-			continue;
-		}
-
-		if let Some(result_code) = trimmed_line.strip_prefix("RESULT:") {
-			returned_result_code = result_code;
-			if result_code == "OK" {
-				was_successful = true;
-			}
-		} else if trimmed_line.starts_with("INFO:")
-			|| trimmed_line.starts_with("ERROR:")
-			|| trimmed_line.starts_with("WARN:")
-		{
-			log_lines.push(trimmed_line);
-		} else {
-			extra_lines.push(trimmed_line);
-		}
-	}
-
-	if !was_successful {
-		warn!(
-			log_lines = valuable(&log_lines),
-			extra_lines = valuable(&extra_lines),
-			%operation_name,
-			result_code = %returned_result_code,
-			"got an error back from mion/control.cgi",
-		);
-	}
-
-	Ok(was_successful)
 }

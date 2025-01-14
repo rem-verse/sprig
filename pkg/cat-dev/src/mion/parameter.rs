@@ -1,11 +1,12 @@
 //! Get parameters from the parameter space of a MION.
 
 use crate::{
-	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
+	errors::{CatBridgeError, NetworkError, NetworkParseError},
 	mion::proto::{
 		parameter::{
 			well_known::{index_from_parameter_name, ParameterLocationSpecification},
-			DumpedMionParameters, MionDumpParameters, SetMionParameters, SetMionParametersResponse,
+			DumpedMionParameters, MIONParameterAPIError, MionDumpParameters, SetMionParameters,
+			SetMionParametersResponse,
 		},
 		DEFAULT_MION_PARAMETER_PORT, MION_PARAMETER_TIMEOUT_SECONDS,
 	},
@@ -102,9 +103,9 @@ where
 			connection_established_logging_hook,
 			write_finished_hook,
 			read_finished_hook,
-		) => { res.map(|(params, _stream)| params) }
+		) => { Ok(res.map(|(params, _stream)| params)?) }
 	  () = sleep(usable_timeout) => {
-		  Err(CatBridgeError::NetworkError(NetworkError::TimeoutError))
+		  Err(NetworkError::Timeout(usable_timeout).into())
 	  }
 	}
 }
@@ -257,7 +258,7 @@ where
 			read_finished_hook,
 		) => { res }
 	  () = sleep(usable_timeout) => {
-		  Err(CatBridgeError::NetworkError(NetworkError::TimeoutError))
+		  Err(NetworkError::Timeout(usable_timeout))
 	  }
 	}?;
 
@@ -268,7 +269,7 @@ where
 		let location = match location_spec {
 			ParameterLocationSpecification::Index(idx) => usize::from(idx),
 			ParameterLocationSpecification::NameLike(name) => {
-				index_from_parameter_name(&name).ok_or(APIError::MIONParameterNameNotKnown(name))?
+				index_from_parameter_name(&name).ok_or(MIONParameterAPIError::NameNotKnown(name))?
 			}
 		};
 
@@ -285,7 +286,7 @@ where
 			write_set_finished_hook,
 		) => { res.map(|success| (success, old_values_map)) }
 	  () = sleep(usable_timeout) => {
-		  Err(CatBridgeError::NetworkError(NetworkError::TimeoutError))
+		  Err(NetworkError::Timeout(usable_timeout).into())
 	  }
 	}
 }
@@ -300,7 +301,7 @@ async fn get_parameters_without_timeout<
 	connection_established_hook: ConnectionEstablishedHook,
 	write_finished_hook: WriteFinishedHook,
 	read_finished_hook: ReadFinishedHook,
-) -> Result<(DumpedMionParameters, TcpStream), CatBridgeError>
+) -> Result<(DumpedMionParameters, TcpStream), NetworkError>
 where
 	ConnectionEstablishedHook: Fn(Ipv4Addr) + Clone + Send + 'static,
 	WriteFinishedHook: Fn(usize) + Clone + Send + 'static,
@@ -311,13 +312,13 @@ where
 		parameter_port.unwrap_or(DEFAULT_MION_PARAMETER_PORT),
 	))
 	.await
-	.map_err(NetworkError::IOError)?;
+	.map_err(NetworkError::IO)?;
 	connection_established_hook(mion_addr);
-	stream.writable().await.map_err(NetworkError::IOError)?;
+	stream.writable().await.map_err(NetworkError::IO)?;
 	stream
 		.write(&Bytes::from(MionDumpParameters::new()))
 		.await
-		.map_err(NetworkError::IOError)?;
+		.map_err(NetworkError::IO)?;
 
 	let expected_bytes_to_read = 520;
 	write_finished_hook(expected_bytes_to_read);
@@ -326,17 +327,16 @@ where
 	let read_bytes = stream
 		.read_buf(&mut resp_buff)
 		.await
-		.map_err(NetworkError::IOError)?;
+		.map_err(NetworkError::IO)?;
 	read_finished_hook(read_bytes);
 	if read_bytes != expected_bytes_to_read {
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::NotEnoughData(
-				"DumpedMionParameters",
-				expected_bytes_to_read,
-				read_bytes,
-				resp_buff.freeze(),
-			),
-		)));
+		return Err(NetworkParseError::NotEnoughData(
+			"DumpedMionParameters",
+			expected_bytes_to_read,
+			read_bytes,
+			resp_buff.freeze(),
+		)
+		.into());
 	}
 	let parameters = DumpedMionParameters::try_from(resp_buff.freeze())?;
 
@@ -351,11 +351,11 @@ async fn set_parameters_without_timeout<WriteFinishedHook>(
 where
 	WriteFinishedHook: Fn(usize) + Clone + Send + 'static,
 {
-	stream.writable().await.map_err(NetworkError::IOError)?;
+	stream.writable().await.map_err(NetworkError::IO)?;
 	stream
 		.write(&Bytes::from(SetMionParameters::new(new_parameters)?))
 		.await
-		.map_err(NetworkError::IOError)?;
+		.map_err(NetworkError::IO)?;
 
 	let expected_bytes_to_read = 12;
 	write_finished_hook(expected_bytes_to_read);
@@ -364,16 +364,15 @@ where
 	let read_bytes = stream
 		.read_buf(&mut resp_buff)
 		.await
-		.map_err(NetworkError::IOError)?;
+		.map_err(NetworkError::IO)?;
 	if read_bytes != expected_bytes_to_read {
-		return Err(CatBridgeError::NetworkError(NetworkError::ParseError(
-			NetworkParseError::NotEnoughData(
-				"SetMionParametersResponse",
-				expected_bytes_to_read,
-				read_bytes,
-				resp_buff.freeze(),
-			),
-		)));
+		return Err(NetworkParseError::NotEnoughData(
+			"SetMionParametersResponse",
+			expected_bytes_to_read,
+			read_bytes,
+			resp_buff.freeze(),
+		)
+		.into());
 	}
 	let response = SetMionParametersResponse::try_from(resp_buff.freeze())?;
 
