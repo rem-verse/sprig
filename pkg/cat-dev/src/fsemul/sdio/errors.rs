@@ -11,7 +11,9 @@ pub enum SDIOAPIError {
 	#[diagnostic(code(cat_dev::api::fsemul::sdio::invalid_lba))]
 	InvalidLBA(u32),
 	/// An invalid channel name has been supplied.
-	#[error("The channel provided was invalid, (first byte: {0:02x}, should be <0xC), (full: {1})")]
+	#[error(
+		"The channel provided was invalid, (first byte: {0:02x}, should be <0xC), (full: {1})"
+	)]
 	#[diagnostic(code(cat_dev::api::fsemul::sdio::invalid_channel))]
 	InvalidChannel(u8, u32),
 }

@@ -123,11 +123,7 @@ impl SdioControlReadRequest {
 	///   [`SDIO_BLOCK_SIZE_AS_U32`]).
 	/// - If the channel's first byte is greater than or equal to `0xC` when
 	///   encoded to little endian.
-	pub fn new(
-		lba: u32,
-		blocks: u32,
-		channel: u32,
-	) -> Result<Self, SDIOAPIError> {
+	pub fn new(lba: u32, blocks: u32, channel: u32) -> Result<Self, SDIOAPIError> {
 		if lba < SDIO_BLOCK_SIZE_AS_U32 || lba % SDIO_BLOCK_SIZE_AS_U32 != 0 {
 			return Err(SDIOAPIError::InvalidLBA(lba));
 		}
@@ -152,11 +148,7 @@ impl SdioControlReadRequest {
 	///
 	/// - If the channel's first byte is greater than or equal to `0xC` when
 	///   encoded to little endian.
-	pub fn new_with_raw_lba(
-		raw_lba: u32,
-		blocks: u32,
-		channel: u32,
-	) -> Result<Self, SDIOAPIError> {
+	pub fn new_with_raw_lba(raw_lba: u32, blocks: u32, channel: u32) -> Result<Self, SDIOAPIError> {
 		let as_bytes = channel.to_le_bytes();
 		if as_bytes[0] >= 0xC {
 			return Err(SDIOAPIError::InvalidChannel(as_bytes[0], channel));
@@ -330,11 +322,7 @@ impl SdioControlWriteRequest {
 	///   [`SDIO_BLOCK_SIZE_AS_U32`]).
 	/// - If the channel's first byte is greater than or equal to `0xC` when
 	///   encoded to little endian.
-	pub fn new(
-		lba: u32,
-		blocks: u32,
-		channel: u32,
-	) -> Result<Self, SDIOAPIError> {
+	pub fn new(lba: u32, blocks: u32, channel: u32) -> Result<Self, SDIOAPIError> {
 		if lba < SDIO_BLOCK_SIZE_AS_U32 || lba % SDIO_BLOCK_SIZE_AS_U32 != 0 {
 			return Err(SDIOAPIError::InvalidLBA(lba));
 		}
@@ -359,11 +347,7 @@ impl SdioControlWriteRequest {
 	///
 	/// - If the channel's first byte is greater than or equal to `0xC` when
 	///   encoded to little endian.
-	pub fn new_with_raw_lba(
-		raw_lba: u32,
-		blocks: u32,
-		channel: u32,
-	) -> Result<Self, SDIOAPIError> {
+	pub fn new_with_raw_lba(raw_lba: u32, blocks: u32, channel: u32) -> Result<Self, SDIOAPIError> {
 		let as_bytes = channel.to_le_bytes();
 		if as_bytes[0] >= 0xC {
 			return Err(SDIOAPIError::InvalidChannel(as_bytes[0], channel));
@@ -569,7 +553,7 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 				break;
 			} else if message_ty == 9 {
 				messages.push(SdioControlMessage::Unknown(
-					value.slice(4 + (messages.len() * 4)..).to_vec()
+					value.slice(4 + (messages.len() * 4)..).to_vec(),
 				));
 				break;
 			}

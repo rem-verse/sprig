@@ -2,10 +2,7 @@
 //!
 //! Which is licensed under APACHE2/MIT at the time of copying.
 
-use std::{
-	io::{Error as IoError, ErrorKind as IoErrorKind},
-	os::unix::ffi::OsStringExt,
-};
+use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 
 fn env(key: &str) -> Result<std::ffi::OsString, String> {
 	println!("cargo:rerun-if-env-changed={key}");
@@ -54,7 +51,43 @@ fn main() {
 		std::path::PathBuf::from(env("CARGO_MANIFEST_DIR").expect("need manifest directory"));
 	let git_dir = command("git", &["rev-parse", "--git-dir"], Some(pkg_dir));
 	let git_dir = match git_dir {
-		Ok(git_dir) => std::path::PathBuf::from(std::ffi::OsString::from_vec(git_dir)),
+		Ok(git_dir) => {
+			#[cfg(unix)]
+			{
+				use std::os::unix::ffi::OsStringExt;
+				std::path::PathBuf::from(std::ffi::OsString::from_vec(git_dir))
+			}
+
+			#[cfg(not(unix))]
+			{
+				use std::os::windows::ffi::OsStringExt;
+				use windows::Win32::{
+					Globalization::{MultiByteToWideChar, MULTI_BYTE_TO_WIDE_CHAR_FLAGS},
+					System::Console::GetConsoleCP,
+				};
+
+				assert!(git_dir.len() < std::i32::MAX as usize);
+				let mut wide;
+				let mut len;
+				unsafe {
+					len = MultiByteToWideChar(
+						GetConsoleCP(),
+						MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+						&git_dir,
+						None,
+					);
+					wide = Vec::with_capacity(len as usize);
+					len = MultiByteToWideChar(
+						GetConsoleCP(),
+						MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+						&git_dir,
+						Some(&mut wide),
+					);
+					wide.set_len(len as usize);
+				}
+				std::path::PathBuf::from(std::ffi::OsString::from_wide(&wide))
+			}
+		}
 		Err(msg) => {
 			// We’re probably not inside of a git repository so report git
 			// version as unknown.
