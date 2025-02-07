@@ -545,10 +545,16 @@ impl RegKey {
 		let mut key: HKEY = HKEY(std::ptr::null_mut::<std::ffi::c_void>());
 
 		unsafe {
-			RegOpenKeyExA(parent, PCSTR(subpath.as_ptr().cast()), 0, rights, &mut key)
-				// Yes this is what gets us an actual result, :eyeroll:
-				.ok()
-				.map_err(|_| IoError::last_os_error())?;
+			RegOpenKeyExA(
+				parent,
+				PCSTR(subpath.as_ptr().cast()),
+				None,
+				rights,
+				&mut key,
+			)
+			// Yes this is what gets us an actual result, :eyeroll:
+			.ok()
+			.map_err(|_| IoError::last_os_error())?;
 		}
 
 		Ok(Self { key })
@@ -562,7 +568,7 @@ impl RegKey {
 		unsafe {
 			RegQueryInfoKeyA(
 				self.key,
-				PSTR::null(),
+				None,
 				None,
 				None,
 				None,
@@ -601,7 +607,7 @@ impl RegKey {
 			RegEnumValueA(
 				self.key,
 				index,
-				PSTR::from_raw(name.as_mut_ptr().cast()),
+				Some(PSTR::from_raw(name.as_mut_ptr().cast())),
 				&mut name_len,
 				None,
 				Some(&mut kind),

@@ -16,6 +16,7 @@ fn command(prog: &str, args: &[&str], cwd: Option<std::path::PathBuf>) -> Result
 	println!("cargo:rerun-if-env-changed=PATH");
 	let mut command = std::process::Command::new(prog);
 	command.args(args);
+	command.stdout(std::process::Stdio::piped());
 	command.stderr(std::process::Stdio::inherit());
 	if let Some(cwd) = cwd {
 		command.current_dir(cwd);
@@ -60,32 +61,10 @@ fn main() {
 
 			#[cfg(not(unix))]
 			{
-				use std::os::windows::ffi::OsStringExt;
-				use windows::Win32::{
-					Globalization::{MultiByteToWideChar, MULTI_BYTE_TO_WIDE_CHAR_FLAGS},
-					System::Console::GetConsoleCP,
-				};
-
-				assert!(git_dir.len() < std::i32::MAX as usize);
-				let mut wide;
-				let mut len;
-				unsafe {
-					len = MultiByteToWideChar(
-						GetConsoleCP(),
-						MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
-						&git_dir,
-						None,
-					);
-					wide = Vec::with_capacity(len as usize);
-					len = MultiByteToWideChar(
-						GetConsoleCP(),
-						MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
-						&git_dir,
-						Some(&mut wide),
-					);
-					wide.set_len(len as usize);
-				}
-				std::path::PathBuf::from(std::ffi::OsString::from_wide(&wide))
+				// Windows paths are always guaranteed to be UTF paths.
+				std::path::PathBuf::from(
+					String::from_utf8(git_dir).expect("Failed to parse windows path as utf8!"),
+				)
 			}
 		}
 		Err(msg) => {
