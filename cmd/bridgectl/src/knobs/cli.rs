@@ -1023,6 +1023,13 @@ pub struct FSEmulConfigurationFlags {
 	)]
 	disable_load_bearing_sleep_for_sdio: bool,
 	#[arg(
+		long = "disable-load-bearing-sleep-for-pcfs",
+		alias = "disable_load_bearing_sleep_for_pcfs",
+		help = "Disable a load-bearing sleep necessary for unpatched cat-devs to work.",
+		long_help = "Disable a load-bearing sleep necessary for unpatched cat-devs to work. The official cat-dev MION's will ack packets, but then throw them away, because it hates us."
+	)]
+	disable_load_bearing_sleep_for_pcfs: bool,
+	#[arg(
 		long = "disable-real-removal",
 		alias = "disable_real_removal",
 		help = "Disable actually removing files from the filesystem.",
@@ -1066,6 +1073,11 @@ impl FSEmulConfigurationFlags {
 	}
 
 	#[must_use]
+	pub const fn disable_load_bearing_sleep_for_pcfs(&self) -> bool {
+		self.disable_load_bearing_sleep_for_pcfs
+	}
+
+	#[must_use]
 	pub const fn disable_real_removal(&self) -> bool {
 		self.disable_real_removal
 	}
@@ -1084,12 +1096,13 @@ impl Display for FSEmulConfigurationFlags {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		write!(
 			fmt,
-			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`, --disable-csr: `{}`, --disable-ffio: `{}`, --disable-load-bearing-sleep-for-sdio: `{}`, --disable-real-removal: `{}`",
+			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`, --disable-csr: `{}`, --disable-ffio: `{}`, --disable-load-bearing-sleep-for-pcfs: `{}`, --disable-load-bearing-sleep-for-sdio: `{}`, --disable-real-removal: `{}`",
 			self.fsemul_config_path,
 			self.prefer_fsemul_over_network,
 			self.cafe_dir,
 			self.disable_csr,
 			self.disable_ffio,
+			self.disable_load_bearing_sleep_for_pcfs,
 			self.disable_load_bearing_sleep_for_sdio,
 			self.disable_real_removal,
 		)
@@ -1101,6 +1114,7 @@ const FSEMUL_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("cafe_dir"),
 	NamedField::new("disable_ffio"),
 	NamedField::new("disable_csr"),
+	NamedField::new("disable_load_bearing_sleep_for_pcfs"),
 	NamedField::new("disable_load_bearing_sleep_for_sdio"),
 	NamedField::new("disable_real_removal"),
 ];
@@ -1131,6 +1145,7 @@ impl Valuable for FSEmulConfigurationFlags {
 				Valuable::as_value(&self.cafe_dir.as_ref().map(|pb| format!("{}", pb.display()))),
 				Valuable::as_value(&self.disable_ffio),
 				Valuable::as_value(&self.disable_csr),
+				Valuable::as_value(&self.disable_load_bearing_sleep_for_pcfs),
 				Valuable::as_value(&self.disable_load_bearing_sleep_for_sdio),
 				Valuable::as_value(&self.disable_real_removal),
 			],

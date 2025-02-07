@@ -8,6 +8,7 @@
 pub mod errors;
 pub mod fsemul;
 pub mod mion;
+#[cfg(feature = "serial")]
 #[macro_use]
 pub mod serial;
 

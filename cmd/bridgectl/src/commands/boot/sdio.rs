@@ -10,7 +10,7 @@ use crate::{
 	SHOULD_LOG_JSON,
 };
 use cat_dev::{
-	fsemul::{sdio::SdioClient, HostFilesystem},
+	fsemul::{sdio::server::SdioClient, HostFilesystem},
 	mion::proto::cgis::SetupParameters,
 };
 use miette::miette;

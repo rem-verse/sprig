@@ -10,7 +10,7 @@ use crate::{
 	SHOULD_LOG_JSON,
 };
 use cat_dev::fsemul::{
-	atapi::{AtapiServer, DEFAULT_ATAPI_PORT},
+	atapi::server::{AtapiServer, DEFAULT_ATAPI_PORT},
 	HostFilesystem,
 };
 use miette::miette;

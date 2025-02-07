@@ -45,7 +45,7 @@ jobs:
       - name: Run format check
         run: cargo fmt --all --check
       - name: Validate clippy
-        run: cargo clippy -- -W clippy::pedantic -D warnings
+        run: cargo clippy --no-default-features --all-features -- -W clippy::pedantic -D warnings
   build:
     name: Build
     strategy:
@@ -57,7 +57,7 @@ jobs:
       - name: Install Rust
         run: rustup update stable
       - name: Run Build
-        run: cargo build --all
+        run: cargo build --all --all-features
   test:
     name: Run non doc tests
     strategy:
@@ -66,11 +66,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: Install Rust
         run: rustup update stable
       - name: Run Nextest
-        run: cargo nextest run
+        run: cargo nextest run --all-features
         env:
           RUST_BACKTRACE: full
   doc-test:
@@ -84,6 +86,6 @@ jobs:
       - name: Install Rust
         run: rustup update stable
       - name: Run Doc Tests
-        run: cargo test --doc
+        run: cargo test --doc --all-features
         env:
           RUST_BACKTRACE: full

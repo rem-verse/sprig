@@ -4,20 +4,29 @@
 //! the SDK only supported windows, and windows doesn't have full mode strings,
 //! we can only set read only. We're basically a toggle between 0444, and 0666.
 
+use crate::errors::NetworkParseError;
+use bytes::Bytes;
+use std::ffi::CStr;
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, NetworkParseError},
+	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 		HostFilesystem,
 	},
 };
-use bytes::Bytes;
-use std::{ffi::CStr, fs::set_permissions};
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use std::fs::set_permissions;
+#[cfg(feature = "servers")]
+use tracing::debug;
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
+#[cfg(feature = "servers")]
 /// An error code to send when a path does not exist.
 ///
 /// This is also used in some places that are a bit of a stretch like for
@@ -61,12 +70,19 @@ impl SataChangeModePacketBody {
 	///
 	/// If we cannot construct a sata response packet because our data to send
 	/// was somehow too large (this should ideally never happen).
+	#[cfg(feature = "servers")]
 	pub fn handle(
 		&self,
 		request_header: &SataPacketHeader,
 		host_filesystem: &HostFilesystem,
 	) -> Result<Bytes, CatBridgeError> {
 		let Ok(final_location) = host_filesystem.resolve_path(&self.path) else {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvChangeMode",
+				"Failed to resolve path!",
+			);
+
 			return Ok(construct_sata_response(
 				request_header,
 				0,
@@ -78,6 +94,12 @@ impl SataChangeModePacketBody {
 		};
 		// Path doesn't exist.
 		if !fs_location.canonicalized_is_exact() {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvChangeMode",
+				"Cannot change mode of path that does not exist!",
+			);
+
 			return Ok(construct_sata_response(
 				request_header,
 				0,
@@ -86,6 +108,12 @@ impl SataChangeModePacketBody {
 		}
 
 		let Ok(metadata) = fs_location.closest_resolved_path().metadata() else {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvChangeMode",
+				"Failed to get path metadata!",
+			);
+
 			return Ok(construct_sata_response(
 				request_header,
 				0,
@@ -98,6 +126,12 @@ impl SataChangeModePacketBody {
 		if self.set_write_mode
 			&& !host_filesystem.path_allows_writes(fs_location.closest_resolved_path())
 		{
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvChangeMode",
+				"Path cannot become writable!",
+			);
+
 			return Ok(construct_sata_response(
 				request_header,
 				0,
@@ -106,6 +140,12 @@ impl SataChangeModePacketBody {
 		}
 		perms.set_readonly(!self.set_write_mode);
 		if set_permissions(fs_location.closest_resolved_path(), perms).is_err() {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvChangeMode",
+				"Failed to change read-only attribute!",
+			);
+
 			return Ok(construct_sata_response(
 				request_header,
 				0,
@@ -180,11 +220,14 @@ impl Valuable for SataChangeModePacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn change_mode_request() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

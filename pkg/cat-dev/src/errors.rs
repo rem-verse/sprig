@@ -9,14 +9,20 @@ use crate::{
 	mion::errors::{MIONAPIError, MIONProtocolError},
 };
 use bytes::Bytes;
-use local_ip_address::Error as LocalIpAddressError;
 use miette::Diagnostic;
-use network_interface::Error as NetworkInterfaceError;
-use reqwest::Error as ReqwestError;
 use std::{ffi::FromBytesUntilNulError, str::Utf8Error, string::FromUtf8Error, time::Duration};
 use thiserror::Error;
 use tokio::{io::Error as IoError, sync::mpsc::error::SendError, task::JoinError};
+
+#[cfg(feature = "servers")]
 use walkdir::Error as WalkdirError;
+
+#[cfg(feature = "clients")]
+use local_ip_address::Error as LocalIpAddressError;
+#[cfg(feature = "clients")]
+use network_interface::Error as NetworkInterfaceError;
+#[cfg(feature = "clients")]
+use reqwest::Error as ReqwestError;
 
 /// The 'top-level' error type for this entire crate, all error types
 /// wrap underneath this.
@@ -122,6 +128,7 @@ pub enum FSError {
 	#[error("Error writing/reading data from the filesystem: {0}")]
 	#[diagnostic(code(cat_dev::fs::io))]
 	IO(#[from] IoError),
+	#[cfg(feature = "servers")]
 	#[error("Error iterating through directory: {0:?}")]
 	#[diagnostic(code(cat_dev::fs::iterating_directory_error))]
 	IteratingDirectoryError(#[from] WalkdirError),
@@ -166,6 +173,7 @@ pub enum NetworkError {
 	#[error("Expected some sort of data from other side, but got none.")]
 	#[diagnostic(code(cat_dev::net::expected_data))]
 	ExpectedData,
+	#[cfg(feature = "clients")]
 	/// See [`reqwest::Error`] for details.
 	#[error("Underlying HTTP client error: {0}")]
 	#[diagnostic(code(cat_dev::net::http_failure))]
@@ -174,10 +182,12 @@ pub enum NetworkError {
 	#[error("Error talking to the network could not send/receive data: {0}")]
 	#[diagnostic(code(cat_dev::net::io_error))]
 	IO(#[from] IoError),
+	#[cfg(feature = "clients")]
 	/// See [`network_interface::Error::GetIfAddrsError`] for details.
 	#[error("Failed to list the network interfaces on your device: {0:?}.")]
 	#[diagnostic(code(cat_dev::net::list_interfaces_error))]
 	ListInterfacesFailure(NetworkInterfaceError),
+	#[cfg(feature = "clients")]
 	/// See [`local_ip_address::Error`] for details.
 	#[error("Failure fetching local ip address: {0}")]
 	#[diagnostic(code(cat_dev::net::local_ip_failure))]
@@ -211,6 +221,7 @@ pub enum NetworkError {
 	Timeout(Duration),
 }
 
+#[cfg(feature = "clients")]
 impl From<ReqwestError> for CatBridgeError {
 	fn from(value: ReqwestError) -> Self {
 		Self::Network(value.into())

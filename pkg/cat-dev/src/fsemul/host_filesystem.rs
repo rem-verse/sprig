@@ -278,6 +278,7 @@ impl HostFilesystem {
 	pub async fn open_folder(&self, path: &PathBuf) -> Result<i32, FSError> {
 		let dhandle = read_dir(path).await?;
 		let fake_fd = DIRECTORY_FD.fetch_add(1, AtomicOrdering::SeqCst);
+
 		self.open_folder_handles
 			.insert(fake_fd, (dhandle, false, path.clone()))
 			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
@@ -844,6 +845,10 @@ pub mod test_helpers {
 	use tempfile::{tempdir, TempDir};
 
 	/// Test helper that creates a simple host filesystem.
+	#[allow(
+		// Allow anyone to write a test for this internally on any feature set.
+		dead_code,
+	)]
 	pub async fn create_temporary_host_filesystem() -> (TempDir, HostFilesystem) {
 		let dir = tempdir().expect("Failed to create temporary directory!");
 
@@ -912,6 +917,10 @@ pub mod test_helpers {
 	}
 
 	/// Re-export host file system join many for tests.
+	#[allow(
+		// Allow anyone to write a test for this internally on any feature set.
+		dead_code,
+	)]
 	#[must_use]
 	pub fn join_many<PathTy, IterTy>(base: &Path, parts: IterTy) -> PathBuf
 	where

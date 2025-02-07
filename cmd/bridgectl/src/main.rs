@@ -37,12 +37,16 @@ use crate::{
 		cli::{CliArguments, MionSubcommands, Subcommands},
 		env::USE_JSON_OUTPUT,
 	},
+	utils::add_context_to,
 };
-use clap::Parser;
+use clap::{
+	error::{Error as ClapError, ErrorKind as ClapErrorKind},
+	Parser,
+};
 use log::install_logging_handlers;
-use miette::miette;
+use miette::{miette, IntoDiagnostic};
 use std::path::PathBuf;
-use tracing::error;
+use tracing::{error, info};
 
 /// Whether or not we're logging in JSON.
 static mut USE_JSON: bool = false;
@@ -414,6 +418,30 @@ fn bootstrap_cli() -> (CliArguments, bool) {
 	match args_opt {
 		Ok(args) => (args, use_json),
 		Err(cause) => {
+			if cause.kind() == ClapErrorKind::DisplayVersion {
+				if use_json {
+					info!(
+						id = "bridgectl::cli::print_version",
+						version = format!(
+							"{} ({})",
+							format!("{}", cause.render()).trim(),
+							option_env!("BRIDGECTL_BUILD").unwrap_or("unknown")
+						),
+					);
+				} else {
+					info!(
+						"{}",
+						format!(
+							"{} ({})",
+							format!("{}", cause.render()).trim(),
+							option_env!("BRIDGECTL_BUILD").unwrap_or("unknown")
+						),
+					);
+				}
+
+				std::process::exit(0);
+			}
+
 			if use_json {
 				error!(
 					id = "bridgectl::cli::arg_parse_failure",
@@ -425,7 +453,10 @@ fn bootstrap_cli() -> (CliArguments, bool) {
 			} else {
 				error!(
 					"\n{:?}",
-					miette!("Failed parsing CLI arguments!").wrap_err(cause),
+					add_context_to(
+						Err::<(), ClapError>(cause).into_diagnostic().unwrap_err(),
+						[miette!("Failed parsing CLI arguments!")].into_iter(),
+					),
 				);
 			}
 

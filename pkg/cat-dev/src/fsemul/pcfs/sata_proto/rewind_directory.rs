@@ -3,16 +3,24 @@
 //! This will return the directory iterator to the very beginning of the
 //! directory regardless of where it is.
 
+use crate::errors::NetworkParseError;
+use bytes::{Buf, Bytes};
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, NetworkParseError},
+	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::HostFilesystem,
 		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 	},
 };
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
+use tracing::debug;
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
 
@@ -33,6 +41,7 @@ impl SataRewindDirPacketBody {
 	/// ## Errors
 	///
 	/// If we cannot construct a sata response packet, which shouldn't ever happen.
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -43,6 +52,12 @@ impl SataRewindDirPacketBody {
 			.await
 			.is_err()
 		{
+			debug!(
+				packet.fd = self.file_descriptor,
+				packet.typ = "PCFSSrvRewindDirectory",
+				"Failed to rewind directory!",
+			);
+
 			return Self::construct_error_repsonse(request_header, FS_ERROR);
 		}
 
@@ -53,6 +68,7 @@ impl SataRewindDirPacketBody {
 		)?)
 	}
 
+	#[cfg(feature = "servers")]
 	fn construct_error_repsonse(
 		request_header: &SataPacketHeader,
 		error_code: u32,
@@ -117,11 +133,14 @@ impl Valuable for SataRewindDirPacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn can_handle_rewind_directory() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

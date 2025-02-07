@@ -8,13 +8,18 @@ use bytes::{Bytes, BytesMut};
 use tokio::io::Error as IoError;
 use tokio_util::codec::{Decoder, Encoder};
 
+#[cfg(feature = "clients")]
+use crate::fsemul::atapi::errors::ATAPIProtocolError;
+
 /// A codec that chunks a stream into ATAPI packets.
 ///
 /// All packets towards ATAPI are 12 bytes, but going out they can be
 /// any size.
+#[cfg(feature = "servers")]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ChunkATAPIEmulatorCodec;
 
+#[cfg(feature = "servers")]
 impl Decoder for ChunkATAPIEmulatorCodec {
 	type Item = BytesMut;
 	type Error = IoError;
@@ -28,6 +33,7 @@ impl Decoder for ChunkATAPIEmulatorCodec {
 	}
 }
 
+#[cfg(feature = "servers")]
 impl Encoder<Bytes> for ChunkATAPIEmulatorCodec {
 	type Error = IoError;
 
@@ -35,6 +41,137 @@ impl Encoder<Bytes> for ChunkATAPIEmulatorCodec {
 		dst.reserve(item.len());
 		dst.extend(item);
 		Ok(())
+	}
+}
+
+#[cfg(feature = "clients")]
+/// A codec that chunks a stream into ATAPI packets from the client
+/// perspective.
+///
+/// All packets towards ATAPI are 12 bytes, but going out they can be
+/// any size.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ClientChunkedATAPIEmulatorCode;
+
+#[cfg(feature = "clients")]
+impl Decoder for ClientChunkedATAPIEmulatorCode {
+	type Item = BytesMut;
+	type Error = IoError;
+
+	fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+		// Data coming from the server can be any size.
+		//
+		// TODO(mythra): figure out how to actually do proper length checking here.
+		Ok(Some(src.split()))
+	}
+}
+
+#[cfg(feature = "clients")]
+impl Encoder<Bytes> for ClientChunkedATAPIEmulatorCode {
+	type Error = IoError;
+
+	fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
+		if item.len() < 12 {
+			Err(IoError::other(
+				ATAPIProtocolError::InvalidClientRequestLength(item),
+			))
+		} else {
+			dst.reserve(12);
+			dst.extend(item);
+			Ok(())
+		}
+	}
+}
+
+#[cfg(feature = "servers")]
+pub mod read_packet_temp_will_break {
+	//! Functions related to handling reads from the ATAPI interface.
+	//!
+	//! These are the bits that handle all of the translation from an ATAPI packet
+	//! to a real file being sent back. They mostly are just wrappers around
+	//! [`HostFilesystem`] calls, being wrapped in ATAPI protocols.
+
+	use crate::{
+		errors::{CatBridgeError, FSError, NetworkError},
+		fsemul::{atapi::proto::ChunkATAPIEmulatorCodec, dlf::DiskLayoutFile, HostFilesystem},
+	};
+	use bytes::{Bytes, BytesMut};
+	use futures::{stream::SplitSink, SinkExt};
+	use tokio::{
+		fs::{read as fs_read, File},
+		io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+		net::TcpStream,
+	};
+	use tokio_util::codec::Framed;
+	use tracing::debug;
+
+	/// Handle reading a file from ATAPI.
+	///
+	/// ## Errors
+	///
+	/// - If the total amount of data to read is too large to read.
+	/// - If we cannot load & parse the DLF from the Host Path.
+	/// - If we cannot send the buffer out over the network.
+	pub async fn handle_read_dlf(
+		packet: Bytes,
+		host_filesystem: &HostFilesystem,
+		output: &mut SplitSink<Framed<TcpStream, ChunkATAPIEmulatorCodec>, Bytes>,
+	) -> Result<(), CatBridgeError> {
+		let read_address = u128::from(u32::from_be_bytes([
+			packet[0x4],
+			packet[0x5],
+			packet[0x6],
+			packet[0x7],
+		])) << 11_u128;
+		let read_length = u128::from(u32::from_be_bytes([
+			packet[0x8],
+			packet[0x9],
+			packet[0xA],
+			packet[0xB],
+		])) << 11_u128;
+		let rl_as_usize = usize::try_from(read_length)
+			.map_err(|_| NetworkError::RequestedSizeTooLarge(read_length))?;
+
+		debug!(
+			atapi.packet_type = "read_address",
+			atapi.read_address.address = %read_address,
+			atapi.read_address.length = %read_length,
+			"Handling atapi read request!"
+		);
+
+		let bytes_of_dlf = fs_read(host_filesystem.ppc_boot_dlf_path().await?)
+			.await
+			.map_err(FSError::from)?;
+		let dlf = DiskLayoutFile::try_from(Bytes::from(bytes_of_dlf))?;
+
+		if let Some((path, offset)) = dlf.get_path_and_offset_for_file(read_address).await {
+			let metadata = path.metadata().map_err(FSError::from)?;
+			let file_size_bytes = usize::try_from(metadata.len() - offset).unwrap_or(usize::MAX);
+			// Read the file contents...
+			let mut handle = File::open(&path).await.map_err(FSError::from)?;
+			handle
+				.seek(SeekFrom::Start(offset))
+				.await
+				.map_err(FSError::from)?;
+			let mut buff = BytesMut::zeroed(std::cmp::min(file_size_bytes, rl_as_usize));
+			handle.read_exact(&mut buff).await.map_err(FSError::from)?;
+			std::mem::drop(handle);
+			// Pad if necessary...
+			if file_size_bytes < rl_as_usize {
+				buff.reserve(rl_as_usize - file_size_bytes);
+				buff.extend(BytesMut::zeroed(rl_as_usize - file_size_bytes));
+			}
+			// Send!
+			Ok(output
+				.send(buff.freeze())
+				.await
+				.map_err(NetworkError::from)?)
+		} else {
+			Ok(output
+				.send(BytesMut::zeroed(rl_as_usize).freeze())
+				.await
+				.map_err(NetworkError::from)?)
+		}
 	}
 }
 

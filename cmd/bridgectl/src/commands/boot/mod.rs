@@ -161,6 +161,7 @@ pub async fn handle_boot(
 			fsemul_flags.disable_real_removal(),
 			fsemul_flags.disable_ffio(),
 			fsemul_flags.disable_csr(),
+			fsemul_flags.disable_load_bearing_sleep_for_pcfs(),
 		)
 		.await;
 		Some(p)

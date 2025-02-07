@@ -1,0 +1,58 @@
+---
+name: Validate Feature Matrix Merge
+
+on:
+  pull_request:
+    branches:
+      - trunk
+    
+jobs:
+  check:
+    name: Check Compilation of All Feature Combinations
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+      - name: Install Rust
+        run: rustup update stable
+      - name: Run Check
+        run: cargo hack check --feature-powerset
+  test:
+    name: Run Non Doc Tests on All Feature Combinations
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack,cargo-nextest
+      - name: Install Rust
+        run: rustup update stable
+      - name: Run Nextest
+        run: cargo hack nextest run --feature-powerset --no-tests=pass
+        env:
+          RUST_BACKTRACE: full
+  doc-test:
+    name: Run Doc Tests on All Feature Combinations
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+      - name: Install Rust
+        run: rustup update stable
+      - name: Run Doc Tests (cat-dev)
+        run: cargo hack test --doc --feature-powerset --manifest-path "pkg/cat-dev/Cargo.toml"
+        env:
+          RUST_BACKTRACE: full

@@ -2,20 +2,29 @@
 //!
 //! This does not iterate over the directory at all, just opens the directory.
 
+use crate::errors::NetworkParseError;
+use bytes::Bytes;
+use std::ffi::CStr;
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, NetworkParseError},
+	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 		HostFilesystem,
 	},
 };
-use bytes::{BufMut, Bytes, BytesMut};
-use std::ffi::CStr;
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
+use tracing::debug;
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
+#[cfg(feature = "servers")]
 /// An error code to send when a path does not exist.
 ///
 /// This is also used in some places that are a bit of a stretch like for
@@ -51,12 +60,19 @@ impl SataOpenFolderPacketBody {
 	///
 	/// If we cannot construct a sata response packet because our data to send
 	/// was somehow too large (this should ideally never happen).
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
 		host_filesystem: &HostFilesystem,
 	) -> Result<Bytes, CatBridgeError> {
 		let Ok(final_location) = host_filesystem.resolve_path(&self.path) else {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvOpenFolder",
+				"Failed to resolve path!",
+			);
+
 			return Self::construct_error(request_header, PATH_NOT_EXIST_ERROR);
 		};
 		let ResolvedLocation::Filesystem(fs_location) = final_location else {
@@ -67,15 +83,28 @@ impl SataOpenFolderPacketBody {
 			.open_folder(fs_location.resolved_path())
 			.await
 		else {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvOpenFolder",
+				"Failed to open folder!",
+			);
+
 			return Self::construct_error(request_header, FS_ERROR);
 		};
 
+		debug!(
+			result.fd = fd,
+			packet.path = self.path.as_str(),
+			packet.typ = "PCFSSrvOpenFolder",
+			"Successfully opened directory!",
+		);
 		let mut buff = BytesMut::with_capacity(8);
 		buff.put_u32(0);
 		buff.put_i32(fd);
 		Ok(construct_sata_response(request_header, 0, buff.freeze())?)
 	}
 
+	#[cfg(feature = "servers")]
 	fn construct_error(
 		packet_header: &SataPacketHeader,
 		error_code: u32,
@@ -143,11 +172,14 @@ impl Valuable for SataOpenFolderPacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn simple_open_folder_request() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

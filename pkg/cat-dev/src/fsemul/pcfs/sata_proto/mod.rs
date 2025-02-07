@@ -20,16 +20,13 @@ mod rewind_directory;
 mod stat_file;
 mod write_file;
 
-use crate::{
-	errors::NetworkParseError,
-	fsemul::pcfs::errors::{PCFSApiError, SataProtocolError},
-};
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::{errors::NetworkParseError, fsemul::pcfs::errors::SataProtocolError};
+use bytes::{Bytes, BytesMut};
 use std::{
 	fmt::{Display, Formatter, Result as FmtResult},
 	sync::{
 		atomic::{AtomicUsize, Ordering as AtomicOrdering},
-		Arc, LazyLock,
+		Arc,
 	},
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -38,14 +35,23 @@ use tokio_util::codec::{Decoder, Encoder};
 use tracing::debug;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
+#[cfg(feature = "servers")]
+use crate::fsemul::pcfs::errors::PCFSApiError;
+#[cfg(feature = "servers")]
+use bytes::BufMut;
+#[cfg(feature = "servers")]
+use std::sync::LazyLock;
+
 pub use crate::fsemul::pcfs::sata_proto::{
 	change_mode::*, change_owner::*, close_file::*, close_folder::*, create_directory::*,
 	get_info_by_query::*, open_file::*, open_folder::*, ping::*, read_directory::*, read_file::*,
 	remove::*, rewind_directory::*, stat_file::*, write_file::*,
 };
 
+#[cfg(feature = "servers")]
 /// The Default PCFS Version we claim to be.
 const DEFAULT_PCFS_VERSION: u32 = 0x0200_0600;
+#[cfg(feature = "servers")]
 /// Our current process id.
 static PID: LazyLock<u32> = LazyLock::new(std::process::id);
 
@@ -567,6 +573,7 @@ impl SataRequestBody {
 	}
 }
 
+#[cfg(feature = "servers")]
 /// Construct a response to send as a response to a SATA packet.
 fn construct_sata_response<Ty: Into<Bytes>>(
 	request_header: &SataPacketHeader,
@@ -648,11 +655,24 @@ impl TryFrom<u32> for MoveToFileLocation {
 	}
 }
 
+#[cfg(any(feature = "clients", feature = "servers"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Valuable)]
+pub struct SataCapabilitiesFlags(pub u32);
+
+#[cfg(any(feature = "clients", feature = "servers"))]
+bitflags::bitflags! {
+	impl SataCapabilitiesFlags: u32 {
+		const FAST_FILE_IO_SUPPORTED = 0b0000_0010;
+		const COMBINED_SEND_RECV_SUPPORTED = 0b0000_0100;
+	}
+}
+
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	use super::*;
-	use crate::fsemul::pcfs::SataCapabilitiesFlags;
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn move_to_file_location_conversions() {
 		for mtfl in vec![
@@ -669,6 +689,7 @@ mod unit_tests {
 		}
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_real_ping_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -695,6 +716,7 @@ mod unit_tests {
 		assert!(matches!(packet.body(), &SataRequestBody::Ping(_)));
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_real_query_info_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -750,6 +772,7 @@ mod unit_tests {
 		assert_eq!(body.path(), "/%SLC_EMU_DIR/sys");
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_real_change_mode_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -805,6 +828,7 @@ mod unit_tests {
 		assert!(!body.set_write_mode());
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_open_file_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -862,6 +886,7 @@ mod unit_tests {
 		assert_eq!(body.path(), "/%SLC_EMU_DIR/sys/config/system.xml");
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_read_file_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -886,6 +911,7 @@ mod unit_tests {
 		assert_eq!(body.should_move(), false);
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_close_file_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -904,6 +930,7 @@ mod unit_tests {
 		assert_eq!(body.file_descriptor(), 2);
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_open_folder_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -958,6 +985,7 @@ mod unit_tests {
 		assert_eq!(body.path(), "/%MLC_EMU_DIR/usr/tmp");
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_read_folder_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![
@@ -976,6 +1004,7 @@ mod unit_tests {
 		assert_eq!(body.file_descriptor(), 1);
 	}
 
+	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[test]
 	pub fn decode_close_folder_packet() {
 		let packet = SataRequest::try_from(Bytes::from(vec![

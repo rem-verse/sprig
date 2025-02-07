@@ -3,8 +3,13 @@
 //! This will return the file information for the next file present within a
 //! directory. This does not recurse.
 
+use crate::errors::NetworkParseError;
+use bytes::{Buf, Bytes};
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, NetworkParseError},
+	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::HostFilesystem,
 		pcfs::sata_proto::{
@@ -12,12 +17,17 @@ use crate::{
 		},
 	},
 };
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
 use std::path::PathBuf;
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use tracing::debug;
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
+#[cfg(feature = "servers")]
 /// No more items in this directory! sorry!
 const NO_MORE_ITEMS: u32 = 0xFFF0_FFFC;
 
@@ -39,6 +49,7 @@ impl SataReadDirPacketBody {
 	/// ## Errors
 	///
 	/// If we cannot construct a sata response packet, which shouldn't ever happen.
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -46,12 +57,30 @@ impl SataReadDirPacketBody {
 	) -> Result<Bytes, CatBridgeError> {
 		let Ok(optional_next_item) = host_filesystem.next_in_folder(self.file_descriptor).await
 		else {
+			debug!(
+				packet.fd = self.file_descriptor,
+				packet.typ = "PCFSSrvReadDirectory",
+				"Failed to query for next item in folder!",
+			);
+
 			return Self::construct_error_repsonse(request_header, FS_ERROR);
 		};
 		let Some((item, components_to_remove)) = optional_next_item else {
+			debug!(
+				packet.fd = self.file_descriptor,
+				packet.typ = "PCFSSrvReadDirectory",
+				"No more items in directory!",
+			);
+
 			return Self::construct_error_repsonse(request_header, NO_MORE_ITEMS);
 		};
 		let Ok(info) = SataGetInfoByQueryPacketBody::info_for_path(&item) else {
+			debug!(
+				packet.fd = self.file_descriptor,
+				packet.typ = "PCFSSrvReadDirectory",
+				"Failed to get information for next file in folder!",
+			);
+
 			return Self::construct_error_repsonse(request_header, FS_ERROR);
 		};
 		let utf8 = item
@@ -61,6 +90,12 @@ impl SataReadDirPacketBody {
 			.to_string_lossy()
 			.to_string();
 		if utf8.len() > 255 {
+			debug!(
+				packet.fd = self.file_descriptor,
+				packet.typ = "PCFSSrvReadDirectory",
+				"UTF-8 path is too long, cant serve!",
+			);
+
 			return Self::construct_error_repsonse(request_header, FS_ERROR);
 		}
 		let byte_len = utf8.len();
@@ -74,6 +109,7 @@ impl SataReadDirPacketBody {
 		Ok(construct_sata_response(request_header, 0, buff.freeze())?)
 	}
 
+	#[cfg(feature = "servers")]
 	fn construct_error_repsonse(
 		request_header: &SataPacketHeader,
 		error_code: u32,
@@ -139,11 +175,14 @@ impl Valuable for SataReadDirPacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn can_handle_read_directory() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

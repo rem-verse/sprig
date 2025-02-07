@@ -6,11 +6,14 @@
 
 use crate::{
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
-	knobs::env::{FSEMUL_DISABLE_REMOVAL, PCFS_DISABLE_CSR, PCFS_DISABLE_FFIO},
+	knobs::env::{
+		FSEMUL_DISABLE_REMOVAL, PCFS_DISABLE_CSR, PCFS_DISABLE_FFIO,
+		PCFS_DISABLE_LOAD_BEARING_SLEEP,
+	},
 	utils::add_context_to,
 	SHOULD_LOG_JSON,
 };
-use cat_dev::fsemul::{pcfs::PCFSSataServer, HostFilesystem};
+use cat_dev::fsemul::{pcfs::sata_server::PCFSSataServer, HostFilesystem};
 use miette::miette;
 use std::net::Ipv4Addr;
 use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};
@@ -28,6 +31,7 @@ pub async fn serve_sata(
 	disable_real_removal: bool,
 	disable_ffio: bool,
 	disable_csr: bool,
+	disable_load_bearing_sleep: bool,
 ) -> u16 {
 	let sata_server = match PCFSSataServer::new(
 		host_filesystem,
@@ -36,6 +40,7 @@ pub async fn serve_sata(
 		disable_real_removal || (*FSEMUL_DISABLE_REMOVAL),
 		!disable_ffio && !(*PCFS_DISABLE_FFIO),
 		!disable_csr && !(*PCFS_DISABLE_CSR),
+		disable_load_bearing_sleep || (*PCFS_DISABLE_LOAD_BEARING_SLEEP),
 	)
 	.await
 	{

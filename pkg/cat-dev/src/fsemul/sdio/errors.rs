@@ -3,6 +3,19 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+/// An API Error for interacting with the SDIO client.
+#[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
+pub enum SDIOAPIError {
+	/// Invalid LBA has been supplied, you might want to set the raw LBA.
+	#[error("The LBA provided was invalid, must be divisble by 512 bytes: {0}")]
+	#[diagnostic(code(cat_dev::api::fsemul::sdio::invalid_lba))]
+	InvalidLBA(u32),
+	/// An invalid channel name has been supplied.
+	#[error("The channel provided was invalid, (first byte: {0:02x}, should be <0xC), (full: {1})")]
+	#[diagnostic(code(cat_dev::api::fsemul::sdio::invalid_channel))]
+	InvalidChannel(u8, u32),
+}
+
 /// Error serializing/deserializing the SDIO protocol.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
 pub enum SDIOProtocolError {

@@ -10,8 +10,8 @@ version.workspace = true
 publish = false
 
 [dependencies]
-cat-dev = { path = "../../pkg/cat-dev" }
-clap = { version = "^4.5.26", features = ["color", "derive", "env", "error-context", "help", "suggestions", "unicode", "usage", "wrap_help"] }
+cat-dev = { default-features = false, features = ["clients", "serial", "scientists", "servers"], path = "../../pkg/cat-dev" }
+clap = { version = "^4.5.28", features = ["color", "derive", "env", "error-context", "help", "suggestions", "unicode", "usage", "wrap_help"] }
 fnv.workspace = true
 futures.workspace = true
 log = { path = "../../pkg/log" }

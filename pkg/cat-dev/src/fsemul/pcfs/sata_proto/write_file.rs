@@ -3,25 +3,35 @@
 //! This is what actively handles writing bytes to a file. With either
 //! FFIO, and Combined Send/Recv options being turned on/off.
 
+use crate::{errors::NetworkParseError, fsemul::pcfs::sata_proto::MoveToFileLocation};
+use bytes::{Buf, Bytes};
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
+	errors::{CatBridgeError, NetworkError},
 	fsemul::{
-		pcfs::sata_proto::{
-			construct_sata_response, MoveToFileLocation, SataPacketHeader, SataProtoChunker,
-		},
+		pcfs::sata_proto::{construct_sata_response, SataPacketHeader, SataProtoChunker},
 		HostFilesystem,
 	},
 };
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
 use futures::{stream::SplitStream, StreamExt};
+#[cfg(feature = "servers")]
 use std::sync::{
 	atomic::{AtomicUsize, Ordering as AtomicOrdering},
 	Arc,
 };
+#[cfg(feature = "servers")]
 use tokio::net::TcpStream;
+#[cfg(feature = "servers")]
 use tokio_util::codec::Framed;
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use tracing::debug;
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
 
@@ -64,6 +74,7 @@ impl SataWriteFilePacketBody {
 	/// If we cannot construct a sata response packet because our data to send
 	/// was somehow too large (this should ideally never happen), or if we're
 	/// running on a 16 bit system.
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -76,6 +87,12 @@ impl SataWriteFilePacketBody {
 			match self.move_to_pointer {
 				MoveToFileLocation::Begin => {
 					if host_filesystem.seek_file(self.handle, true).await.is_err() {
+						debug!(
+							packet.fd = self.handle,
+							packet.typ = "PCFSSrvWriteFile",
+							"Failed to seek to beginning of file!",
+						);
+
 						return Self::construct_error(request_header, FS_ERROR);
 					}
 				}
@@ -84,6 +101,12 @@ impl SataWriteFilePacketBody {
 				}
 				MoveToFileLocation::End => {
 					if host_filesystem.seek_file(self.handle, false).await.is_err() {
+						debug!(
+							packet.fd = self.handle,
+							packet.typ = "PCFSSrvWriteFile",
+							"Failed to seek to end of file!",
+						);
+
 						return Self::construct_error(request_header, FS_ERROR);
 					}
 				}
@@ -113,6 +136,7 @@ impl SataWriteFilePacketBody {
 		}
 	}
 
+	#[cfg(feature = "servers")]
 	fn construct_error(
 		packet_header: &SataPacketHeader,
 		error_code: u32,

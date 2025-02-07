@@ -1,16 +1,15 @@
 # Sprig #
 
 ***note: this current project is far far far from done, and is one of many spare
-time projects. I wouldn't expect a ton of movement or usefullness out of this
-repository yet.***
+time projects. It is mostly only useful for those interacting with cat-dev's at
+this point.***
 
-A re-implementation effort of Wii-U Development tools, without the fuss. This
-recreation effort was lead after all the work to setup a working Cafe SDK
-environment in the current day (mirroring old versions of cygwin
-locally (which we also started hosting for others), specific windows 7 machines,
-and a collection of not generally available tools). We want everyone to be
-able to use the Wii-U SDK, on any OS. Not to mention we want to document, and
-how these Development Environments exist.
+A re-implementation of Wii-U Development tools, without the fuss. This attempts
+to recreate the real SDK that can run on any OS (without needing to setup
+cygwin, or needing a windows machine), as well as 'better' versions of the tool
+that comply to more modern CLI/App Standards. As part of sprig I do also run
+cygwin mirrors, and provide support for setting up the official sdk. But
+hopefully this project can fully eclipse the need for the official Cafe SDK.
 
 ***As a side note: if you're interested in testing something on a cat-dev for
 something related to preservation, and don't have one. PLEASE reach out, I'd
@@ -26,9 +25,9 @@ fun word to say.
 ## What Parts Are Re-Implemented ##
 
 As mentioned at the top of this repository ALMOST ALL of the tools here are
-NOT re-implemented _yet_. We're working on it bit by bit, but to be clear it is not
-our #1 priority or preservationist thing being worked on. It's very much as an
-on needed basis til we finish other things (and in the meantime we'd love help
+NOT re-implemented _yet_. I'm working on it bit by bit, but to be clear it is
+not the only thing I'm working on, or always my top project. It's very much as an
+on needed basis til I can finish other things (and in the meantime I'd love help
 from anyone willing to contribute).
 
 The end goal is to offer a *complete* port of every single tool that was
@@ -131,6 +130,8 @@ can just run them directly. On windows you can run the scripts located in the
 for more information.*
 
 ### Building the Installable Packages ###
+
+*note: the installable packages are not being fully tested yet, so expect breakages.*
 
 If you actually want to build packages you'll need to not only be the OS that
 you _want_ to package for. You'll also potentially need extra tools depending

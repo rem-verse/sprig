@@ -4,15 +4,15 @@
 //! are built to check availability. Not to mention ping packets confer what
 //! features are enabled.
 
-use crate::{
-	errors::NetworkParseError,
-	fsemul::pcfs::{
-		errors::PCFSApiError,
-		sata_proto::{construct_sata_response, SataCommandInfo, SataPacketHeader},
-	},
-};
+use crate::errors::NetworkParseError;
 use bytes::{BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
+use crate::fsemul::pcfs::{
+	errors::PCFSApiError,
+	sata_proto::{construct_sata_response, SataCommandInfo, SataPacketHeader},
+};
 
 /// A ZST that represents a ping packet coming in.
 #[derive(Clone, Debug, PartialEq, Eq, Valuable)]
@@ -25,6 +25,7 @@ impl SataPingPacketBody {
 	///
 	/// Should never error, but could error if we fail to construct the response
 	/// for some reason.
+	#[cfg(feature = "servers")]
 	pub fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -142,8 +143,10 @@ impl Valuable for SataPongBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
 
+	#[cfg(feature = "servers")]
 	#[test]
 	pub fn can_respond_to_ping() {
 		let ping = SataPingPacketBody;

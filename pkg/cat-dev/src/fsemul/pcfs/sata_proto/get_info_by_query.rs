@@ -5,40 +5,53 @@
 //! give you either file information, the count of files in a directory, or
 //! the size of a particular file. Wow.
 
+use crate::{errors::NetworkParseError, fsemul::pcfs::errors::SataProtocolError};
+use bytes::Bytes;
+use std::ffi::CStr;
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, FSError, NetworkParseError},
+	errors::{CatBridgeError, FSError},
 	fsemul::{
 		host_filesystem::{FilesystemLocation, ResolvedLocation},
 		pcfs::{
-			errors::{PCFSApiError, SataProtocolError},
+			errors::PCFSApiError,
 			sata_proto::{construct_sata_response, SataPacketHeader},
 		},
 		HostFilesystem,
 	},
 };
-use bytes::{BufMut, Bytes, BytesMut};
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
 use std::{
-	ffi::CStr,
 	fs::read_dir,
 	path::Path,
 	sync::LazyLock,
 	time::{Duration, SystemTime},
 };
+#[cfg(feature = "servers")]
 use sysinfo::{Disk, Disks};
-use tracing::warn;
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use tracing::{debug, warn};
+#[cfg(feature = "servers")]
 use walkdir::WalkDir;
 
+#[cfg(feature = "servers")]
 /// A folder is required to call this particular api.
 const FOLDER_REQUIRED_ERROR: u32 = 0xFFF0_FFD7;
+#[cfg(feature = "servers")]
 /// Returned when a directory is too large to walk.
 const SIZE_TOO_BIG_ERROR: u32 = 0xFFF0_FFE7;
+#[cfg(feature = "servers")]
 /// An error code to send when a path does not exist.
 ///
 /// This is also used in some places that are a bit of a stretch like for
 /// network shares on disk space. The path doesn't exist on a disk, so this
 /// error code is used, even if it's not quite exact.
 const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
+#[cfg(feature = "servers")]
 /// Timestamps are "FAT" timestamps which start in 1980.
 static FAT_TIMESTAMP_START: LazyLock<SystemTime> = LazyLock::new(|| {
 	SystemTime::UNIX_EPOCH
@@ -85,6 +98,7 @@ impl SataGetInfoByQueryPacketBody {
 	///
 	/// If we cannot construct a sata response packet because our data to send
 	/// was somehow too large (this should ideally never happen).
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -107,6 +121,7 @@ impl SataGetInfoByQueryPacketBody {
 	/// ## Errors
 	///
 	/// If we cannot construct a sata response packet.
+	#[cfg(feature = "servers")]
 	pub async fn stat_fd(
 		request_header: &SataPacketHeader,
 		host_filesystem: &HostFilesystem,
@@ -114,6 +129,12 @@ impl SataGetInfoByQueryPacketBody {
 	) -> Result<Bytes, CatBridgeError> {
 		let path = {
 			let Some(entry) = host_filesystem.get_file(fd).await else {
+				debug!(
+					packet.fd = fd,
+					packet.typ = "GetInfoByQueryPacketBody::stat_fd",
+					"Processing stat of already open fd",
+				);
+
 				return Ok(Self::error_with_code(request_header, PATH_NOT_EXIST_ERROR)?);
 			};
 			entry.2.clone()
@@ -131,6 +152,7 @@ impl SataGetInfoByQueryPacketBody {
 	/// ## Errors
 	///
 	/// If the path metadata can not be retrieved.
+	#[cfg(feature = "servers")]
 	pub fn info_for_path(path: &Path) -> Result<Bytes, FSError> {
 		let path_metadata = path.metadata()?;
 
@@ -186,6 +208,7 @@ impl SataGetInfoByQueryPacketBody {
 	}
 
 	/// Get the total amount of free disk space a path would be in.
+	#[cfg(feature = "servers")]
 	fn handle_disk_space(
 		request_header: &SataPacketHeader,
 		location: ResolvedLocation,
@@ -195,6 +218,11 @@ impl SataGetInfoByQueryPacketBody {
 		// So the path needs to exist, or one of it's parent paths do, and it
 		// needs to not be on the network....
 		let ResolvedLocation::Filesystem(fs_location) = location else {
+			debug!(
+				packet.typ = "PCFSSrvGetInfo",
+				packet.sub_type = "handle_disk_space",
+				"Failed to resolve path!",
+			);
 			// Network locations cannot have a disk space to measure.
 			return Ok(Self::error_with_code(request_header, PATH_NOT_EXIST_ERROR)?);
 		};
@@ -229,6 +257,12 @@ impl SataGetInfoByQueryPacketBody {
 			}
 		}
 		let Some(disk) = disk_holding_path else {
+			debug!(
+				packet.typ = "PCFSSrvGetInfo",
+				packet.sub_type = "handle_disk_space",
+				"Failed to find root disk!",
+			);
+
 			// This location must be some sort of network mount, ignore.
 			return Ok(Self::error_with_code(request_header, PATH_NOT_EXIST_ERROR)?);
 		};
@@ -241,6 +275,7 @@ impl SataGetInfoByQueryPacketBody {
 	}
 
 	/// Get the total size of a folder, must be able to fit within a [`u32`].
+	#[cfg(feature = "servers")]
 	fn handle_folder_size(
 		request_header: &SataPacketHeader,
 		location: ResolvedLocation,
@@ -251,6 +286,11 @@ impl SataGetInfoByQueryPacketBody {
 		// This means our path doesn't exist, so we can't iterate over our folder
 		// because it doesn't exist.
 		if !fs_location.canonicalized_is_exact() {
+			debug!(
+				packet.typ = "PCFSSrvGetInfo",
+				packet.sub_type = "handle_folder_size",
+				"Failed to resolve path!",
+			);
 			return Ok(Self::error_with_code(request_header, PATH_NOT_EXIST_ERROR)?);
 		}
 
@@ -289,6 +329,11 @@ impl SataGetInfoByQueryPacketBody {
 		}
 
 		let Ok(smol_space) = u32::try_from(total_size) else {
+			debug!(
+				packet.typ = "PCFSSrvGetInfo",
+				packet.sub_type = "handle_folder_size",
+				"Folder size is too large, cannot fit in u32!",
+			);
 			return Ok(Self::error_with_code(request_header, SIZE_TOO_BIG_ERROR)?);
 		};
 		let mut response = BytesMut::with_capacity(88);
@@ -300,6 +345,7 @@ impl SataGetInfoByQueryPacketBody {
 	}
 
 	/// Get the total amount of files in a directory _non-recursively_.
+	#[cfg(feature = "servers")]
 	fn handle_file_count(
 		request_header: &SataPacketHeader,
 		location: ResolvedLocation,
@@ -310,10 +356,21 @@ impl SataGetInfoByQueryPacketBody {
 		// This means our path doesn't exist, so we can't iterate over our folder
 		// because it doesn't exist.
 		if !fs_location.canonicalized_is_exact() {
+			debug!(
+				packet.typ = "PCFSSrvGetInfo",
+				packet.sub_type = "handle_file_count",
+				"Failed to resolve path!",
+			);
 			return Ok(Self::error_with_code(request_header, PATH_NOT_EXIST_ERROR)?);
 		}
 
 		if !fs_location.resolved_path().is_dir() {
+			debug!(
+				packet.typ = "PCFSSrvGetInfo",
+				packet.sub_type = "handle_folder_size",
+				"Resolved location was not a directory!",
+			);
+
 			return Ok(Self::error_with_code(
 				request_header,
 				FOLDER_REQUIRED_ERROR,
@@ -321,6 +378,12 @@ impl SataGetInfoByQueryPacketBody {
 		}
 
 		let Ok(iterator) = read_dir(fs_location.resolved_path()) else {
+			debug!(
+				packet.typ = "PCFSSrvGetInfo",
+				packet.sub_type = "handle_folder_size",
+				"Failed to open up iterator over directory!",
+			);
+
 			return Ok(Self::error_with_code(request_header, PATH_NOT_EXIST_ERROR)?);
 		};
 
@@ -354,6 +417,7 @@ impl SataGetInfoByQueryPacketBody {
 		// Will be needed for network shares.
 		clippy::unused_async,
 	)]
+	#[cfg(feature = "servers")]
 	async fn handle_file_info(
 		request_header: &SataPacketHeader,
 		location: ResolvedLocation,
@@ -361,6 +425,12 @@ impl SataGetInfoByQueryPacketBody {
 		match location {
 			ResolvedLocation::Filesystem(ref filesystem) => {
 				let Ok(info) = Self::info_for_path(filesystem.resolved_path()) else {
+					debug!(
+						packet.typ = "PCFSSrvGetInfo",
+						packet.sub_type = "handle_file_info",
+						"Failed to resolve path!",
+					);
+
 					return Ok(Self::error_with_code(request_header, PATH_NOT_EXIST_ERROR)?);
 				};
 
@@ -368,6 +438,11 @@ impl SataGetInfoByQueryPacketBody {
 				response.put_u32(0);
 				response.extend(info);
 
+				debug!(
+					packet.typ = "PCFSSrvGetInfo",
+					packet.sub_type = "handle_file_info",
+					"Successfully stat'd file!",
+				);
 				Ok(construct_sata_response(
 					request_header,
 					0,
@@ -380,6 +455,7 @@ impl SataGetInfoByQueryPacketBody {
 		}
 	}
 
+	#[cfg(feature = "servers")]
 	fn error_with_code(
 		request_header: &SataPacketHeader,
 		error: u32,
@@ -493,11 +569,14 @@ impl TryFrom<u32> for QueryType {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[test]
 	pub fn query_types_to_and_fro() {
 		for qt in vec![
@@ -510,6 +589,7 @@ mod unit_tests {
 		}
 	}
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn disk_size_query_type() {
 		// We don't know what your actual disk size here is in tests.
@@ -552,6 +632,7 @@ mod unit_tests {
 		);
 	}
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn size_of_folder_query_type() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
@@ -620,6 +701,7 @@ mod unit_tests {
 		);
 	}
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn file_count_query_type() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
@@ -681,6 +763,7 @@ mod unit_tests {
 		);
 	}
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn file_info_query_type() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

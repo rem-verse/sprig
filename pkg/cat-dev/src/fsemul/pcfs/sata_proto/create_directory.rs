@@ -2,20 +2,28 @@
 //!
 //! This creates folders on disk, and nothing more.
 
+use crate::errors::NetworkParseError;
+use bytes::Bytes;
+use std::ffi::CStr;
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, NetworkParseError},
+	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 		HostFilesystem,
 	},
 };
-use bytes::{BufMut, Bytes, BytesMut};
-use std::ffi::CStr;
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
 use tokio::fs::{create_dir_all, set_permissions};
-use tracing::error;
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use tracing::{debug, error};
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
 
@@ -55,12 +63,19 @@ impl SataCreateDirectoryPacketBody {
 	///
 	/// If we cannot construct a sata response packet because our data to send
 	/// was somehow too large (this should ideally never happen).
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
 		host_filesystem: &HostFilesystem,
 	) -> Result<Bytes, CatBridgeError> {
 		let Ok(final_location) = host_filesystem.resolve_path(&self.path) else {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvCreateDirectory",
+				"Failed to resolve path!",
+			);
+
 			return Self::construct_error(request_header, FS_ERROR);
 		};
 		let ResolvedLocation::Filesystem(fs_location) = final_location else {
@@ -71,6 +86,11 @@ impl SataCreateDirectoryPacketBody {
 		if self.set_write_mode
 			&& !host_filesystem.path_allows_writes(fs_location.closest_resolved_path())
 		{
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvCreateDirectory",
+				"Cannot create directory in read-only path!",
+			);
 			return Self::construct_error(request_header, FS_ERROR);
 		}
 
@@ -87,6 +107,11 @@ impl SataCreateDirectoryPacketBody {
 		// Mark as read only.
 		if !self.set_write_mode {
 			let Ok(metadata) = fs_location.resolved_path().metadata() else {
+				debug!(
+					packet.path = self.path.as_str(),
+					packet.typ = "PCFSSrvCreateDirectory",
+					"Failed to get paths metadata!",
+				);
 				return Self::construct_error(request_header, FS_ERROR);
 			};
 			let mut perms = metadata.permissions();
@@ -95,6 +120,11 @@ impl SataCreateDirectoryPacketBody {
 				.await
 				.is_err()
 			{
+				debug!(
+					packet.path = self.path.as_str(),
+					packet.typ = "PCFSSrvCreateDirectory",
+					"Failed to update path permissions!",
+				);
 				return Self::construct_error(request_header, FS_ERROR);
 			}
 		}
@@ -106,6 +136,7 @@ impl SataCreateDirectoryPacketBody {
 		)?)
 	}
 
+	#[cfg(feature = "servers")]
 	fn construct_error(
 		packet_header: &SataPacketHeader,
 		error_code: u32,
@@ -175,11 +206,14 @@ impl Valuable for SataCreateDirectoryPacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn test_simple_create_directory() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

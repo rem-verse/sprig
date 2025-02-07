@@ -3,24 +3,31 @@
 //! This doesn't _Read_ any data out of the file, but merely opens it for
 //! reading, or writing.
 
+use crate::{errors::NetworkParseError, fsemul::pcfs::errors::SataProtocolError};
+use bytes::Bytes;
+use std::ffi::CStr;
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, NetworkParseError},
+	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::ResolvedLocation,
-		pcfs::{
-			errors::SataProtocolError,
-			sata_proto::{construct_sata_response, SataCommandInfo, SataPacketHeader},
-		},
+		pcfs::sata_proto::{construct_sata_response, SataCommandInfo, SataPacketHeader},
 		HostFilesystem,
 	},
 };
-use bytes::{BufMut, Bytes, BytesMut};
-use std::ffi::CStr;
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
 use tokio::fs::{set_permissions, OpenOptions};
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use tracing::{debug, warn};
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
+#[cfg(feature = "servers")]
 /// An error code to send when a path does not exist.
 ///
 /// This is also used in some places that are a bit of a stretch like for
@@ -66,6 +73,7 @@ impl SataOpenFilePacketBody {
 		// Yes clippy, this is what I want, which is why i wrote it.
 		clippy::permissions_set_readonly_false,
 	)]
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -73,6 +81,12 @@ impl SataOpenFilePacketBody {
 		host_filesystem: &HostFilesystem,
 	) -> Result<Bytes, CatBridgeError> {
 		let Ok(final_location) = host_filesystem.resolve_path(&self.path) else {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvOpenFile",
+				"Failed to resolve path!",
+			);
+
 			return Self::construct_error(request_header, PATH_NOT_EXIST_ERROR);
 		};
 		let ResolvedLocation::Filesystem(fs_location) = final_location else {
@@ -84,16 +98,37 @@ impl SataOpenFilePacketBody {
 		if !host_filesystem.path_allows_writes(fs_location.resolved_path())
 			&& (!self.mode_string.contains('r') || self.mode_string.contains('+'))
 		{
+			debug!(
+				packet.mode = self.mode_string,
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvOpenFile",
+				"Path does not allow opening as writable!",
+			);
+
 			return Self::construct_error(request_header, FS_ERROR);
 		}
 		let [allow_becoming_write, _, _, _] = command_info.capabilities().1.to_be_bytes();
 		// If it exists, we potentially need to change read only mode flag.
 		if fs_location.resolved_path().exists() {
 			let Ok(metadata) = fs_location.resolved_path().metadata() else {
+				debug!(
+					packet.path = self.path.as_str(),
+					packet.typ = "PCFSSrvOpenFile",
+					"Failed to get metadata of resolved path!",
+				);
+
 				return Self::construct_error(request_header, FS_ERROR);
 			};
 			let mut perms = metadata.permissions();
 			if perms.readonly() && !self.mode_string.contains('r') && allow_becoming_write == 0 {
+				debug!(
+					path.is_read_only = perms.readonly(),
+					packet.mode = self.mode_string,
+					packet.path = self.path.as_str(),
+					packet.typ = "PCFSSrvOpenFile",
+					"Path is marked read-only, and mode was requested as non-read!",
+				);
+
 				return Self::construct_error(request_header, FS_ERROR);
 			}
 			perms.set_readonly(false);
@@ -101,6 +136,12 @@ impl SataOpenFilePacketBody {
 				.await
 				.is_err()
 			{
+				debug!(
+					packet.path = self.path.as_str(),
+					packet.typ = "PCFSSrvOpenFile",
+					"Failed to update permissions as requested on open!"
+				);
+
 				return Self::construct_error(request_header, FS_ERROR);
 			}
 		}
@@ -120,19 +161,36 @@ impl SataOpenFilePacketBody {
 			options.create(true);
 		}
 
-		let Ok(fd) = host_filesystem
+		let fd = match host_filesystem
 			.open_file(options, fs_location.resolved_path())
 			.await
-		else {
-			return Self::construct_error(request_header, FS_ERROR);
+		{
+			Ok(fd) => fd,
+			Err(cause) => {
+				warn!(
+					?cause,
+					packet.path = self.path.as_str(),
+					packet.typ = "PCFSSrvOpenFile",
+					"Failed to open file!",
+				);
+
+				return Self::construct_error(request_header, FS_ERROR);
+			}
 		};
 
+		debug!(
+			result.fd = fd,
+			packet.path = self.path.as_str(),
+			packet.typ = "PCFSSrvOpenFile",
+			"Successfully opened file!",
+		);
 		let mut buff = BytesMut::with_capacity(8);
 		buff.put_u32(0);
 		buff.put_i32(fd);
 		Ok(construct_sata_response(request_header, 0, buff.freeze())?)
 	}
 
+	#[cfg(feature = "servers")]
 	fn construct_error(
 		packet_header: &SataPacketHeader,
 		error_code: u32,
@@ -216,11 +274,14 @@ impl Valuable for SataOpenFilePacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn simple_open_file_request() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

@@ -4,26 +4,38 @@
 //! can disable the behavior of truly "removing" items from your filesystem,
 //! and configure your PCFS client to just move files to `.rm`
 
+use crate::errors::NetworkParseError;
+use bytes::Bytes;
+use std::ffi::CStr;
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
 use crate::{
-	errors::{CatBridgeError, FSError, NetworkParseError},
+	errors::{CatBridgeError, FSError},
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 		HostFilesystem,
 	},
 };
-use bytes::{BufMut, Bytes, BytesMut};
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "servers")]
 use std::{
-	ffi::{CStr, OsStr, OsString},
+	ffi::{OsStr, OsString},
 	path::PathBuf,
 };
+#[cfg(feature = "servers")]
 use tokio::fs::{create_dir_all, read_link, remove_dir_all, remove_file, rename};
-use tracing::error;
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use tracing::{debug, error};
+#[cfg(feature = "servers")]
 use walkdir::WalkDir;
 
+#[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
+#[cfg(feature = "servers")]
 /// An error code to send when a path does not exist.
 ///
 /// This is also used in some places that are a bit of a stretch like for
@@ -63,6 +75,7 @@ impl SataRemovePacketBody {
 		// This is far easier to read not collapsed.
 		clippy::collapsible_else_if,
 	)]
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -70,6 +83,12 @@ impl SataRemovePacketBody {
 		host_filesystem: &HostFilesystem,
 	) -> Result<Bytes, CatBridgeError> {
 		let Ok(final_location) = host_filesystem.resolve_path(&self.path) else {
+			debug!(
+				packet.path = self.path.as_str(),
+				packet.typ = "PCFSSrvRemoveFile",
+				"Failed to resolve path!",
+			);
+
 			return Self::construct_error(request_header, PATH_NOT_EXIST_ERROR);
 		};
 		let ResolvedLocation::Filesystem(fs_location) = final_location else {
@@ -153,6 +172,7 @@ impl SataRemovePacketBody {
 	/// This 'rename' works by actually creating a new directory with the ".rm"
 	/// added. Then moving all the files over with rename. This is slow, but
 	/// works.
+	#[cfg(feature = "servers")]
 	async fn rename_dir(old_path: &PathBuf) -> Result<(), FSError> {
 		let mut new_filename = old_path.file_name().unwrap_or_default().to_owned();
 		new_filename.push(OsStr::new(".rm"));
@@ -217,6 +237,7 @@ impl SataRemovePacketBody {
 		Ok(())
 	}
 
+	#[cfg(feature = "servers")]
 	fn construct_error(
 		packet_header: &SataPacketHeader,
 		error_code: u32,
@@ -284,11 +305,14 @@ impl Valuable for SataRemovePacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn test_real_removal() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
@@ -329,6 +353,7 @@ mod unit_tests {
 		);
 	}
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn test_fake_removal() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

@@ -51,6 +51,7 @@ you.
 You can discover all the bridges on your host in the following fashion:
 
 ```rust,no_run
+# #[cfg(feature = "clients")]
 use cat_dev::mion::discovery::discover_bridges;
 
 /// Fetching detailed fields grabs a few extra bits of information, these are
@@ -63,6 +64,7 @@ use cat_dev::mion::discovery::discover_bridges;
 ///
 /// These all return options that will only be populated if
 /// `fetch_detailed_fields` is marked as true.
+# #[cfg(feature = "clients")]
 async fn stream_bridges(fetch_detailed_fields: bool) {
   let mut channel_to_stream_bridges = discover_bridges(
     fetch_detailed_fields,
@@ -87,9 +89,12 @@ async fn stream_bridges(fetch_detailed_fields: bool) {
 You can get information about a specific bridge like so:
 
 ```rust,no_run
+# #[cfg(feature = "clients")]
 use cat_dev::mion::discovery::{find_mion, MIONFindBy};
+# #[cfg(feature = "clients")]
 use std::time::Duration;
 
+# #[cfg(feature = "clients")]
 async fn find_a_mion_by_name(
   name: String,
   fetch_detailed_fields: bool,
@@ -121,8 +126,10 @@ bridge", which you want to use by default if no name was provided. You can
 get this bridges information from the host state.
 
 ```rust,no_run
+# #[cfg(feature = "clients")]
 use cat_dev::mion::BridgeHostState;
 
+# #[cfg(feature = "clients")]
 async fn get_default_mion() {
   let host_state = BridgeHostState::load()
     .await

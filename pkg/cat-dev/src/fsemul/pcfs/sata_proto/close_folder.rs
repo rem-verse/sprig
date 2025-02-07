@@ -2,18 +2,20 @@
 //!
 //! This closes an already existing open folder given just a handle.
 
-use crate::{
-	errors::NetworkParseError,
-	fsemul::{
-		host_filesystem::HostFilesystem,
-		pcfs::{
-			errors::PCFSApiError,
-			sata_proto::{construct_sata_response, SataPacketHeader},
-		},
+use crate::errors::NetworkParseError;
+use bytes::{Buf, Bytes};
+use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
+use crate::fsemul::{
+	host_filesystem::HostFilesystem,
+	pcfs::{
+		errors::PCFSApiError,
+		sata_proto::{construct_sata_response, SataPacketHeader},
 	},
 };
-use bytes::{Buf, Bytes, BytesMut};
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+#[cfg(feature = "servers")]
+use bytes::BytesMut;
 
 /// A packet to close a particular folder given a file descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +34,7 @@ impl SataCloseFolderPacketBody {
 	/// ## Errors
 	///
 	/// If we cannot construct a response.
+	#[cfg(feature = "servers")]
 	pub async fn handle(
 		&self,
 		request_header: &SataPacketHeader,
@@ -97,12 +100,16 @@ impl Valuable for SataCloseFolderPacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
+	#[cfg(feature = "servers")]
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
+	#[cfg(feature = "servers")]
 	use tokio::fs::OpenOptions;
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn simple_ffio_read_file_request() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;

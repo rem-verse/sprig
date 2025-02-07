@@ -4,13 +4,18 @@
 //! actual `uid`/`gid`. This is because windows doesn't have the concept of a
 //! uid/gid.
 
-use crate::{
-	errors::{CatBridgeError, NetworkParseError},
-	fsemul::pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
-};
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::errors::NetworkParseError;
+use bytes::Bytes;
 use std::ffi::CStr;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "servers")]
+use crate::{
+	errors::CatBridgeError,
+	fsemul::pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
+};
+#[cfg(feature = "servers")]
+use bytes::{BufMut, BytesMut};
 
 /// A packet to change the owner of a file.
 ///
@@ -56,6 +61,7 @@ impl SataChangeOwnerPacketBody {
 	///
 	/// If we cannot construct a sata response packet because our data to send
 	/// was somehow too large (this should never happen).
+	#[cfg(feature = "servers")]
 	pub fn handle(&self, request_header: &SataPacketHeader) -> Result<Bytes, CatBridgeError> {
 		let mut buff = BytesMut::with_capacity(4);
 		// We always error.
@@ -134,8 +140,10 @@ impl Valuable for SataChangeOwnerPacketBody {
 
 #[cfg(test)]
 mod unit_tests {
+	#[cfg(feature = "servers")]
 	use super::*;
 
+	#[cfg(feature = "servers")]
 	#[tokio::test]
 	pub async fn change_mode_request() {
 		let request = SataChangeOwnerPacketBody {
