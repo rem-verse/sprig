@@ -1,9 +1,9 @@
 //! Dump the EEPROM for a running CAT-DEV.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::get_targeted_bridge_ip,
 	exit_codes::{DUMP_EEPROM_FAILURE, FAILED_TO_WRITE_TO_DISK},
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::cgis::dump_eeprom;
 use miette::miette;

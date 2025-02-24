@@ -9,7 +9,4 @@
 //! etc.
 
 pub mod errors;
-#[cfg(any(feature = "clients", feature = "servers"))]
-pub mod sata_proto;
-#[cfg(feature = "servers")]
-pub mod sata_server;
+pub mod sata;

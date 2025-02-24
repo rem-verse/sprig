@@ -50,6 +50,7 @@ mod sdio;
 mod utils;
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::{
 		argv_helpers::{
 			coalesce_serial_ports, get_atapi_port, get_host_bind_address, get_pcfs_sata_port,
@@ -72,7 +73,6 @@ use crate::{
 		cli::{FSEmulConfigurationFlags, SharedSerialPortFlags},
 		env::PCFS_IS_SATA,
 	},
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
 	cgis::{power_on, power_on_v2},

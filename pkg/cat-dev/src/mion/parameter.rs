@@ -3,12 +3,12 @@
 use crate::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
 	mion::proto::{
+		DEFAULT_MION_PARAMETER_PORT, MION_PARAMETER_TIMEOUT_SECONDS,
 		parameter::{
-			well_known::{index_from_parameter_name, ParameterLocationSpecification},
 			DumpedMionParameters, MIONParameterAPIError, MionDumpParameters, SetMionParameters,
 			SetMionParametersResponse,
+			well_known::{ParameterLocationSpecification, index_from_parameter_name},
 		},
-		DEFAULT_MION_PARAMETER_PORT, MION_PARAMETER_TIMEOUT_SECONDS,
 	},
 };
 use bytes::{Bytes, BytesMut};
@@ -17,7 +17,7 @@ use std::net::Ipv4Addr;
 use tokio::{
 	io::{AsyncReadExt, AsyncWriteExt},
 	net::TcpStream,
-	time::{sleep, Duration},
+	time::{Duration, sleep},
 };
 
 /// Get parameters from the parameter space of a MION bridge.

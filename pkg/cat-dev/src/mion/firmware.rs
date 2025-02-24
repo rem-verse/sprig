@@ -1,7 +1,7 @@
 //! APIs for interacting with MION Firmware Files.
 
-use aes::{cipher::KeyInit, Aes256};
-use cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, BlockSizeUser};
+use aes::{Aes256, cipher::KeyInit};
+use cipher::{BlockDecryptMut, BlockEncryptMut, BlockSizeUser, block_padding::NoPadding};
 use ecb::{Decryptor, Encryptor};
 use miette::Diagnostic;
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -217,29 +217,39 @@ impl MIONFirmwareFile {
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
 pub enum MIONFirmwareAPIError {
 	/// You attempted to encrypt data that we could not encrypt.
-	#[error("We could not encrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[error(
+		"We could not encrypt your data, because it was not padded to the correct length, expected a block size of: {0}"
+	)]
 	#[diagnostic(code(cat_dev::api::mion::firmware::bad_decrypted_data_length))]
 	BadDecryptedDataLength(usize),
 	/// You attempted to decrypt data that we could not decrypt.
-	#[error("We could not decrypt your data, because it was not padded to the correct length, expected a block size of: {0}")]
+	#[error(
+		"We could not decrypt your data, because it was not padded to the correct length, expected a block size of: {0}"
+	)]
 	#[diagnostic(code(cat_dev::api::mion::firmware::bad_encrypted_data_length))]
 	BadEncryptedDataLength(usize),
 	/// The MION Firmware files end with a final byte that acts as a checksum
 	/// to validate the content before it was correct. Your checksum was not
 	/// correct.
-	#[error("The MION Firmware file you provided had an invalid checksum, we expected: {1:02x}, but got: {0:02x}")]
+	#[error(
+		"The MION Firmware file you provided had an invalid checksum, we expected: {1:02x}, but got: {0:02x}"
+	)]
 	#[diagnostic(code(cat_dev::api::mion::firmware::bad_checksum))]
 	BadChecksum(u8, u8),
 	/// All MION Firmware files must be at a minimum 0x26 bytes long.
 	///
 	/// This covers a single AES-256 block (32 bytes), plus the 6 byte footer
 	/// that they contain.
-	#[error("The MION Firmware file provided was too small, it must be at least 0x26 bytes long, was {0:02x}")]
+	#[error(
+		"The MION Firmware file provided was too small, it must be at least 0x26 bytes long, was {0:02x}"
+	)]
 	#[diagnostic(code(cat_dev::api::mion::firmware::too_small))]
 	TooSmall(usize),
 	/// The MION Firmware version string must end with a `0x00`, as this is a
 	/// load-bearing NUL terminator for many parts of the firmware.
-	#[error("The Version String for MION Firmware Files Typed 'MION', must have their version bytes end with a NUL terminator (0x00) due to an oversight in programming. Your file ended with: ({0:02x})")]
+	#[error(
+		"The Version String for MION Firmware Files Typed 'MION', must have their version bytes end with a NUL terminator (0x00) due to an oversight in programming. Your file ended with: ({0:02x})"
+	)]
 	#[diagnostic(code(cat_dev::api::mion::firmware::missing_nul_terminator))]
 	MissingNULTerminator(u8),
 	/// All MION FW files must end with:
@@ -248,7 +258,9 @@ pub enum MIONFirmwareAPIError {
 	/// - `PWI-SS_FP_IMAGE` for FPGA firmware types.
 	///
 	/// If they do not, they are immediately considered invalid.
-	#[error("While validating the decrypted contents of your FW we were not able to identify the required ending bytes, this firmware is corrupt.")]
+	#[error(
+		"While validating the decrypted contents of your FW we were not able to identify the required ending bytes, this firmware is corrupt."
+	)]
 	#[diagnostic(code(cat_dev::api::mion_fw::missing_signature))]
 	MissingSignature,
 }
@@ -363,9 +375,9 @@ mod unit_tests {
 			for (idx, byte) in decrypted.iter().enumerate() {
 				if *byte != expected_decrypted_contents[idx] {
 					panic!(
-            "Decrypted Byte at Location: {idx} did not match expected contents! (total: {})",
-            decrypted.len(),
-          );
+						"Decrypted Byte at Location: {idx} did not match expected contents! (total: {})",
+						decrypted.len(),
+					);
 				}
 			}
 
@@ -378,9 +390,9 @@ mod unit_tests {
 			for (idx, byte) in re_encrypted.iter().enumerate() {
 				if *byte != full_encrypted_contents[idx] {
 					panic!(
-            "Re-Encrypted Byte at Location: {idx} did not match expected contents! (total: {})",
-            re_encrypted.len(),
-          );
+						"Re-Encrypted Byte at Location: {idx} did not match expected contents! (total: {})",
+						re_encrypted.len(),
+					);
 				}
 			}
 		}

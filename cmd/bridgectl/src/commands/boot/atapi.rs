@@ -5,13 +5,13 @@
 //! communications over a similar sata protocol.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::fsemul::{
-	atapi::server::{AtapiServer, DEFAULT_ATAPI_PORT},
 	HostFilesystem,
+	atapi::server::{AtapiServer, DEFAULT_ATAPI_PORT},
 };
 use miette::miette;
 use std::net::Ipv4Addr;

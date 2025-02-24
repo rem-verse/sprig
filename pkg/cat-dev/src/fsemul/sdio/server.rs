@@ -9,60 +9,31 @@
 use crate::{
 	errors::{CatBridgeError, NetworkError},
 	fsemul::{
-		sdio::proto::{
-			read_packet_temp_will_break::serve_read_request, ChunkSDIOControlCodec,
-			SdioControlMessage, SdioControlMessageRequest, SdioControlPacketType,
-			SdioControlReadRequest, SdioControlWriteRequest,
-		},
 		HostFilesystem,
+		sdio::{
+			CONNECT_TIMEOUT, DEFAULT_SDIO_BLOCK_PORT, DEFAULT_SDIO_CONTROL_PORT,
+			SDIO_TCP_PACKET_BUFFER_SIZE,
+			proto::{
+				ChunkSDIOControlCodec, SdioControlMessage, SdioControlMessageRequest,
+				SdioControlPacketType, SdioControlReadRequest, SdioControlWriteRequest,
+				read_packet_temp_will_break::serve_read_request,
+			},
+		},
 	},
 };
 use bytes::Bytes;
-use futures::{stream::SplitSink, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, stream::SplitSink};
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::{
 	io::AsyncWriteExt,
-	net::{tcp::OwnedWriteHalf, TcpStream},
-	sync::{
-		mpsc::{channel, Sender},
-		Mutex,
-	},
+	net::{TcpStream, tcp::OwnedWriteHalf},
+	sync::mpsc::{Sender, channel},
 	task::Builder as TaskBuilder,
 	time::{sleep, timeout},
 };
 use tokio_util::codec::Framed;
 use tracing::{debug, error, info, trace, warn};
 
-/// The default port to use for "SDIO Printf/Control" communications.
-///
-/// It should be noted that a human can override this port in the MION itself.
-/// However, most nintendo tools don't get this param from the MION itself, and
-/// expect it to also be set in `fsemul.ini`.
-pub const DEFAULT_SDIO_CONTROL_PORT: u16 = 7975;
-/// The default port to use for "SDIO Block Data" communications.
-///
-/// It should be noted that a human can override this port in the MION itself.
-/// However, most nintendo tools don't get this param from the MION itself, and
-/// expect it to also be set in `fsemul.ini`.
-pub const DEFAULT_SDIO_BLOCK_PORT: u16 = 7976;
-
-/// The timeout to initiate a TCP connection to SDIO.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// The amount of TCP Packets that can be buffered per client.
-///
-/// *note: this is not the size of an individual packet, or packets, but is
-/// just the amount of packets that can be queued.*
-const SDIO_TCP_PACKET_BUFFER_SIZE: usize = 8192_usize;
-
-/// A lock to ensure only one person sends over SDIO at a time.
-///
-/// This is required because SDIO Data just transfers bytes with
-/// no end identifiers, and no identifiers to which file/channel
-/// /etc. it's sending for.
-static SDIO_DATA_LOCK: Mutex<()> = Mutex::const_new(());
-
-#[cfg(feature = "servers")]
 /// Handle all "SDIO" traffic to/from the device.
 ///
 /// "SDIO" is actually handled by a pair of ports, and isn't real SDIO that's
@@ -86,7 +57,6 @@ pub struct SdioClient<'fs> {
 	printf_control_buff: String,
 }
 
-#[cfg(feature = "servers")]
 impl<'fs> SdioClient<'fs> {
 	/// Connect to a MION getting ready to service SDIO requests.
 	///
@@ -203,12 +173,11 @@ impl<'fs> SdioClient<'fs> {
 				}
 				SdioControlPacketType::Read => {
 					let read_request = SdioControlReadRequest::try_from(packet)?;
-					let guard = SDIO_DATA_LOCK.lock().await;
 					serve_read_request(self.host_filesystem, &read_request, &data_sender).await?;
-					std::mem::drop(guard);
 				}
 				SdioControlPacketType::Write => {
-					let _write_request = SdioControlWriteRequest::try_from(packet)?;
+					let write_request = SdioControlWriteRequest::try_from(packet)?;
+					todo!("Unsure how to handle SDIO Write Request: {write_request:?}");
 				}
 				SdioControlPacketType::StartBlockChannel => {
 					info!(
@@ -216,7 +185,9 @@ impl<'fs> SdioClient<'fs> {
 					);
 				}
 				SdioControlPacketType::StartControlListeningChannel => {
-					info!("Got request to start CTRL Character Channel, but we've already started it...");
+					info!(
+						"Got request to start CTRL Character Channel, but we've already started it..."
+					);
 				}
 			}
 		}
@@ -289,9 +260,9 @@ impl<'fs> SdioClient<'fs> {
 				while let Some(packet) = receiver.recv().await {
 					if let Err(cause) = sink.send(packet).await {
 						error!(
-						?cause,
-						"Failed to send packet over SDIO Control, error in write channel, shutting down",
-					);
+							?cause,
+							"Failed to send packet over SDIO Control, error in write channel, shutting down",
+						);
 						break;
 					}
 				}
@@ -314,9 +285,9 @@ impl<'fs> SdioClient<'fs> {
 				while let Some(packet) = receiver.recv().await {
 					if let Err(cause) = sink.write(&packet).await {
 						error!(
-						?cause,
-						"Failed to send packet over SDIO Data, error in write channel, shutting down",
-					);
+							?cause,
+							"Failed to send packet over SDIO Data, error in write channel, shutting down",
+						);
 						break;
 					}
 
@@ -346,7 +317,6 @@ impl<'fs> SdioClient<'fs> {
 	}
 }
 
-#[cfg(feature = "servers")]
 impl SdioClient<'static> {
 	/// Actually end up serving SDIO Traffic to a CAT-DEV, or other SDIO type
 	/// of device.
@@ -415,13 +385,11 @@ impl SdioClient<'static> {
 					TaskBuilder::new()
 						.name("cat_dev::fsemul::sdio::serve_read_concurrently")
 						.spawn(async move {
-							let guard = SDIO_DATA_LOCK.lock().await;
 							if let Err(cause) =
 								serve_read_request(host_fs, &read_request, &cloned_sender).await
 							{
 								error!(?cause, "Failed to respond to read request, ignoring!");
 							}
-							std::mem::drop(guard);
 						})
 						.map_err(CatBridgeError::SpawnFailure)?;
 				}
@@ -434,7 +402,9 @@ impl SdioClient<'static> {
 					);
 				}
 				SdioControlPacketType::StartControlListeningChannel => {
-					info!("Got request to start CTRL Character Channel, but we've already started it...");
+					info!(
+						"Got request to start CTRL Character Channel, but we've already started it..."
+					);
 				}
 			}
 		}

@@ -16,7 +16,7 @@ resolver = "3"
 bytes = "^1.10.0"
 fnv = "^1.0.7"
 futures = "^0.3.31"
-mac_address = "^1.1.7"
+mac_address = "^1.1.8"
 miette = { version = "^7.5.0", features = ["fancy"] }
 network-interface = "^2.0.0"
 time = "^0.3.37"
@@ -26,7 +26,7 @@ valuable = { version = "^0.1.1", features = ["derive"] }
 
 [workspace.package]
 authors = ["Cynthia <cynthia@coan.dev>"]
-edition = "2021"
+edition = "2024"
 license = "MIT"
 repository = "https://github.com/rem-verse/sprig"
 version = "0.0.9"

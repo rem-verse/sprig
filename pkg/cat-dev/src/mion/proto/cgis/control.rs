@@ -59,7 +59,7 @@ impl SetParameter {
 	#[must_use]
 	pub fn get_value_as_string(&self) -> String {
 		match self {
-			Self::AtapiPort(ref port) => format!("{port}"),
+			Self::AtapiPort(port) => format!("{port}"),
 		}
 	}
 }

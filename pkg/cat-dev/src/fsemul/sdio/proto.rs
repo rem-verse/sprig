@@ -103,7 +103,7 @@ impl TryFrom<u8> for SdioControlPacketType {
 }
 
 /// Handle a Read Request coming over the SDIO Control port.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SdioControlReadRequest {
 	lba: u32,
 	blocks: u32,
@@ -302,7 +302,7 @@ impl Valuable for SdioControlReadRequest {
 }
 
 /// Handle a Write Request coming over the SDIO Control port.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SdioControlWriteRequest {
 	lba: u32,
 	blocks: u32,
@@ -447,6 +447,24 @@ impl TryFrom<Bytes> for SdioControlWriteRequest {
 			blocks,
 			channel,
 		})
+	}
+}
+
+impl From<&SdioControlWriteRequest> for Bytes {
+	fn from(value: &SdioControlWriteRequest) -> Self {
+		let mut serialized = BytesMut::with_capacity(512);
+		serialized.put_u32_le(1);
+		serialized.put_u32_le(value.lba);
+		serialized.put_u32_le(value.blocks);
+		serialized.put_u32_le(value.channel);
+		serialized.extend_from_slice(&[0; 0x1F0]);
+		serialized.freeze()
+	}
+}
+
+impl From<SdioControlWriteRequest> for Bytes {
+	fn from(value: SdioControlWriteRequest) -> Self {
+		Self::from(&value)
 	}
 }
 
@@ -609,18 +627,18 @@ pub mod read_packet_temp_will_break {
 	use crate::{
 		errors::{CatBridgeError, FSError, NetworkError},
 		fsemul::{
+			HostFilesystem,
 			dlf::DiskLayoutFile,
 			sdio::{
 				errors::SDIOProtocolError,
-				proto::{SdioControlReadRequest, SDIO_BLOCKS_PER_PACKET, SDIO_BLOCK_SIZE},
+				proto::{SDIO_BLOCK_SIZE, SDIO_BLOCKS_PER_PACKET, SdioControlReadRequest},
 			},
-			HostFilesystem,
 		},
 	};
 	use bytes::{Bytes, BytesMut};
 	use std::path::PathBuf;
 	use tokio::{
-		fs::{read as fs_read, File},
+		fs::{File, read as fs_read},
 		io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom},
 		sync::mpsc::Sender,
 	};
@@ -816,10 +834,12 @@ mod unit_tests {
 			let mut buff = BytesMut::zeroed(511);
 
 			assert_eq!(
-        codec.decode(&mut buff).expect("Failed to call SDIO Control Codec"),
-        None,
-        "Codec could not successfully decode a buffer that was one byte too short for SDIO Control.",
-      );
+				codec
+					.decode(&mut buff)
+					.expect("Failed to call SDIO Control Codec"),
+				None,
+				"Codec could not successfully decode a buffer that was one byte too short for SDIO Control.",
+			);
 		}
 
 		// owo are you sure this data can fit???
@@ -831,15 +851,19 @@ mod unit_tests {
 			buff.extend(vec![0x2; 512]);
 
 			assert_eq!(
-        codec.decode(&mut buff).expect("Failed to call SDIO Control Codec"),
-        Some(BytesMut::from(&*vec![0x1_u8; 512])),
-        "Codec did not successfully decode first part of a too large packet to SDIO Control.",
-      );
+				codec
+					.decode(&mut buff)
+					.expect("Failed to call SDIO Control Codec"),
+				Some(BytesMut::from(&*vec![0x1_u8; 512])),
+				"Codec did not successfully decode first part of a too large packet to SDIO Control.",
+			);
 			assert_eq!(
-        codec.decode(&mut buff).expect("Failed to call SDIO Control Codec"),
-        Some(BytesMut::from(&*vec![0x2_u8; 512])),
-        "Codec did not successfully decode second part of a too large packet to SDIO Control."
-      );
+				codec
+					.decode(&mut buff)
+					.expect("Failed to call SDIO Control Codec"),
+				Some(BytesMut::from(&*vec![0x2_u8; 512])),
+				"Codec did not successfully decode second part of a too large packet to SDIO Control."
+			);
 		}
 
 		// owo okay

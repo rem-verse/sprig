@@ -34,7 +34,9 @@ pub enum MIONCGIErrors {
 	HtmlResponseMacExpectedButNotThere(MacParseError),
 	/// We could not find the `<body>` tags in a page that is supposed to return
 	/// HTML.
-	#[error("Could not parse HTML response could not find one of the body tags: `<body>`, or `</body>`: {0}")]
+	#[error(
+		"Could not parse HTML response could not find one of the body tags: `<body>`, or `</body>`: {0}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::mion::cgi::no_body_tag))]
 	HtmlResponseMissingBody(String),
 	#[error("Expected to find closing tag: {0}, in the rest of the HTML Body: {1}")]
@@ -48,10 +50,14 @@ pub enum MIONCGIErrors {
 	#[error("Could not find input with name: `{0}`, within HTML body: `{1}`")]
 	#[diagnostic(code(cat_dev::net::parse::mion::cgi::missing_tagged_input))]
 	HtmlResponseMissingTaggedInput(String, String),
-	#[error("Expected to find a string to help identify the version in the HTML ({0}) as part of the string ({1}), but did not find one.")]
+	#[error(
+		"Expected to find a string to help identify the version in the HTML ({0}) as part of the string ({1}), but did not find one."
+	)]
 	#[diagnostic(code(cat_dev::net::parse::mion::cgi::html_response_missing_version_prefix))]
 	HtmlResponseMissingVersionPart(String, String),
-	#[error("When fetching the versions of the MION we expect to find both the FW version, and the FPGA version, but only found the following versions: {0:?}")]
+	#[error(
+		"When fetching the versions of the MION we expect to find both the FW version, and the FPGA version, but only found the following versions: {0:?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::mion::cgi::html_response_missing_versions))]
 	HtmlResponseMissingVersions(Vec<String>),
 	/// We expected the HTML response to have one radio box checked out of all
@@ -61,7 +67,9 @@ pub enum MIONCGIErrors {
 	HtmlResponseNoRadioChecked(String),
 	/// We expected to find an item in a table `<tr>`/`<td>`, but were not able
 	/// to find one in the HTML response we got back.
-	#[error("Expected HTML Response to have a table item with prefix: {1}, but couldn't find one in: `{0}`")]
+	#[error(
+		"Expected HTML Response to have a table item with prefix: {1}, but couldn't find one in: `{0}`"
+	)]
 	HtmlResponseNoTableItemWithPrefix(String, String),
 	/// We expected this HTML response to have a number encoded as a string, but we
 	/// could not parse the string as a number.

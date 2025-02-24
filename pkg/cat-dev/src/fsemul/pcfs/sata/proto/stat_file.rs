@@ -5,7 +5,7 @@
 //! the handler call query type 5.
 
 use crate::errors::NetworkParseError;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 /// A packet to get information about an open file handle.
@@ -18,9 +18,33 @@ pub struct SataStatFilePacketBody {
 }
 
 impl SataStatFilePacketBody {
+	/// Create a new packet to STAT a particular file.
+	#[must_use]
+	pub const fn new(file_descriptor: i32) -> Self {
+		Self { file_descriptor }
+	}
+
 	#[must_use]
 	pub const fn file_descriptor(&self) -> i32 {
 		self.file_descriptor
+	}
+
+	pub const fn set_file_descriptor(&mut self, new_fd: i32) {
+		self.file_descriptor = new_fd;
+	}
+}
+
+impl From<&SataStatFilePacketBody> for Bytes {
+	fn from(value: &SataStatFilePacketBody) -> Self {
+		let mut buff = BytesMut::with_capacity(4);
+		buff.put_i32(value.file_descriptor);
+		buff.freeze()
+	}
+}
+
+impl From<SataStatFilePacketBody> for Bytes {
+	fn from(value: SataStatFilePacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 

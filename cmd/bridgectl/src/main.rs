@@ -40,11 +40,11 @@ use crate::{
 	utils::add_context_to,
 };
 use clap::{
-	error::{Error as ClapError, ErrorKind as ClapErrorKind},
 	Parser,
+	error::{Error as ClapError, ErrorKind as ClapErrorKind},
 };
 use log::install_logging_handlers;
-use miette::{miette, IntoDiagnostic};
+use miette::{IntoDiagnostic, miette};
 use std::path::PathBuf;
 use tracing::{error, info};
 
@@ -93,7 +93,9 @@ async fn main() {
 		} else {
 			error!(
 				"\n{:?}",
-				miette!("internal error: Failed to specify a single command, and didn't call `help` handler?"),
+				miette!(
+					"internal error: Failed to specify a single command, and didn't call `help` handler?"
+				),
 			);
 		}
 		std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);

@@ -29,15 +29,18 @@ pub static USE_JSON_OUTPUT: LazyLock<bool> =
 /// Expected Values: Empty, or a port number (0-65536).
 /// Type: [`u16`]
 pub static BRIDGE_CONTROL_PORT: LazyLock<Option<u16>> = LazyLock::new(|| {
-	env_var("BRIDGE_CONTROL_PORT_OVERRIDE").ok().and_then(|val| {
-		match val.parse::<u16>() {
+	env_var("BRIDGE_CONTROL_PORT_OVERRIDE")
+		.ok()
+		.and_then(|val| match val.parse::<u16>() {
 			Ok(val) => Some(val),
 			Err(cause) => {
-				warn!(?cause, "Not honoring environment variable `BRIDGE_CONTROL_PORT_OVERRIDE`, not a valid port number.");
+				warn!(
+					?cause,
+					"Not honoring environment variable `BRIDGE_CONTROL_PORT_OVERRIDE`, not a valid port number."
+				);
 				None
 			}
-		}
-	})
+		})
 });
 
 /// Set by `cafe`/`cafex`/`mochiato`, a way of specifying the bridge to
@@ -103,15 +106,18 @@ pub static BRIDGE_HOST_STATE_PATH: LazyLock<Option<PathBuf>> =
 /// Expected Values: Empty, or a number of seconds.
 /// Type: [`u64`]
 pub static BRIDGE_SCAN_TIMEOUT: LazyLock<Option<Duration>> = LazyLock::new(|| {
-	env_var("BRIDGE_SCAN_TIMEOUT_SECONDS").ok().and_then(|val| {
-		match val.parse::<u64>() {
+	env_var("BRIDGE_SCAN_TIMEOUT_SECONDS")
+		.ok()
+		.and_then(|val| match val.parse::<u64>() {
 			Ok(val) => Some(Duration::from_secs(val)),
 			Err(cause) => {
-				warn!(?cause, "Not honoring environment variable `BRIDGE_SCAN_TIMEOUT_SECONDS`, not a valid number.");
+				warn!(
+					?cause,
+					"Not honoring environment variable `BRIDGE_SCAN_TIMEOUT_SECONDS`, not a valid number."
+				);
 				None
 			}
-		}
-	})
+		})
 });
 
 /// A way of specifying the serial port to read logs from so you don't have to
@@ -254,13 +260,16 @@ pub static SDIO_DISABLE_LOAD_BEARING_SLEEP: LazyLock<bool> = LazyLock::new(|| {
 /// when you don't have a physical connection to the cat-dev. It is truly just
 /// a 1:1 mapping.
 pub static SESSION_DEBUG_OUT_PORT: LazyLock<Option<u16>> = LazyLock::new(|| {
-	env_var("SESSION_DEBUG_OUT_PORT").ok().and_then(|val| {
-		match val.parse::<u16>() {
+	env_var("SESSION_DEBUG_OUT_PORT")
+		.ok()
+		.and_then(|val| match val.parse::<u16>() {
 			Ok(val) => Some(val),
 			Err(cause) => {
-				warn!(?cause, "Not honoring environment variable `SESSION_DEBUG_OUT_PORT`, not a valid port number.");
+				warn!(
+					?cause,
+					"Not honoring environment variable `SESSION_DEBUG_OUT_PORT`, not a valid port number."
+				);
 				None
 			}
-		}
-	})
+		})
 });

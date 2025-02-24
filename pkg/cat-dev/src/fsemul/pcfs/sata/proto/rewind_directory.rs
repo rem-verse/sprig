@@ -4,7 +4,7 @@
 //! directory regardless of where it is.
 
 use crate::errors::NetworkParseError;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[cfg(feature = "servers")]
@@ -12,11 +12,9 @@ use crate::{
 	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::HostFilesystem,
-		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
+		pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
 	},
 };
-#[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
 #[cfg(feature = "servers")]
 use tracing::debug;
 
@@ -31,9 +29,19 @@ pub struct SataRewindDirPacketBody {
 }
 
 impl SataRewindDirPacketBody {
+	/// Create a new rewind directory packet.
+	#[must_use]
+	pub const fn new(file_descriptor: i32) -> Self {
+		Self { file_descriptor }
+	}
+
 	#[must_use]
 	pub const fn file_descriptor(&self) -> i32 {
 		self.file_descriptor
+	}
+
+	pub const fn set_file_descriptor(&mut self, new_fd: i32) {
+		self.file_descriptor = new_fd;
 	}
 
 	/// Actually process by rewinding an open directory iterator.
@@ -76,6 +84,20 @@ impl SataRewindDirPacketBody {
 		let mut buff = BytesMut::with_capacity(4);
 		buff.put_u32(error_code);
 		Ok(construct_sata_response(request_header, 0, buff.freeze())?)
+	}
+}
+
+impl From<&SataRewindDirPacketBody> for Bytes {
+	fn from(value: &SataRewindDirPacketBody) -> Self {
+		let mut buff = BytesMut::with_capacity(4);
+		buff.put_i32(value.file_descriptor);
+		buff.freeze()
+	}
+}
+
+impl From<SataRewindDirPacketBody> for Bytes {
+	fn from(value: SataRewindDirPacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 

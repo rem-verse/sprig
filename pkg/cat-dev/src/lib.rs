@@ -8,6 +8,8 @@
 pub mod errors;
 pub mod fsemul;
 pub mod mion;
+#[cfg(any(feature = "clients", feature = "servers"))]
+pub mod net;
 #[cfg(feature = "serial")]
 #[macro_use]
 pub mod serial;

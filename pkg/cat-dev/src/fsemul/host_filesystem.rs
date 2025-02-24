@@ -2,14 +2,16 @@
 //! client.
 
 use crate::{
+	TitleID,
 	errors::{CatBridgeError, FSError},
 	fsemul::{
 		bsf::BootSystemFile, dlf::DiskLayoutFile, errors::FSEmulFSError, pcfs::errors::PCFSApiError,
 	},
-	TitleID,
 };
 use bytes::{Bytes, BytesMut};
-use scc::{hash_map::OccupiedEntry as CMOccupiedEntry, HashMap as ConcurrentMap};
+use scc::{
+	HashMap as ConcurrentMap, HashSet as ConcurrentSet, hash_map::OccupiedEntry as CMOccupiedEntry,
+};
 use std::{
 	collections::HashMap,
 	hash::RandomState,
@@ -19,8 +21,8 @@ use std::{
 };
 use tokio::{
 	fs::{
-		create_dir_all, read_dir, remove_file, rename, write as fs_write, File, OpenOptions,
-		ReadDir,
+		File, OpenOptions, ReadDir, create_dir_all, read_dir, remove_file, rename,
+		write as fs_write,
 	},
 	io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
@@ -49,6 +51,16 @@ pub struct HostFilesystem {
 	///
 	/// This contains a value of (read directory, is end, path)
 	open_folder_handles: ConcurrentMap<i32, (ReadDir, bool, PathBuf)>,
+	/// A set of folders that we've "marked" as read-only.
+	///
+	/// We don't actually synchronize this to the filesystem because the original
+	/// cafe-sdk was written for Windows 7 which silently ignores "Read-Only"
+	/// attributes on directories. Still allowing you to create files within
+	/// directories, modify them, etc.
+	///
+	/// This is not the case on older windows distributions, unix based distros,
+	/// or similar.
+	folders_marked_read_only: ConcurrentSet<PathBuf>,
 }
 
 impl HostFilesystem {
@@ -120,6 +132,7 @@ impl HostFilesystem {
 
 		Ok(Self {
 			cafe_sdk_path,
+			folders_marked_read_only: ConcurrentSet::new(),
 			open_file_handles: ConcurrentMap::new(),
 			open_folder_handles: ConcurrentMap::new(),
 		})
@@ -283,6 +296,29 @@ impl HostFilesystem {
 			.insert(fake_fd, (dhandle, false, path.clone()))
 			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
 		Ok(fake_fd)
+	}
+
+	/// Mark a directory as being 'read-only' for this session.
+	///
+	/// ## Errors
+	///
+	/// If we could not actually insert the directory into the read only map.
+	pub async fn mark_directory_read_only(&self, path: PathBuf) -> Result<(), FSError> {
+		self.folders_marked_read_only
+			.insert_async(path)
+			.await
+			.map_err(|_| IOError::other("Folder could not be marked read-only?"))
+			.map_err(FSError::IO)
+	}
+
+	/// Mark a directory as being 'read-only' for this session.
+	pub async fn ensure_directory_not_read_only(&self, path: &PathBuf) {
+		self.folders_marked_read_only.remove_async(path).await;
+	}
+
+	/// Check if a directory is marked as being read only.
+	pub async fn directory_is_read_only(&self, path: &PathBuf) -> bool {
+		self.folders_marked_read_only.contains_async(path).await
 	}
 
 	/// Get the next filename/foldername available in a particular folder, and
@@ -841,8 +877,8 @@ impl Valuable for FilesystemLocation {
 #[cfg(test)]
 pub mod test_helpers {
 	use super::*;
-	use std::fs::{create_dir_all, File};
-	use tempfile::{tempdir, TempDir};
+	use std::fs::{File, create_dir_all};
+	use tempfile::{TempDir, tempdir};
 
 	/// Test helper that creates a simple host filesystem.
 	#[allow(
@@ -1013,7 +1049,9 @@ mod unit_tests {
 			fs.firmware_file_path(),
 			HostFilesystem::join_many(
 				tempdir.path(),
-				["data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img"],
+				[
+					"data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img"
+				],
 			),
 		);
 
@@ -1101,15 +1139,16 @@ mod unit_tests {
 		out_of_path.pop();
 
 		// We shouldn't be able to resolve paths outside of our directory.
-		assert!(fs
-			.resolve_path(
+		assert!(
+			fs.resolve_path(
 				&out_of_path
 					.clone()
 					.into_os_string()
 					.into_string()
 					.expect("Failed to convert pathbuf to string!")
 			)
-			.is_err());
+			.is_err()
+		);
 		assert!(fs.resolve_path("/%MLC_EMU_DIR/../../../").is_err());
 
 		#[cfg(unix)]
@@ -1119,15 +1158,16 @@ mod unit_tests {
 			let mut tempdir_symlink = PathBuf::from(tempdir.path());
 			tempdir_symlink.push("symlink");
 			symlink(out_of_path, tempdir_symlink.clone()).expect("Failed to do symlink!");
-			assert!(fs
-				.resolve_path(&format!(
+			assert!(
+				fs.resolve_path(&format!(
 					"{}/symlink",
 					tempdir_symlink
 						.into_os_string()
 						.into_string()
 						.expect("tempdir symlink wasn't utf8?"),
 				))
-				.is_err());
+				.is_err()
+			);
 		}
 
 		#[cfg(target_os = "windows")]
@@ -1137,15 +1177,16 @@ mod unit_tests {
 			let mut tempdir_symlink = PathBuf::from(tempdir.path());
 			tempdir_symlink.push("symlink");
 			symlink_dir(out_of_path, tempdir_symlink.clone()).expect("Failed to do symlink!");
-			assert!(fs
-				.resolve_path(&format!(
+			assert!(
+				fs.resolve_path(&format!(
 					"{}/symlink",
 					tempdir_symlink
 						.into_os_string()
 						.into_string()
 						.expect("tempdir symlink wasn't utf8?"),
 				))
-				.is_err());
+				.is_err()
+			);
 		}
 	}
 
@@ -1286,51 +1327,59 @@ mod unit_tests {
 			.expect("Failed to create file to use!");
 
 		let dfd = fs.open_folder(&path).await.expect("Failed to open file!");
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.1!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.2!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.3!")
-			.is_some());
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 1.1!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 1.2!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 1.3!")
+				.is_some()
+		);
 		// We should have hit the end...
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.4!")
-			.is_none());
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 1.4!")
+				.is_none()
+		);
 		// We can call as many times as we want.
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.5!")
-			.is_none());
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 1.5!")
+				.is_none()
+		);
 		// Rewind to get to reads again!
 		fs.reverse_directory(dfd)
 			.await
 			.expect("Failed to reverse directory search!");
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 2.1!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 2.2!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 2.3!")
-			.is_some());
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 2.1!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 2.2!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd)
+				.await
+				.expect("Failed to query for next in folder! 2.3!")
+				.is_some()
+		);
 	}
 }

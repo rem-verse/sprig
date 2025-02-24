@@ -2,8 +2,8 @@
 //!
 //! This creates folders on disk, and nothing more.
 
-use crate::errors::NetworkParseError;
-use bytes::Bytes;
+use crate::{errors::NetworkParseError, fsemul::pcfs::errors::PCFSApiError};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::ffi::CStr;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
@@ -11,15 +11,13 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 use crate::{
 	errors::CatBridgeError,
 	fsemul::{
-		host_filesystem::ResolvedLocation,
-		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 		HostFilesystem,
+		host_filesystem::ResolvedLocation,
+		pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
 	},
 };
 #[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
-#[cfg(feature = "servers")]
-use tokio::fs::{create_dir_all, set_permissions};
+use tokio::fs::create_dir_all;
 #[cfg(feature = "servers")]
 use tracing::{debug, error};
 
@@ -48,13 +46,60 @@ pub struct SataCreateDirectoryPacketBody {
 }
 
 impl SataCreateDirectoryPacketBody {
+	/// Attempt to construct a new create directory packet.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn new(path: String, set_write_mode: bool) -> Result<Self, PCFSApiError> {
+		if path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(path));
+		}
+
+		Ok(Self {
+			path,
+			set_write_mode,
+		})
+	}
+
 	#[must_use]
 	pub fn path(&self) -> &str {
 		self.path.as_str()
 	}
+
+	/// Update the path to send in this particular create directory packet.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn set_path(&mut self, new_path: String) -> Result<(), PCFSApiError> {
+		if new_path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(new_path));
+		}
+
+		self.path = new_path;
+		Ok(())
+	}
+
 	#[must_use]
-	pub const fn set_write_mode(&self) -> bool {
+	pub const fn will_set_write_mode(&self) -> bool {
 		self.set_write_mode
+	}
+
+	/// Update the `set_write_mode` flag, which determines if we'll set the file
+	/// as writable or not.
+	pub const fn set_write_mode(&mut self, will_set: bool) {
+		self.set_write_mode = will_set;
 	}
 
 	/// Handle creating a directory upon request.
@@ -104,29 +149,29 @@ impl SataCreateDirectoryPacketBody {
 				return Self::construct_error(request_header, FS_ERROR);
 			}
 		}
-		// Mark as read only.
-		if !self.set_write_mode {
-			let Ok(metadata) = fs_location.resolved_path().metadata() else {
-				debug!(
-					packet.path = self.path.as_str(),
-					packet.typ = "PCFSSrvCreateDirectory",
-					"Failed to get paths metadata!",
-				);
-				return Self::construct_error(request_header, FS_ERROR);
-			};
-			let mut perms = metadata.permissions();
-			perms.set_readonly(true);
-			if set_permissions(fs_location.resolved_path(), perms)
-				.await
-				.is_err()
-			{
-				debug!(
-					packet.path = self.path.as_str(),
-					packet.typ = "PCFSSrvCreateDirectory",
-					"Failed to update path permissions!",
-				);
-				return Self::construct_error(request_header, FS_ERROR);
-			}
+
+		// Don't set folders as read-only.
+		//
+		// Windows 7 (where Cafe-SDK targeted), allows you to create files
+		// within a "read only" directory. The SDK depends on this "buggy"
+		// behavior. It will set read only attributes on a directory, and then
+		// attempt to create files in that directory anyway.
+		//
+		// Thanks Windows :)
+		if self.set_write_mode {
+			host_filesystem
+				.ensure_directory_not_read_only(fs_location.resolved_path())
+				.await;
+		} else if let Err(cause) = host_filesystem
+			.mark_directory_read_only(fs_location.resolved_path().clone())
+			.await
+		{
+			error!(
+			  ?cause,
+			  path = %fs_location.resolved_path().display(),
+			  "Failed to mark directory as read-only for PCFS.",
+			);
+			return Self::construct_error(request_header, FS_ERROR);
 		}
 
 		Ok(construct_sata_response(
@@ -177,6 +222,24 @@ impl TryFrom<Bytes> for SataCreateDirectoryPacketBody {
 			path: path_c_str.to_str()?.to_owned(),
 			set_write_mode: mode & 0x222 != 0,
 		})
+	}
+}
+
+impl From<&SataCreateDirectoryPacketBody> for Bytes {
+	fn from(value: &SataCreateDirectoryPacketBody) -> Self {
+		let mut result = BytesMut::with_capacity(0x204);
+		result.extend_from_slice(value.path.as_bytes());
+		// These are C Strings so we need a NUL terminator.
+		// Pad with `0`, til we get a full path with a nul terminator.
+		result.extend(BytesMut::zeroed(0x200 - result.len()));
+		result.put_u32(if value.set_write_mode { 0x666 } else { 0x444 });
+		result.freeze()
+	}
+}
+
+impl From<SataCreateDirectoryPacketBody> for Bytes {
+	fn from(value: SataCreateDirectoryPacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 

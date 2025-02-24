@@ -1,12 +1,12 @@
 //! Handles the `add`, or `update` command for `bridgectl`.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{
 		get_targeted_bridge_ip, get_targeted_bridge_name, lease_bridge_config_mut,
 	},
 	exit_codes::{ADD_COULD_NOT_SAVE_TO_DISK, ADD_COULD_NOT_UPSERT},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use miette::miette;
 use tracing::{error, info};
@@ -36,7 +36,9 @@ pub async fn handle_add_or_update(set_default: bool) {
 					[
 						cause.into(),
 						miette!(
-							help = format!("Arguments were: Bridge Name: {bridge_name} / Bridge IP: {bridge_ip}"),
+							help = format!(
+								"Arguments were: Bridge Name: {bridge_name} / Bridge IP: {bridge_ip}"
+							),
 							"Bridge Names must be ASCII, and between 1-255 characters long.",
 						),
 					]

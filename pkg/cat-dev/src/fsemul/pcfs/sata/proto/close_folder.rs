@@ -3,7 +3,7 @@
 //! This closes an already existing open folder given just a handle.
 
 use crate::errors::NetworkParseError;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[cfg(feature = "servers")]
@@ -11,11 +11,9 @@ use crate::fsemul::{
 	host_filesystem::HostFilesystem,
 	pcfs::{
 		errors::PCFSApiError,
-		sata_proto::{construct_sata_response, SataPacketHeader},
+		sata::proto::{SataPacketHeader, construct_sata_response},
 	},
 };
-#[cfg(feature = "servers")]
-use bytes::BytesMut;
 
 /// A packet to close a particular folder given a file descriptor.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,9 +22,21 @@ pub struct SataCloseFolderPacketBody {
 }
 
 impl SataCloseFolderPacketBody {
+	/// Create a new close folder packet.
+	#[must_use]
+	pub const fn new(fd: i32) -> Self {
+		Self {
+			file_descriptor: fd,
+		}
+	}
+
 	#[must_use]
 	pub const fn file_descriptor(&self) -> i32 {
 		self.file_descriptor
+	}
+
+	pub const fn set_file_descriptor(&mut self, new_fd: i32) {
+		self.file_descriptor = new_fd;
 	}
 
 	/// Handle closing a folder that was previously open.
@@ -71,6 +81,20 @@ impl TryFrom<Bytes> for SataCloseFolderPacketBody {
 		Ok(Self {
 			file_descriptor: fd,
 		})
+	}
+}
+
+impl From<&SataCloseFolderPacketBody> for Bytes {
+	fn from(value: &SataCloseFolderPacketBody) -> Self {
+		let mut body = BytesMut::with_capacity(4);
+		body.put_i32(value.file_descriptor);
+		body.freeze()
+	}
+}
+
+impl From<SataCloseFolderPacketBody> for Bytes {
+	fn from(value: SataCloseFolderPacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 

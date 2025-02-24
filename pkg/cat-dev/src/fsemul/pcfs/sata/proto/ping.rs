@@ -5,13 +5,13 @@
 //! features are enabled.
 
 use crate::errors::NetworkParseError;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[cfg(feature = "servers")]
 use crate::fsemul::pcfs::{
 	errors::PCFSApiError,
-	sata_proto::{construct_sata_response, SataCommandInfo, SataPacketHeader},
+	sata::proto::{SataCommandInfo, SataPacketHeader, construct_sata_response},
 };
 
 /// A ZST that represents a ping packet coming in.
@@ -19,6 +19,11 @@ use crate::fsemul::pcfs::{
 pub struct SataPingPacketBody;
 
 impl SataPingPacketBody {
+	#[must_use]
+	pub const fn new() -> Self {
+		Self
+	}
+
 	/// Handle a ping packet.
 	///
 	/// ## Errors
@@ -44,6 +49,12 @@ impl SataPingPacketBody {
 	}
 }
 
+impl Default for SataPingPacketBody {
+	fn default() -> Self {
+		Self
+	}
+}
+
 impl TryFrom<Bytes> for SataPingPacketBody {
 	type Error = NetworkParseError;
 
@@ -56,6 +67,18 @@ impl TryFrom<Bytes> for SataPingPacketBody {
 		}
 
 		Ok(Self)
+	}
+}
+
+impl From<&SataPingPacketBody> for Bytes {
+	fn from(_: &SataPingPacketBody) -> Self {
+		Bytes::new()
+	}
+}
+
+impl From<SataPingPacketBody> for Bytes {
+	fn from(_: SataPingPacketBody) -> Self {
+		Bytes::new()
 	}
 }
 
@@ -96,8 +119,8 @@ impl SataPongBody {
 	}
 }
 
-impl From<SataPongBody> for Bytes {
-	fn from(value: SataPongBody) -> Self {
+impl From<&SataPongBody> for Bytes {
+	fn from(value: &SataPongBody) -> Self {
 		let mut buff = BytesMut::with_capacity(8);
 
 		buff.put_u32(0x0); // Success! - This is a return code.
@@ -111,6 +134,46 @@ impl From<SataPongBody> for Bytes {
 		);
 
 		buff.freeze()
+	}
+}
+
+impl From<SataPongBody> for Bytes {
+	fn from(value: SataPongBody) -> Self {
+		Self::from(&value)
+	}
+}
+
+impl TryFrom<Bytes> for SataPongBody {
+	type Error = NetworkParseError;
+
+	fn try_from(mut value: Bytes) -> Result<Self, Self::Error> {
+		if value.len() < 0x8 {
+			return Err(NetworkParseError::FieldNotLongEnough(
+				"SataPongBody",
+				"Body",
+				0x8,
+				value.len(),
+				value,
+			));
+		}
+		if value.len() > 0x8 {
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"SataPongBody",
+				value.slice(0x8..),
+			));
+		}
+
+		// Get the return code.
+		let rc = value.get_u32();
+		if rc != 0 {
+			return Err(NetworkParseError::ErrorCode(rc));
+		}
+		let flags = value.get_u32();
+
+		Ok(Self {
+			fast_file_io_enabled: flags == 0xCAFE_0003 || flags == 0xCAFE_0001,
+			combined_send_recv_enabled: flags == 0xCAFE_0003 || flags == 0xCAFE_0002,
+		})
 	}
 }
 

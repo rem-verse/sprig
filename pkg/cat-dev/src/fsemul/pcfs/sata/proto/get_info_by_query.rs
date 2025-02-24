@@ -5,29 +5,30 @@
 //! give you either file information, the count of files in a directory, or
 //! the size of a particular file. Wow.
 
-use crate::{errors::NetworkParseError, fsemul::pcfs::errors::SataProtocolError};
-use bytes::Bytes;
+use crate::{
+	errors::NetworkParseError,
+	fsemul::pcfs::errors::{PCFSApiError, SataProtocolError},
+};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::ffi::CStr;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "clients")]
+use bytes::Buf;
 
 #[cfg(feature = "servers")]
 use crate::{
 	errors::{CatBridgeError, FSError},
 	fsemul::{
-		host_filesystem::{FilesystemLocation, ResolvedLocation},
-		pcfs::{
-			errors::PCFSApiError,
-			sata_proto::{construct_sata_response, SataPacketHeader},
-		},
 		HostFilesystem,
+		host_filesystem::{FilesystemLocation, ResolvedLocation},
+		pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
 	},
 };
 #[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
-#[cfg(feature = "servers")]
 use std::{
 	fs::read_dir,
-	path::Path,
+	path::PathBuf,
 	sync::LazyLock,
 	time::{Duration, SystemTime},
 };
@@ -77,17 +78,62 @@ pub struct SataGetInfoByQueryPacketBody {
 	/// - `%NETWORK`: <mounted network share path>
 	path: String,
 	/// The type of information we're looking for.
-	typ: QueryType,
+	typ: PCFSSataQueryType,
 }
 
 impl SataGetInfoByQueryPacketBody {
+	/// Attempt to construct a new packet to get info about some path.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn new(path: String, query_type: PCFSSataQueryType) -> Result<Self, PCFSApiError> {
+		if path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(path));
+		}
+
+		Ok(Self {
+			path,
+			typ: query_type,
+		})
+	}
+
 	#[must_use]
-	pub const fn query_type(&self) -> QueryType {
+	pub const fn query_type(&self) -> PCFSSataQueryType {
 		self.typ
 	}
+
+	pub const fn set_query_type(&mut self, new_type: PCFSSataQueryType) {
+		self.typ = new_type;
+	}
+
 	#[must_use]
 	pub fn path(&self) -> &str {
 		self.path.as_str()
+	}
+
+	/// Update the path to send in this particular get info by query packet.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn set_path(&mut self, new_path: String) -> Result<(), PCFSApiError> {
+		if new_path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(new_path));
+		}
+
+		self.path = new_path;
+		Ok(())
 	}
 
 	/// Handle a Get Info Query request.
@@ -109,10 +155,16 @@ impl SataGetInfoByQueryPacketBody {
 		};
 
 		match self.typ {
-			QueryType::FreeDiskSpace => Self::handle_disk_space(request_header, final_location),
-			QueryType::SizeOfFolder => Self::handle_folder_size(request_header, final_location),
-			QueryType::FileCount => Self::handle_file_count(request_header, final_location),
-			QueryType::FileDetails => Self::handle_file_info(request_header, final_location).await,
+			PCFSSataQueryType::FreeDiskSpace => {
+				Self::handle_disk_space(request_header, final_location)
+			}
+			PCFSSataQueryType::SizeOfFolder => {
+				Self::handle_folder_size(request_header, final_location)
+			}
+			PCFSSataQueryType::FileCount => Self::handle_file_count(request_header, final_location),
+			PCFSSataQueryType::FileDetails => {
+				Self::handle_file_info(host_filesystem, request_header, final_location).await
+			}
 		}
 	}
 
@@ -141,6 +193,7 @@ impl SataGetInfoByQueryPacketBody {
 		};
 
 		Self::handle_file_info(
+			host_filesystem,
 			request_header,
 			ResolvedLocation::Filesystem(FilesystemLocation::new(path.clone(), path, true)),
 		)
@@ -153,7 +206,10 @@ impl SataGetInfoByQueryPacketBody {
 	///
 	/// If the path metadata can not be retrieved.
 	#[cfg(feature = "servers")]
-	pub fn info_for_path(path: &Path) -> Result<Bytes, FSError> {
+	pub async fn info_for_path(
+		host_filesystem: &HostFilesystem,
+		path: &PathBuf,
+	) -> Result<Bytes, FSError> {
 		let path_metadata = path.metadata()?;
 
 		let mut response = BytesMut::with_capacity(84);
@@ -162,12 +218,15 @@ impl SataGetInfoByQueryPacketBody {
 		} else {
 			0xAC00_0000
 		});
-		// Because this was built for windows, it must be one of the two.
-		response.put_u32(if path_metadata.permissions().readonly() {
-			0x444
+
+		let is_read_only = if path_metadata.is_dir() {
+			host_filesystem.directory_is_read_only(path).await
 		} else {
-			0x666
-		});
+			path_metadata.permissions().readonly()
+		};
+
+		// Because this was built for windows, it must be one of the two.
+		response.put_u32(if is_read_only { 0x444 } else { 0x666 });
 		// These are always hardcoded to 1.
 		response.put_u32(1);
 		response.put_u32(1);
@@ -304,9 +363,9 @@ impl SataGetInfoByQueryPacketBody {
 				Ok(p) => p,
 				Err(cause) => {
 					warn!(
-            ?cause,
-            "Failed to iterate over directory, skipping will not be included in file size.",
-          );
+						?cause,
+						"Failed to iterate over directory, skipping will not be included in file size.",
+					);
 					continue;
 				}
 			};
@@ -328,18 +387,16 @@ impl SataGetInfoByQueryPacketBody {
 			total_size = total_size.saturating_add(metadata.len());
 		}
 
-		let Ok(smol_space) = u32::try_from(total_size) else {
-			debug!(
+		if total_size > u64::from(u32::MAX) {
+			warn!(
 				packet.typ = "PCFSSrvGetInfo",
 				packet.sub_type = "handle_folder_size",
-				"Folder size is too large, cannot fit in u32!",
+				"Folder size is too large, cannot fit in u32 this may result in errors on a real cat-dev!",
 			);
-			return Ok(Self::error_with_code(request_header, SIZE_TOO_BIG_ERROR)?);
-		};
+		}
 		let mut response = BytesMut::with_capacity(88);
 		response.put_u32(0);
-		response.put_u32(0);
-		response.put_u32(smol_space);
+		response.put_u64(total_size);
 		response.extend_from_slice(&[0; 76]);
 		Ok(construct_sata_response(request_header, 0, response)?)
 	}
@@ -391,12 +448,19 @@ impl SataGetInfoByQueryPacketBody {
 		for result in iterator {
 			if let Err(cause) = result {
 				warn!(
-          ?cause,
-          "Failed to iterate over directory, skipping will not be included in file count.",
-        );
+					?cause,
+					"Failed to iterate over directory, skipping will not be included in file count.",
+				);
 				continue;
 			}
 
+			if count == u32::MAX {
+				warn!(
+					cause = "too_many_files",
+					"Failed to iterate over directory, file contains more than u32::MAX!",
+				);
+				return Ok(Self::error_with_code(request_header, SIZE_TOO_BIG_ERROR)?);
+			}
 			count += 1;
 		}
 
@@ -419,12 +483,13 @@ impl SataGetInfoByQueryPacketBody {
 	)]
 	#[cfg(feature = "servers")]
 	async fn handle_file_info(
+		fs: &HostFilesystem,
 		request_header: &SataPacketHeader,
 		location: ResolvedLocation,
 	) -> Result<Bytes, CatBridgeError> {
 		match location {
 			ResolvedLocation::Filesystem(ref filesystem) => {
-				let Ok(info) = Self::info_for_path(filesystem.resolved_path()) else {
+				let Ok(info) = Self::info_for_path(fs, filesystem.resolved_path()).await else {
 					debug!(
 						packet.typ = "PCFSSrvGetInfo",
 						packet.sub_type = "handle_file_info",
@@ -468,6 +533,24 @@ impl SataGetInfoByQueryPacketBody {
 	}
 }
 
+impl From<&SataGetInfoByQueryPacketBody> for Bytes {
+	fn from(value: &SataGetInfoByQueryPacketBody) -> Self {
+		let mut result = BytesMut::with_capacity(0x204);
+		result.extend_from_slice(value.path.as_bytes());
+		// These are C Strings so we need a NUL terminator.
+		// Pad with `0`, til we get a full path with a nul terminator.
+		result.extend(BytesMut::zeroed(0x200 - result.len()));
+		result.put_u32(u32::from(value.typ));
+		result.freeze()
+	}
+}
+
+impl From<SataGetInfoByQueryPacketBody> for Bytes {
+	fn from(value: SataGetInfoByQueryPacketBody) -> Self {
+		Self::from(&value)
+	}
+}
+
 impl TryFrom<Bytes> for SataGetInfoByQueryPacketBody {
 	type Error = NetworkParseError;
 
@@ -496,7 +579,7 @@ impl TryFrom<Bytes> for SataGetInfoByQueryPacketBody {
 
 		Ok(Self {
 			path: final_path,
-			typ: QueryType::try_from(query_type)?,
+			typ: PCFSSataQueryType::try_from(query_type)?,
 		})
 	}
 }
@@ -531,7 +614,7 @@ impl Valuable for SataGetInfoByQueryPacketBody {
 
 /// The type of information we're looking for from our request.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Valuable)]
-pub enum QueryType {
+pub enum PCFSSataQueryType {
 	/// Get the amount of free disk space available to the calling application.
 	FreeDiskSpace,
 	/// Get the size of files in a directory, recursively.
@@ -542,18 +625,18 @@ pub enum QueryType {
 	FileDetails,
 }
 
-impl From<QueryType> for u32 {
-	fn from(value: QueryType) -> Self {
+impl From<PCFSSataQueryType> for u32 {
+	fn from(value: PCFSSataQueryType) -> Self {
 		match value {
-			QueryType::FreeDiskSpace => 0,
-			QueryType::SizeOfFolder => 1,
-			QueryType::FileCount => 2,
-			QueryType::FileDetails => 5,
+			PCFSSataQueryType::FreeDiskSpace => 0,
+			PCFSSataQueryType::SizeOfFolder => 1,
+			PCFSSataQueryType::FileCount => 2,
+			PCFSSataQueryType::FileDetails => 5,
 		}
 	}
 }
 
-impl TryFrom<u32> for QueryType {
+impl TryFrom<u32> for PCFSSataQueryType {
 	type Error = SataProtocolError;
 
 	fn try_from(value: u32) -> Result<Self, Self::Error> {
@@ -564,6 +647,245 @@ impl TryFrom<u32> for QueryType {
 			5 => Ok(Self::FileDetails),
 			val => Err(SataProtocolError::UnknownGetInfoQueryType(val)),
 		}
+	}
+}
+
+#[cfg(feature = "clients")]
+/// A response that came from a particular query response.
+///
+/// These depends on the query type that was actively passed in. Most paths
+/// just return a very basic "size" (e.g. file count, or file length, etc.).
+/// However the file stat query type actually returns all the information about
+/// a particular path.
+pub enum PCFSSataQueryResponse {
+	/// A size response that is guaranteed to fit within a u32.
+	///
+	/// Query types that return this:
+	///
+	/// - [`PCFSSataQueryType::FileCount`]
+	SmallSize(u32),
+	/// A size response that is guaranteed to fit within a u64.
+	///
+	/// Query types that return this:
+	///
+	/// - [`PCFSSataQueryType::SizeOfFolder`]
+	/// - [`PCFSSataQueryType::FreeDiskSpace`]
+	LargeSize(u64),
+	/// All the info about a particular file path.
+	///
+	/// Query types that return this:
+	///
+	/// - [`PCFSSataQueryType::FileDetails`]
+	FDInfo(PCFSSataFdInfo),
+}
+
+#[cfg(feature = "clients")]
+impl PCFSSataQueryResponse {
+	/// Try to read a [`PCFSSataQueryResponse::SmallSize`] from a full response
+	/// body.
+	///
+	/// ## Errors
+	///
+	/// If the response had an error code, or we could not get all of the [`u32`]
+	/// value of the body.
+	pub fn try_from_small(mut value: Bytes) -> Result<Self, NetworkParseError> {
+		let rc = value.get_u32();
+		if rc != 0 {
+			return Err(NetworkParseError::ErrorCode(rc));
+		}
+
+		let smol = value.get_u32();
+
+		Ok(Self::SmallSize(smol))
+	}
+
+	/// Try to read a [`PCFSSataQueryResponse::LargeSize`] from a full response
+	/// body.
+	///
+	/// ## Errors
+	///
+	/// If the response had an error code, or we could not get all of the [`u64`]
+	/// value of the body.
+	pub fn try_from_large(mut value: Bytes) -> Result<Self, NetworkParseError> {
+		let rc = value.get_u32();
+		if rc != 0 {
+			return Err(NetworkParseError::ErrorCode(rc));
+		}
+
+		let larg = value.get_u64();
+
+		Ok(Self::LargeSize(larg))
+	}
+
+	/// Try to read a [`PCFSSataQueryResponse::FDInfo`] from a full response
+	/// body.
+	///
+	/// ## Errors
+	///
+	/// If the response had an error code, or we could not get the file info from
+	/// the file.
+	pub fn try_from_fd_info(mut value: Bytes) -> Result<Self, NetworkParseError> {
+		let rc = value.get_u32();
+		if rc != 0 {
+			return Err(NetworkParseError::ErrorCode(rc));
+		}
+
+		let fd_info = PCFSSataFdInfo::try_from(value)?;
+
+		Ok(Self::FDInfo(fd_info))
+	}
+}
+
+#[cfg(feature = "clients")]
+#[derive(Clone, Debug, PartialEq, Eq, Valuable)]
+/// The info related to the file/directory of the path queried.
+pub struct PCFSSataFdInfo {
+	/// The raw underlying flags for the file/directory at the path queried.
+	file_or_folder_flags: u32,
+	/// The permissions bits for the file/directory at the path queried.
+	perms: u32,
+	/// The length of the file if this is an actual file, otherwise it _should_
+	/// be set to 0.
+	file_length: u32,
+	/// A FAT-TS like timestamp for when this path was created.
+	created_timestamp: u64,
+	/// A FAT-TS like timestamp for when this path was last updated.
+	last_updated_timestamp: u64,
+}
+
+#[cfg(feature = "clients")]
+impl PCFSSataFdInfo {
+	/// Get the raw file or folder type flags for a particular path.
+	#[must_use]
+	pub const fn flags(&self) -> u32 {
+		self.file_or_folder_flags
+	}
+
+	/// Check if this path actually exists on disk.
+	#[must_use]
+	pub const fn exists(&self) -> bool {
+		(self.file_or_folder_flags & 0x2000_0000) != 0
+	}
+
+	/// Check if this path was interpreted as a file.
+	#[must_use]
+	pub const fn is_file(&self) -> bool {
+		(self.file_or_folder_flags & 0x8000_0000) == 0
+	}
+
+	/// Check if this path was interpreted as a directory.
+	#[must_use]
+	pub const fn is_directory(&self) -> bool {
+		!self.is_file()
+	}
+
+	/// Get the unix permissions that exists on this file.
+	///
+	/// Given this is based originally on a windows filesystem, which really only
+	/// has a natural equivalent for read only flags. You will either get
+	/// `0x666`, or `0x444`.
+	#[must_use]
+	pub const fn permissions(&self) -> u32 {
+		self.perms
+	}
+
+	/// The size of a file, if we are actually pointing at a file.
+	#[must_use]
+	pub const fn file_size(&self) -> Option<u32> {
+		if self.is_file() {
+			Some(self.file_length)
+		} else {
+			None
+		}
+	}
+
+	/// A FAT-like timestamp that may be wrapped around.
+	///
+	/// Access the raw underlying value.
+	#[must_use]
+	pub const fn raw_created_timestamp(&self) -> u64 {
+		self.created_timestamp
+	}
+
+	/// A FAT-like timestamp that may be wrapped around.
+	///
+	/// Access the raw underlying value.
+	#[must_use]
+	pub const fn raw_last_updated_timestamp(&self) -> u64 {
+		self.last_updated_timestamp
+	}
+}
+
+#[cfg(feature = "clients")]
+impl From<&PCFSSataFdInfo> for Bytes {
+	fn from(value: &PCFSSataFdInfo) -> Self {
+		let mut buff = BytesMut::with_capacity(84);
+		buff.put_u32(value.file_or_folder_flags);
+		buff.put_u32(value.perms);
+		buff.put_u32(1);
+		buff.put_u32(1);
+		buff.put_u32(value.file_length);
+		buff.put_u32(0);
+		buff.put_u32(0xE8);
+		buff.put_u32(0xDA6F_F000);
+		buff.put_u32(0);
+		buff.put_u64(value.created_timestamp);
+		buff.put_u64(value.last_updated_timestamp);
+		buff.extend_from_slice(&[0; 32]);
+		buff.freeze()
+	}
+}
+#[cfg(feature = "clients")]
+impl From<PCFSSataFdInfo> for Bytes {
+	fn from(value: PCFSSataFdInfo) -> Self {
+		Self::from(&value)
+	}
+}
+
+#[cfg(feature = "clients")]
+impl TryFrom<Bytes> for PCFSSataFdInfo {
+	type Error = NetworkParseError;
+
+	fn try_from(mut value: Bytes) -> Result<Self, Self::Error> {
+		if value.len() < 84 {
+			return Err(NetworkParseError::FieldNotLongEnough(
+				"PCFSSataFdInfo",
+				"Body",
+				84,
+				value.len(),
+				value,
+			));
+		}
+		if value.len() > 84 {
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"PCFSSataFdInfoBody",
+				value.slice(84..),
+			));
+		}
+
+		let fd_flags = value.get_u32();
+		let unix_perms = value.get_u32();
+		// skip two u32 that should always be 1
+		_ = value.get_u32();
+		_ = value.get_u32();
+		let file_size = value.get_u32();
+		// skip 4 u32's that should be various values
+		_ = value.get_u32();
+		_ = value.get_u32();
+		_ = value.get_u32();
+		_ = value.get_u32();
+		// Get the timestamps.
+		let created_ts = value.get_u64();
+		let updated_ts = value.get_u64();
+		// 32 0's
+
+		Ok(Self {
+			file_or_folder_flags: fd_flags,
+			perms: unix_perms,
+			file_length: file_size,
+			created_timestamp: created_ts,
+			last_updated_timestamp: updated_ts,
+		})
 	}
 }
 
@@ -580,12 +902,12 @@ mod unit_tests {
 	#[test]
 	pub fn query_types_to_and_fro() {
 		for qt in vec![
-			QueryType::FreeDiskSpace,
-			QueryType::SizeOfFolder,
-			QueryType::FileCount,
-			QueryType::FileDetails,
+			PCFSSataQueryType::FreeDiskSpace,
+			PCFSSataQueryType::SizeOfFolder,
+			PCFSSataQueryType::FileCount,
+			PCFSSataQueryType::FileDetails,
 		] {
-			assert_eq!(Ok(qt), QueryType::try_from(u32::from(qt)));
+			assert_eq!(Ok(qt), PCFSSataQueryType::try_from(u32::from(qt)));
 		}
 	}
 
@@ -598,7 +920,7 @@ mod unit_tests {
 		let (_tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%MLC_EMU_DIR/".to_owned(),
-			typ: QueryType::FreeDiskSpace,
+			typ: PCFSSataQueryType::FreeDiskSpace,
 		};
 		let mocked_header = SataPacketHeader {
 			packet_data_len: 0,
@@ -622,7 +944,9 @@ mod unit_tests {
 			"RC of free disk space must be all 0's!"
 		);
 		assert_ne!(
-			[space[4], space[5], space[6], space[7], space[8], space[9], space[10], space[11]],
+			[
+				space[4], space[5], space[6], space[7], space[8], space[9], space[10], space[11]
+			],
 			[0, 0, 0, 0, 0, 0, 0, 0],
 		);
 		assert_eq!(
@@ -638,7 +962,7 @@ mod unit_tests {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%MLC_EMU_DIR/my-directory/".to_owned(),
-			typ: QueryType::SizeOfFolder,
+			typ: PCFSSataQueryType::SizeOfFolder,
 		};
 		let mocked_header = SataPacketHeader {
 			packet_data_len: 0,
@@ -707,7 +1031,7 @@ mod unit_tests {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%SLC_EMU_DIR/my-directory/".to_owned(),
-			typ: QueryType::FileCount,
+			typ: PCFSSataQueryType::FileCount,
 		};
 		let mocked_header = SataPacketHeader {
 			packet_data_len: 0,
@@ -769,7 +1093,7 @@ mod unit_tests {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody {
 			path: "/%SLC_EMU_DIR/to-query/file.txt".to_owned(),
-			typ: QueryType::FileDetails,
+			typ: PCFSSataQueryType::FileDetails,
 		};
 		let mocked_header = SataPacketHeader {
 			packet_data_len: 0,

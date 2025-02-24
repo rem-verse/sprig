@@ -81,7 +81,7 @@ pub fn validate_value_at_index(
 ) -> bool {
 	let index = match specification {
 		ParameterLocationSpecification::Index(idx) => usize::from(*idx),
-		ParameterLocationSpecification::NameLike(ref name) => {
+		ParameterLocationSpecification::NameLike(name) => {
 			if let Some(idx) = index_from_parameter_name(name) {
 				idx
 			} else {

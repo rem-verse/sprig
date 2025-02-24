@@ -22,6 +22,7 @@ use crate::{
 
 /// Errors that come from MION APIs specifically.
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MIONAPIError {
 	#[cfg(feature = "clients")]
 	#[error(transparent)]
@@ -102,6 +103,7 @@ impl From<MIONParameterAPIError> for CatBridgeError {
 
 /// Errors dealing with various MION Protocols.
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MIONProtocolError {
 	#[cfg(feature = "clients")]
 	/// Errors related to CGI, and HTML pages.

@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 
-use miette::{miette, Context, IntoDiagnostic, Result};
+use miette::{Context, IntoDiagnostic, Result, miette};
 use std::{
 	env::var as env_var,
 	net::SocketAddr,
@@ -9,7 +9,7 @@ use std::{
 use tracing::debug;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{
-	fmt::layer as tracing_fmt_layer, prelude::*, registry as subscriber_registry, EnvFilter,
+	EnvFilter, fmt::layer as tracing_fmt_layer, prelude::*, registry as subscriber_registry,
 };
 
 /// Check if we have actually initialized logging before.

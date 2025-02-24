@@ -3,26 +3,24 @@
 //! This is what actively handles writing bytes to a file. With either
 //! FFIO, and Combined Send/Recv options being turned on/off.
 
-use crate::{errors::NetworkParseError, fsemul::pcfs::sata_proto::MoveToFileLocation};
-use bytes::{Buf, Bytes};
+use crate::{errors::NetworkParseError, fsemul::pcfs::sata::proto::MoveToFileLocation};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[cfg(feature = "servers")]
 use crate::{
 	errors::{CatBridgeError, NetworkError},
 	fsemul::{
-		pcfs::sata_proto::{construct_sata_response, SataPacketHeader, SataProtoChunker},
 		HostFilesystem,
+		pcfs::sata::proto::{SataPacketHeader, SataServerProtoChunker, construct_sata_response},
 	},
 };
 #[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
-#[cfg(feature = "servers")]
-use futures::{stream::SplitStream, StreamExt};
+use futures::{StreamExt, stream::SplitStream};
 #[cfg(feature = "servers")]
 use std::sync::{
-	atomic::{AtomicUsize, Ordering as AtomicOrdering},
 	Arc,
+	atomic::{AtomicUsize, Ordering as AtomicOrdering},
 };
 #[cfg(feature = "servers")]
 use tokio::net::TcpStream;
@@ -46,22 +44,69 @@ pub struct SataWriteFilePacketBody {
 }
 
 impl SataWriteFilePacketBody {
+	/// Create a new write file packet.
+	#[must_use]
+	pub const fn new(
+		block_count: u32,
+		block_size: u32,
+		file_descriptor: i32,
+		move_to: Option<MoveToFileLocation>,
+	) -> Self {
+		Self {
+			block_count,
+			block_size,
+			handle: file_descriptor,
+			move_to_pointer: if let Some(mt) = move_to {
+				mt
+			} else {
+				MoveToFileLocation::Begin
+			},
+			should_move: move_to.is_some(),
+		}
+	}
+
 	#[must_use]
 	pub const fn block_count(&self) -> u32 {
 		self.block_count
 	}
+
+	pub const fn set_block_count(&mut self, new_count: u32) {
+		self.block_count = new_count;
+	}
+
 	#[must_use]
 	pub const fn block_size(&self) -> u32 {
 		self.block_size
 	}
+
+	pub const fn set_block_size(&mut self, new_size: u32) {
+		self.block_size = new_size;
+	}
+
 	#[must_use]
 	pub const fn file_descriptor(&self) -> i32 {
 		self.handle
 	}
+
+	pub const fn set_file_descriptor(&mut self, new_fd: i32) {
+		self.handle = new_fd;
+	}
+
 	#[must_use]
 	pub const fn move_to_pointer(&self) -> MoveToFileLocation {
 		self.move_to_pointer
 	}
+
+	pub const fn set_move_to(&mut self, new_move: Option<MoveToFileLocation>) {
+		if let Some(nm) = new_move {
+			self.move_to_pointer = nm;
+			self.should_move = true;
+		} else {
+			self.move_to_pointer = MoveToFileLocation::Begin;
+			self.should_move = false;
+		}
+	}
+
 	#[must_use]
 	pub const fn should_move(&self) -> bool {
 		self.should_move
@@ -80,7 +125,7 @@ impl SataWriteFilePacketBody {
 		request_header: &SataPacketHeader,
 		host_filesystem: &HostFilesystem,
 		ffio_supported: bool,
-		socket: &mut SplitStream<Framed<TcpStream, SataProtoChunker>>,
+		socket: &mut SplitStream<Framed<TcpStream, SataServerProtoChunker>>,
 		override_ptr: &Arc<AtomicUsize>,
 	) -> Result<Bytes, CatBridgeError> {
 		if self.should_move {
@@ -144,6 +189,27 @@ impl SataWriteFilePacketBody {
 		let mut buff = BytesMut::with_capacity(8);
 		buff.put_u32(error_code);
 		Ok(construct_sata_response(packet_header, 0, buff.freeze())?)
+	}
+}
+
+impl From<&SataWriteFilePacketBody> for Bytes {
+	fn from(value: &SataWriteFilePacketBody) -> Self {
+		let mut buff = BytesMut::with_capacity(20);
+
+		buff.put_u32(value.block_count);
+		buff.put_u32(value.block_size);
+		buff.put_i32(value.handle);
+		buff.put_u32(u32::from(value.move_to_pointer));
+		// True is 1, False is 0
+		buff.put_u32(u32::from(value.should_move));
+
+		buff.freeze()
+	}
+}
+
+impl From<SataWriteFilePacketBody> for Bytes {
+	fn from(value: SataWriteFilePacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 

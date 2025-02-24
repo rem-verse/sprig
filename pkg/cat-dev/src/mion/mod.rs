@@ -691,16 +691,22 @@ mod unit_tests {
 			Err(MIONAPIError::DeviceNameMustBeAscii),
 		);
 
-		assert!(host_env
-			.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 1))
-			.is_ok());
+		assert!(
+			host_env
+				.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 1))
+				.is_ok()
+		);
 		assert!(host_env.set_default_bridge(" with spaces ").is_ok());
-		assert!(host_env
-			.upsert_bridge("00-25-5C-BA-5A-00", Ipv4Addr::new(192, 168, 1, 2))
-			.is_ok());
-		assert!(host_env
-			.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 3))
-			.is_ok());
+		assert!(
+			host_env
+				.upsert_bridge("00-25-5C-BA-5A-00", Ipv4Addr::new(192, 168, 1, 2))
+				.is_ok()
+		);
+		assert!(
+			host_env
+				.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 3))
+				.is_ok()
+		);
 		assert!(host_env.set_default_bridge("00-25-5C-BA-5A-00").is_ok());
 		assert!(host_env.write_to_disk().await.is_ok());
 

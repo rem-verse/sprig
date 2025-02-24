@@ -27,13 +27,13 @@
 use crate::{
 	errors::{CatBridgeError, NetworkError},
 	mion::proto::{
-		control::{MionIdentity, MionIdentityAnnouncement},
 		DEFAULT_MION_CONTROL_PORT, MION_ANNOUNCE_TIMEOUT_SECONDS,
+		control::{MionIdentity, MionIdentityAnnouncement},
 	},
 };
 use bytes::{Bytes, BytesMut};
 use fnv::FnvHashSet;
-use futures::stream::{unfold, StreamExt};
+use futures::stream::{StreamExt, unfold};
 use mac_address::MacAddress;
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use std::{
@@ -43,9 +43,9 @@ use std::{
 };
 use tokio::{
 	net::UdpSocket,
-	sync::mpsc::{unbounded_channel, UnboundedReceiver},
+	sync::mpsc::{UnboundedReceiver, unbounded_channel},
 	task::JoinSet,
-	time::{sleep, Duration, Instant},
+	time::{Duration, Instant, sleep},
 };
 use tracing::{debug, error, warn};
 
@@ -510,9 +510,9 @@ impl MIONFindBy {
 	#[must_use]
 	pub const fn will_cause_full_scan(&self) -> bool {
 		match self {
-			Self::Ip(ref _ip) => false,
-			Self::MacAddress(ref _mac) => true,
-			Self::Name(ref _name) => true,
+			Self::Ip(_ip) => false,
+			Self::MacAddress(_mac) => true,
+			Self::Name(_name) => true,
 		}
 	}
 }
@@ -530,9 +530,9 @@ impl From<String> for MIONFindBy {
 impl Display for MIONFindBy {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		match self {
-			Self::Ip(ref ip) => write!(fmt, "{ip}"),
-			Self::MacAddress(ref mac) => write!(fmt, "{mac}"),
-			Self::Name(ref name) => write!(fmt, "{name}"),
+			Self::Ip(ip) => write!(fmt, "{ip}"),
+			Self::MacAddress(mac) => write!(fmt, "{mac}"),
+			Self::Name(name) => write!(fmt, "{name}"),
 		}
 	}
 }
@@ -559,13 +559,13 @@ pub fn get_all_broadcast_addresses() -> Result<Vec<(Addr, Ipv4Addr)>, NetworkErr
 		.fold(Vec::<(Addr, Ipv4Addr)>::new(), |mut accum, iface| {
 			for local_address in &iface.addr {
 				let ip = match local_address.ip() {
-					IpAddr::V4(ref v4) => {
+					IpAddr::V4(v4) => {
 						if !v4.is_private() && !v4.is_link_local() {
 							debug!(?iface, ?local_address, "will not broadcast to public ips");
 							continue;
 						}
 
-						*v4
+						v4
 					}
 					IpAddr::V6(_) => {
 						debug!(?iface, ?local_address, "cannot broadcast to IPv6 addresses");
@@ -660,7 +660,9 @@ mod unit_tests {
 	#[test]
 	pub fn can_list_at_least_one_interface() {
 		assert!(
-			!get_all_broadcast_addresses().expect("Failed to list all broadcast addresses!").is_empty(),
+			!get_all_broadcast_addresses()
+				.expect("Failed to list all broadcast addresses!")
+				.is_empty(),
 			"Failed to list all broadcast addresses... for some reason your PC isn't compatible to scan devices... perhaps you don't have a private IPv4 address?",
 		);
 	}

@@ -25,8 +25,8 @@ use cat_dev::{
 		errors::MIONProtocolError,
 		parameter::{get_parameters_with_logging_hooks, set_parameters_with_logging_hooks},
 		proto::parameter::{
-			well_known::ParameterLocationSpecification, DumpedMionParameters,
-			MIONParamProtocolError,
+			DumpedMionParameters, MIONParamProtocolError,
+			well_known::ParameterLocationSpecification,
 		},
 	},
 };

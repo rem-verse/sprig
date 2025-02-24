@@ -15,8 +15,8 @@ use crate::output::{
 	print_verbose_search_suggestions,
 };
 use cat_dev::mion::discovery::{
-	discover_bridges_with_logging_hooks, find_mion_with_logging_hooks, get_all_broadcast_addresses,
-	MIONFindBy,
+	MIONFindBy, discover_bridges_with_logging_hooks, find_mion_with_logging_hooks,
+	get_all_broadcast_addresses,
 };
 use knobs::cli::CliOpts;
 use mac_address::MacAddress;

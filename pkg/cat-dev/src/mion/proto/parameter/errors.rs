@@ -7,7 +7,9 @@ use thiserror::Error;
 pub enum MIONParameterAPIError {
 	/// You passed a parameter space to an API that requires the full parameter
 	/// space, but it was not the correct length (512 bytes).
-	#[error("The MION Parameter body you passed in was: {0} bytes long, but must be exactly 512 bytes long!")]
+	#[error(
+		"The MION Parameter body you passed in was: {0} bytes long, but must be exactly 512 bytes long!"
+	)]
 	#[diagnostic(code(cat_dev::api::mion::parameter::body_incorrect_length))]
 	BodyNotCorrectLength(usize),
 	/// You tried asking for a parameter of a specific name, but we could not
@@ -25,7 +27,9 @@ pub enum MIONParameterAPIError {
 	///
 	/// There are only 512 parameters, so you can only ask for parameters in
 	/// (0-511) inclusive.
-	#[error("You asked for the MION Parameter at index: {0}, but MION Parameter indexes cannot be greater than 511.")]
+	#[error(
+		"You asked for the MION Parameter at index: {0}, but MION Parameter indexes cannot be greater than 511."
+	)]
 	#[diagnostic(code(cat_dev::api::mion::parameter::not_in_range))]
 	NotInRange(usize),
 }
@@ -41,7 +45,9 @@ pub enum MIONParamProtocolError {
 	#[diagnostic(code(cat_dev::net::parse::mion::params::error_code))]
 	ErrorCode(i32),
 	/// Unknown packet type for the MION Params port.
-	#[error("Unknown Packet Type: `{0}` received from the network (this may mean your CAT-DEV is doing something we didn't expect)")]
+	#[error(
+		"Unknown Packet Type: `{0}` received from the network (this may mean your CAT-DEV is doing something we didn't expect)"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::mion::params::unknown_packet_type))]
 	PacketType(i32),
 }

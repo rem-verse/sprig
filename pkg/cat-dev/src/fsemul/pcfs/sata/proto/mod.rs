@@ -21,34 +21,33 @@ mod stat_file;
 mod write_file;
 
 use crate::{errors::NetworkParseError, fsemul::pcfs::errors::SataProtocolError};
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::{
 	fmt::{Display, Formatter, Result as FmtResult},
-	sync::{
-		atomic::{AtomicUsize, Ordering as AtomicOrdering},
-		Arc,
-	},
 	time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::io::Error as IoError;
-use tokio_util::codec::{Decoder, Encoder};
 use tracing::debug;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
-#[cfg(feature = "servers")]
+#[cfg(any(feature = "clients", feature = "servers"))]
 use crate::fsemul::pcfs::errors::PCFSApiError;
-#[cfg(feature = "servers")]
-use bytes::BufMut;
-#[cfg(feature = "servers")]
-use std::sync::LazyLock;
 
-pub use crate::fsemul::pcfs::sata_proto::{
+#[cfg(feature = "servers")]
+use std::sync::{
+	Arc, LazyLock,
+	atomic::{AtomicUsize, Ordering as AtomicOrdering},
+};
+#[cfg(feature = "servers")]
+use tokio::io::Error as IoError;
+#[cfg(feature = "servers")]
+use tokio_util::codec::{Decoder, Encoder};
+
+pub use crate::fsemul::pcfs::sata::proto::{
 	change_mode::*, change_owner::*, close_file::*, close_folder::*, create_directory::*,
 	get_info_by_query::*, open_file::*, open_folder::*, ping::*, read_directory::*, read_file::*,
 	remove::*, rewind_directory::*, stat_file::*, write_file::*,
 };
 
-#[cfg(feature = "servers")]
 /// The Default PCFS Version we claim to be.
 const DEFAULT_PCFS_VERSION: u32 = 0x0200_0600;
 #[cfg(feature = "servers")]
@@ -62,11 +61,13 @@ static PID: LazyLock<u32> = LazyLock::new(std::process::id);
 ///
 /// This chunker also allows an `AtomicUsize` that allows bypassing ALL checks
 /// for a packet, and just returning N number of bytes. This is useful for when
-/// we are using Fast File I/O, and need to bypass all the shennagins going on.,
+/// we are using Fast File I/O, and need to bypass all the shennagins going on.
+#[cfg(feature = "servers")]
 #[derive(Clone, Debug)]
-pub struct SataProtoChunker(pub Arc<AtomicUsize>);
+pub struct SataServerProtoChunker(pub Arc<AtomicUsize>);
 
-impl Decoder for SataProtoChunker {
+#[cfg(feature = "servers")]
+impl Decoder for SataServerProtoChunker {
 	type Item = BytesMut;
 	type Error = IoError;
 
@@ -96,7 +97,8 @@ impl Decoder for SataProtoChunker {
 	}
 }
 
-impl Encoder<Bytes> for SataProtoChunker {
+#[cfg(feature = "servers")]
+impl Encoder<Bytes> for SataServerProtoChunker {
 	type Error = IoError;
 
 	fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
@@ -234,6 +236,22 @@ pub struct SataPacketHeader {
 }
 
 impl SataPacketHeader {
+	/// Create a new packet header.
+	///
+	/// Most of the fields here will be set to `0`, or default values. As the
+	/// fields are usually not filled out by the client or changable.
+	#[must_use]
+	pub const fn new(packet_id: u32) -> Self {
+		Self {
+			packet_data_len: 0,
+			packet_id,
+			flags: 0,
+			version: DEFAULT_PCFS_VERSION,
+			timestamp_on_host: 0,
+			pid_on_host: 0,
+		}
+	}
+
 	#[must_use]
 	pub const fn data_len(&self) -> u32 {
 		self.packet_data_len
@@ -244,9 +262,17 @@ impl SataPacketHeader {
 		self.packet_id
 	}
 
+	pub const fn set_id(&mut self, new_id: u32) {
+		self.packet_id = new_id;
+	}
+
 	#[must_use]
 	pub const fn flags(&self) -> u32 {
 		self.flags
+	}
+
+	pub const fn set_flags(&mut self, new_flags: u32) {
+		self.flags = new_flags;
 	}
 
 	#[must_use]
@@ -385,10 +411,25 @@ pub struct SataCommandInfo {
 }
 
 impl SataCommandInfo {
+	/// Create a new set of command info.
+	#[must_use]
+	pub const fn new(user: (u32, u32), capabilities: (u32, u32), command: u32) -> Self {
+		Self {
+			user,
+			capabilities,
+			command,
+		}
+	}
+
 	/// Get the user bytes for this command.
 	#[must_use]
 	pub const fn user(&self) -> (u32, u32) {
 		self.user
+	}
+
+	/// Set the new user bytes for this command.
+	pub const fn set_user(&mut self, new: (u32, u32)) {
+		self.user = new;
 	}
 
 	/// Get the capabilities for this command.
@@ -401,10 +442,38 @@ impl SataCommandInfo {
 		self.capabilities
 	}
 
+	/// Set the capability bytes for this command.
+	pub const fn set_capabilities(&mut self, new: (u32, u32)) {
+		self.capabilities = new;
+	}
+
 	/// Get the actual 'packet id', or command.
 	#[must_use]
 	pub const fn command(&self) -> u32 {
 		self.command
+	}
+
+	/// Set the command id for this packet.
+	pub const fn set_command(&mut self, new: u32) {
+		self.command = new;
+	}
+}
+
+impl From<&SataCommandInfo> for Bytes {
+	fn from(value: &SataCommandInfo) -> Self {
+		let mut buff = BytesMut::with_capacity(0x14);
+		buff.put_u32(value.user.0);
+		buff.put_u32(value.user.1);
+		buff.put_u32(value.capabilities.0);
+		buff.put_u32(value.capabilities.1);
+		buff.put_u32(value.command);
+		buff.freeze()
+	}
+}
+
+impl From<SataCommandInfo> for Bytes {
+	fn from(value: SataCommandInfo) -> Self {
+		Self::from(&value)
 	}
 }
 
@@ -573,15 +642,42 @@ impl SataRequestBody {
 	}
 }
 
-#[cfg(feature = "servers")]
-/// Construct a response to send as a response to a SATA packet.
-fn construct_sata_response<Ty: Into<Bytes>>(
+#[cfg(feature = "clients")]
+pub(crate) fn construct_sata_request<Ty: Into<Bytes>>(
 	request_header: &SataPacketHeader,
+	command_info: &SataCommandInfo,
 	flags: u32,
 	body: Ty,
 ) -> Result<Bytes, PCFSApiError> {
 	let body_as_bytes: Bytes = body.into();
 	let mut new_buff = BytesMut::with_capacity(0x20 + body_as_bytes.len());
+
+	new_buff.put_u32(
+		u32::try_from(body_as_bytes.len())
+			.map_err(|_| PCFSApiError::PacketTooLargeForSata(body_as_bytes.len()))?,
+	);
+	new_buff.put_u32(request_header.packet_id);
+	new_buff.put_u32(flags);
+	new_buff.put_u32(request_header.version);
+	new_buff.put_u32(0);
+	new_buff.put_u32(0);
+	new_buff.extend([0; 8]);
+	new_buff.extend(Bytes::from(command_info));
+	// Now we can finally add our body!
+	new_buff.extend(body_as_bytes);
+
+	Ok(new_buff.freeze())
+}
+
+#[cfg(feature = "servers")]
+/// Construct a response to send as a response to a SATA packet.
+pub(crate) fn construct_sata_response<Ty: Into<Bytes>>(
+	request_header: &SataPacketHeader,
+	flags: u32,
+	body: Ty,
+) -> Result<Bytes, PCFSApiError> {
+	let body_as_bytes: Bytes = body.into();
+	let mut new_buff = BytesMut::with_capacity(0x20 + 0x14 + body_as_bytes.len());
 
 	new_buff.put_u32(
 		u32::try_from(body_as_bytes.len())
@@ -765,10 +861,10 @@ mod unit_tests {
 		.expect("Failed to parse query info request packet!");
 
 		assert_eq!(packet.command_info().command(), 0x10);
-		let SataRequestBody::GetInfoByQuery(ref body) = packet.body() else {
+		let SataRequestBody::GetInfoByQuery(body) = packet.body() else {
 			panic!("GetInfoByQuery packet somehow wasn't a GetInfoByQuery??");
 		};
-		assert_eq!(body.query_type(), QueryType::FileDetails);
+		assert_eq!(body.query_type(), PCFSSataQueryType::FileDetails);
 		assert_eq!(body.path(), "/%SLC_EMU_DIR/sys");
 	}
 
@@ -821,11 +917,11 @@ mod unit_tests {
 		.expect("Failed to parse change mode request packet!");
 
 		assert_eq!(packet.command_info().command(), 0x13);
-		let SataRequestBody::ChangeMode(ref body) = packet.body() else {
+		let SataRequestBody::ChangeMode(body) = packet.body() else {
 			panic!("ChangeMode packet somehow wasn't a ChangeMode??");
 		};
 		assert_eq!(body.path(), "/%SLC_EMU_DIR/sys/config");
-		assert!(!body.set_write_mode());
+		assert!(!body.will_set_write_mode());
 	}
 
 	#[cfg(any(feature = "clients", feature = "servers"))]
@@ -878,7 +974,7 @@ mod unit_tests {
 		.expect("Failed to parse open file request packet!");
 
 		assert_eq!(packet.command_info().command(), 0x5);
-		let SataRequestBody::OpenFile(ref body) = packet.body() else {
+		let SataRequestBody::OpenFile(body) = packet.body() else {
 			panic!("OpenFile packet somehow wasn't an OpenFile??");
 		};
 
@@ -900,7 +996,7 @@ mod unit_tests {
 		.expect("Failed to parse open file request packet!");
 
 		assert_eq!(packet.command_info().command(), 0x6);
-		let SataRequestBody::ReadFile(ref body) = packet.body() else {
+		let SataRequestBody::ReadFile(body) = packet.body() else {
 			panic!("ReadFile packet somehow wasn't an ReadFile??");
 		};
 
@@ -923,7 +1019,7 @@ mod unit_tests {
 		.expect("Failed to parse close file request packet!");
 
 		assert_eq!(packet.command_info().command(), 0xD);
-		let SataRequestBody::CloseFile(ref body) = packet.body() else {
+		let SataRequestBody::CloseFile(body) = packet.body() else {
 			panic!("CloseFile packet somehow wasn't a CloseFile??");
 		};
 
@@ -979,7 +1075,7 @@ mod unit_tests {
 		.expect("Failed to parse open folder request packet!");
 
 		assert_eq!(packet.command_info().command(), 0x1);
-		let SataRequestBody::OpenFolder(ref body) = packet.body() else {
+		let SataRequestBody::OpenFolder(body) = packet.body() else {
 			panic!("OpenFolder packet somehow wasn't an OpenFolder??");
 		};
 		assert_eq!(body.path(), "/%MLC_EMU_DIR/usr/tmp");
@@ -997,7 +1093,7 @@ mod unit_tests {
 		.expect("Failed to parse close file request packet!");
 
 		assert_eq!(packet.command_info().command(), 0x2);
-		let SataRequestBody::ReadDirectory(ref body) = packet.body() else {
+		let SataRequestBody::ReadDirectory(body) = packet.body() else {
 			panic!("ReadDirectory packet somehow wasn't a ReadDirectory??");
 		};
 
@@ -1016,7 +1112,7 @@ mod unit_tests {
 		.expect("Failed to parse close folder request packet!");
 
 		assert_eq!(packet.command_info().command(), 0x04);
-		let SataRequestBody::CloseFolder(ref body) = packet.body() else {
+		let SataRequestBody::CloseFolder(body) = packet.body() else {
 			panic!("CloseFolder packet somehow wasn't a CloseFolder??");
 		};
 

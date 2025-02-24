@@ -2,12 +2,12 @@
 //! can inform the booting process.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	exit_codes::{
 		BOOT_CGI_FAILURE, BOOT_COULD_NOT_CONNECT, BOOT_NOT_READY_TO_BOOT,
 		BRIDGE_TOO_OLD_FOR_FEATURE,
 	},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
 	cgis::{

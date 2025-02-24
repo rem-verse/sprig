@@ -5,15 +5,15 @@
 //! level emulation.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
 	knobs::env::{
 		FSEMUL_DISABLE_REMOVAL, PCFS_DISABLE_CSR, PCFS_DISABLE_FFIO,
 		PCFS_DISABLE_LOAD_BEARING_SLEEP,
 	},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
-use cat_dev::fsemul::{pcfs::sata_server::PCFSSataServer, HostFilesystem};
+use cat_dev::fsemul::{HostFilesystem, pcfs::sata::server::PCFSSataServer};
 use miette::miette;
 use std::net::Ipv4Addr;
 use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};

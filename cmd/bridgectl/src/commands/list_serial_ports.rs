@@ -1,8 +1,8 @@
 //! Handling listing all the available serial ports known on your network.
 
 use crate::{
-	exit_codes::{LSSP_FAILED_ENUMERATION, LSSP_NO_PORTS},
 	SHOULD_LOG_JSON,
+	exit_codes::{LSSP_FAILED_ENUMERATION, LSSP_NO_PORTS},
 };
 use cat_dev::serial::SyncSerialPort;
 use miette::miette;

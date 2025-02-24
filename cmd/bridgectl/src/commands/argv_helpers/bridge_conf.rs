@@ -7,10 +7,10 @@
 //! have these series of functions which wrap around a static safely.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	exit_codes::{ARGV_BRIDGE_STATE_LOAD_FAILURE, ARGV_NO_BRIDGE_STATE_PATH},
 	knobs::{cli::BridgeConfigurationFlags, env::BRIDGE_HOST_STATE_PATH},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::BridgeHostState;
 use miette::miette;
@@ -35,7 +35,9 @@ pub async fn initialize_host_bridge(bridge_config_flags: BridgeConfigurationFlag
 				"looks like your OS doesn't have a default host state path, please file an issue to support your OS better",
 			);
 		} else {
-			info!("Hey! It looks like we don't have a default path configured for the bridge configuration file. This may mean certain features like setting a default bridge won't work! You can always manually specify a manual place to store the file with `--bridge-state-path`, but we'd really appreciate if you filed an issue to support your OS better!");
+			info!(
+				"Hey! It looks like we don't have a default path configured for the bridge configuration file. This may mean certain features like setting a default bridge won't work! You can always manually specify a manual place to store the file with `--bridge-state-path`, but we'd really appreciate if you filed an issue to support your OS better!"
+			);
 		}
 	}
 

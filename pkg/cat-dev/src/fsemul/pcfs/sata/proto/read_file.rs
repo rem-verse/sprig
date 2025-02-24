@@ -3,20 +3,18 @@
 //! This is what actively handles reading bytes out of a file. With either
 //! FFIO, and Combined Send/Recv options being turned on/off.
 
-use crate::{errors::NetworkParseError, fsemul::pcfs::sata_proto::MoveToFileLocation};
-use bytes::{Buf, Bytes};
+use crate::{errors::NetworkParseError, fsemul::pcfs::sata::proto::MoveToFileLocation};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[cfg(feature = "servers")]
 use crate::{
 	errors::{CatBridgeError, NetworkError},
 	fsemul::{
-		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 		HostFilesystem,
+		pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
 	},
 };
-#[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
 #[cfg(feature = "servers")]
 use tokio::sync::mpsc::Sender;
 #[cfg(feature = "servers")]
@@ -41,22 +39,69 @@ pub struct SataReadFilePacketBody {
 }
 
 impl SataReadFilePacketBody {
+	/// Create a new read file packet.
+	#[must_use]
+	pub const fn new(
+		block_count: u32,
+		block_size: u32,
+		file_descriptor: i32,
+		move_to: Option<MoveToFileLocation>,
+	) -> Self {
+		Self {
+			block_count,
+			block_size,
+			handle: file_descriptor,
+			move_to_pointer: if let Some(mt) = move_to {
+				mt
+			} else {
+				MoveToFileLocation::Begin
+			},
+			should_move: move_to.is_some(),
+		}
+	}
+
 	#[must_use]
 	pub const fn block_count(&self) -> u32 {
 		self.block_count
 	}
+
+	pub const fn set_block_count(&mut self, new_count: u32) {
+		self.block_count = new_count;
+	}
+
 	#[must_use]
 	pub const fn block_size(&self) -> u32 {
 		self.block_size
 	}
+
+	pub const fn set_block_size(&mut self, new_size: u32) {
+		self.block_size = new_size;
+	}
+
 	#[must_use]
 	pub const fn file_descriptor(&self) -> i32 {
 		self.handle
 	}
+
+	pub const fn set_file_descriptor(&mut self, new_fd: i32) {
+		self.handle = new_fd;
+	}
+
 	#[must_use]
 	pub const fn move_to_pointer(&self) -> MoveToFileLocation {
 		self.move_to_pointer
 	}
+
+	pub const fn set_move_to(&mut self, new_move: Option<MoveToFileLocation>) {
+		if let Some(nm) = new_move {
+			self.move_to_pointer = nm;
+			self.should_move = true;
+		} else {
+			self.move_to_pointer = MoveToFileLocation::Begin;
+			self.should_move = false;
+		}
+	}
+
 	#[must_use]
 	pub const fn should_move(&self) -> bool {
 		self.should_move
@@ -180,6 +225,27 @@ impl SataReadFilePacketBody {
 			.map_err(NetworkError::SendQueueFailure)?;
 
 		Ok(())
+	}
+}
+
+impl From<&SataReadFilePacketBody> for Bytes {
+	fn from(value: &SataReadFilePacketBody) -> Self {
+		let mut buff = BytesMut::with_capacity(20);
+
+		buff.put_u32(value.block_count);
+		buff.put_u32(value.block_size);
+		buff.put_i32(value.handle);
+		buff.put_u32(u32::from(value.move_to_pointer));
+		// True is 1, False is 0
+		buff.put_u32(u32::from(value.should_move));
+
+		buff.freeze()
+	}
+}
+
+impl From<SataReadFilePacketBody> for Bytes {
+	fn from(value: SataReadFilePacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 

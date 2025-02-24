@@ -807,11 +807,7 @@ impl Display for TargetBridgeFlags {
 		write!(
 			fmt,
 			"Search Flags (--ip: `{:?}`, --mac: `{:?}`, --name: `{:?}`), Non-Search Flags: (--default: `{}`, --bridge-from-env: `{}`)",
-			self.search_ip,
-			self.search_mac,
-			self.search_name,
-			self.default,
-			self.mochiato,
+			self.search_ip, self.search_mac, self.search_name, self.default, self.mochiato,
 		)
 	}
 }
@@ -944,8 +940,7 @@ impl Display for BridgeScanFlags {
 		write!(
 			fmt,
 			"Scan Flags: (`--bridge-control-port-override`: {:?}, `--scan-early-timeout-seconds`: {:?})",
-			self.control_port_override,
-			self.scan_timeout,
+			self.control_port_override, self.scan_timeout,
 		)
 	}
 }

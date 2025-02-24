@@ -7,9 +7,9 @@ use crate::serial::underlying::SyncSerialPort;
 use std::{
 	io::{Error as IoError, IoSlice, IoSliceMut, Result as IoResult},
 	os::fd::AsRawFd,
-	task::{ready, Context, Poll},
+	task::{Context, Poll, ready},
 };
-use tokio::io::{unix::AsyncFd, Interest, ReadBuf};
+use tokio::io::{Interest, ReadBuf, unix::AsyncFd};
 
 /// Thin wrapper around a serial port that can be interacted with
 /// asynchronously.

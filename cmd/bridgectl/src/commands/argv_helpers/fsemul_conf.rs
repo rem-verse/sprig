@@ -7,6 +7,7 @@
 //! have these series of functions which wrap around a static safely.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	exit_codes::{
 		ARGV_CAFE_ROOT_LOAD_FAILURE, ARGV_FSEMUL_LOAD_FAILURE, ARGV_NO_CAFE_ROOT,
 		ARGV_NO_FSEMUL_PATH,
@@ -16,7 +17,6 @@ use crate::{
 		env::{CAFE_ROOT, FSMEUL_CONFIG_PATH as FSEMUL_CONFIG_PATH_ENV_ARG},
 	},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::fsemul::{FSEmulConfig, HostFilesystem};
 use miette::miette;
@@ -44,7 +44,9 @@ pub async fn initialize_fsemul_config(fsemul_config_flags: &FSEmulConfigurationF
 				"looks like your OS doesn't have a default fsemul config path, please file an issue to support your OS better",
 			);
 		} else {
-			info!("Hey! It looks like we don't have a default path configured for the fsemul configuration file. This may mean certain configuration options for fsemul may not work! You can always manually specify a manual place to store the file with `--fsemul-config-path`, but we'd really appreciate if you filed an issue to support your OS better!");
+			info!(
+				"Hey! It looks like we don't have a default path configured for the fsemul configuration file. This may mean certain configuration options for fsemul may not work! You can always manually specify a manual place to store the file with `--fsemul-config-path`, but we'd really appreciate if you filed an issue to support your OS better!"
+			);
 		}
 	}
 	let host_default_path = HostFilesystem::default_cafe_directory();
@@ -55,7 +57,9 @@ pub async fn initialize_fsemul_config(fsemul_config_flags: &FSEmulConfigurationF
 				"looks like your OS doesn't have a default host filesystem path, please file an issue to support your OS better",
 			);
 		} else {
-			info!("Hey! It looks like we don't have a default path configured for the cafe sdk data directory. This may mean certain configuration options for fsemul may not work! You can always manually specify a manual place to store the file with `--fsemul-config-path`, but we'd really appreciate if you filed an issue to support your OS better!");
+			info!(
+				"Hey! It looks like we don't have a default path configured for the cafe sdk data directory. This may mean certain configuration options for fsemul may not work! You can always manually specify a manual place to store the file with `--fsemul-config-path`, but we'd really appreciate if you filed an issue to support your OS better!"
+			);
 		}
 	}
 
@@ -378,10 +382,17 @@ async fn validate_host_file_system_is_populated() {
 					add_context_to(
 						miette!("Could not find the cafe path for the root filesystem!"),
 						[
-							miette!("You can specify the path to the directory with the environment variable `CAFE_ROOT`"),
-							miette!("You can specify the path to the directory with the cli argument `--cafe-dir`"),
-							miette!("You can file an issue with the project to choose a default directory for your OS."),
-						].into_iter(),
+							miette!(
+								"You can specify the path to the directory with the environment variable `CAFE_ROOT`"
+							),
+							miette!(
+								"You can specify the path to the directory with the cli argument `--cafe-dir`"
+							),
+							miette!(
+								"You can file an issue with the project to choose a default directory for your OS."
+							),
+						]
+						.into_iter(),
 					),
 				);
 			}
@@ -390,7 +401,9 @@ async fn validate_host_file_system_is_populated() {
 		}
 		let cafe_root_path = read_env_path.as_ref().expect("impossible");
 
-		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(cafe_root_path.clone()))) {
+		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(
+			cafe_root_path.clone(),
+		))) {
 			Ok(state) => state,
 			Err(cause) => {
 				if SHOULD_LOG_JSON() {

@@ -28,7 +28,9 @@ pub enum FSEmulAPIError {
 	#[error("DLF files must have an ending address that appears _last_, and is an empty string.")]
 	#[diagnostic(code(cat_dev::api::fsemul::dlf_must_have_ending))]
 	DlfMustHaveEnding,
-	#[error("You tried to place a disk item past the current ending, please update the ending, before updating the new item.")]
+	#[error(
+		"You tried to place a disk item past the current ending, please update the ending, before updating the new item."
+	)]
 	#[diagnostic(code(cat_dev::api::fsemul::dlf_update_ending_first))]
 	DlfUpsertEndingFirst,
 	#[error("Failed to interact with path, file must be open first: {0:?}")]
@@ -88,7 +90,9 @@ pub enum FSEmulFSError {
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_cafe_sdk_path))]
 	CafeSdkPathCorrupt,
 	/// A DLF file contained a very invalid line.
-	#[error("While parsing a disk layout file we ran into a line which is not in the format of: `<hex address>,\"<path>\"`: {0}")]
+	#[error(
+		"While parsing a disk layout file we ran into a line which is not in the format of: `<hex address>,\"<path>\"`: {0}"
+	)]
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_dlf_line))]
 	DlfCorruptLine(String),
 	/// A DLF file contained a bad termination line.
@@ -96,7 +100,9 @@ pub enum FSEmulFSError {
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_dlf_final_line))]
 	DlfCorruptFinalLine(String),
 	/// A DLF file had a bad version string file.
-	#[error("While parsing a disk layout file, the first line should be a version string (e.g. `v1.00`), which this was not: {0}")]
+	#[error(
+		"While parsing a disk layout file, the first line should be a version string (e.g. `v1.00`), which this was not: {0}"
+	)]
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_dlf_version_line))]
 	DlfCorruptVersionLine(String),
 }

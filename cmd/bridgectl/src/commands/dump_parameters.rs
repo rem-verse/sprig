@@ -1,6 +1,6 @@
 use crate::{
-	commands::argv_helpers::get_targeted_bridge_ip, exit_codes::DUMP_PARAMS_FAILED_TO_GET_PARAMS,
-	SHOULD_LOG_JSON,
+	SHOULD_LOG_JSON, commands::argv_helpers::get_targeted_bridge_ip,
+	exit_codes::DUMP_PARAMS_FAILED_TO_GET_PARAMS,
 };
 use cat_dev::mion::{parameter::get_parameters, proto::parameter::DumpedMionParameters};
 use miette::miette;

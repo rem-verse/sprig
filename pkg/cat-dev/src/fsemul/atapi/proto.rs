@@ -93,12 +93,12 @@ pub mod read_packet_temp_will_break {
 
 	use crate::{
 		errors::{CatBridgeError, FSError, NetworkError},
-		fsemul::{atapi::proto::ChunkATAPIEmulatorCodec, dlf::DiskLayoutFile, HostFilesystem},
+		fsemul::{HostFilesystem, atapi::proto::ChunkATAPIEmulatorCodec, dlf::DiskLayoutFile},
 	};
 	use bytes::{Bytes, BytesMut};
-	use futures::{stream::SplitSink, SinkExt};
+	use futures::{SinkExt, stream::SplitSink};
 	use tokio::{
-		fs::{read as fs_read, File},
+		fs::{File, read as fs_read},
 		io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 		net::TcpStream,
 	};

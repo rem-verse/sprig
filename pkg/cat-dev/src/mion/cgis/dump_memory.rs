@@ -11,7 +11,7 @@ use crate::{
 };
 use bytes::{Bytes, BytesMut};
 use fnv::FnvHashMap;
-use futures::{future::Either, StreamExt};
+use futures::{StreamExt, future::Either};
 use reqwest::{Client, Response, Version};
 use serde::Serialize;
 use std::{
@@ -21,7 +21,7 @@ use std::{
 };
 use tokio::{
 	sync::mpsc::{
-		channel as bounded_channel, Receiver as BoundedReceiver, Sender as BoundedSender,
+		Receiver as BoundedReceiver, Sender as BoundedSender, channel as bounded_channel,
 	},
 	time::timeout,
 };

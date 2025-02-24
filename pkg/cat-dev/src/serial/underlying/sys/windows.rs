@@ -12,25 +12,25 @@ use std::{
 	time::Duration,
 };
 use windows::{
-	core::{PCSTR, PSTR},
 	Win32::{
 		Devices::Communication::{
-			EscapeCommFunction, GetCommModemStatus, GetCommTimeouts, PurgeComm, SetCommState,
-			SetCommTimeouts, CLRDTR, CLRRTS, COMMTIMEOUTS, DCB, MODEM_STATUS_FLAGS, MS_CTS_ON,
-			MS_DSR_ON, MS_RING_ON, MS_RLSD_ON, NOPARITY, ONESTOPBIT, PURGE_COMM_FLAGS,
-			PURGE_RXCLEAR, PURGE_TXCLEAR, SETDTR, SETRTS,
+			CLRDTR, CLRRTS, COMMTIMEOUTS, DCB, EscapeCommFunction, GetCommModemStatus,
+			GetCommTimeouts, MODEM_STATUS_FLAGS, MS_CTS_ON, MS_DSR_ON, MS_RING_ON, MS_RLSD_ON,
+			NOPARITY, ONESTOPBIT, PURGE_COMM_FLAGS, PURGE_RXCLEAR, PURGE_TXCLEAR, PurgeComm,
+			SETDTR, SETRTS, SetCommState, SetCommTimeouts,
 		},
 		Foundation::{CloseHandle, ERROR_IO_PENDING, ERROR_NO_MORE_ITEMS, HANDLE},
-		Storage::FileSystem::{FlushFileBuffers, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED},
+		Storage::FileSystem::{FILE_FLAG_OVERLAPPED, FlushFileBuffers, ReadFile, WriteFile},
 		System::{
+			IO::{GetOverlappedResult, OVERLAPPED},
 			Registry::{
-				RegCloseKey, RegEnumValueA, RegOpenKeyExA, RegQueryInfoKeyA, HKEY,
-				HKEY_LOCAL_MACHINE, KEY_READ, REG_SAM_FLAGS, REG_SZ,
+				HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_SAM_FLAGS, REG_SZ, RegCloseKey,
+				RegEnumValueA, RegOpenKeyExA, RegQueryInfoKeyA,
 			},
 			Threading::CreateEventA,
-			IO::{GetOverlappedResult, OVERLAPPED},
 		},
 	},
+	core::{PCSTR, PSTR},
 };
 
 #[derive(Debug)]

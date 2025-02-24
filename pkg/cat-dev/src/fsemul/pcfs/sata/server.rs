@@ -3,29 +3,29 @@
 use crate::{
 	errors::{APIError, CatBridgeError, NetworkError},
 	fsemul::{
-		pcfs::sata_proto::{
-			SataCapabilitiesFlags, SataGetInfoByQueryPacketBody, SataProtoChunker, SataRequest,
-			SataRequestBody,
-		},
 		HostFilesystem,
+		pcfs::sata::proto::{
+			SataCapabilitiesFlags, SataGetInfoByQueryPacketBody, SataRequest, SataRequestBody,
+			SataServerProtoChunker,
+		},
 	},
 };
 use bytes::Bytes;
-use futures::{stream::SplitSink, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, stream::SplitSink};
 use local_ip_address::local_ip;
 use std::{
 	net::{IpAddr, Ipv4Addr, SocketAddrV4},
-	sync::{atomic::AtomicUsize, Arc},
+	sync::{Arc, atomic::AtomicUsize},
 	time::Duration,
 };
 use tokio::{
 	net::{TcpListener, TcpStream},
-	sync::mpsc::{channel, Sender},
+	sync::mpsc::{Sender, channel},
 	task::Builder as TaskBuilder,
 	time::sleep,
 };
 use tokio_util::codec::Framed;
-use tracing::{debug, error, error_span, field::valuable, trace, Instrument};
+use tracing::{Instrument, debug, error, error_span, field::valuable, trace};
 
 /// The default port to use for hosting the SATA Server.
 pub const DEFAULT_PCFS_OVER_SATA_PORT: u16 = 7500_u16;
@@ -222,8 +222,11 @@ impl<'fs> PCFSSataServer<'fs> {
 	) -> Result<(), CatBridgeError> {
 		connection.set_nodelay(true).map_err(NetworkError::IO)?;
 		let bypass_buff_to_read = Arc::new(AtomicUsize::new(0));
-		let (sink, mut stream) =
-			Framed::new(connection, SataProtoChunker(bypass_buff_to_read.clone())).split();
+		let (sink, mut stream) = Framed::new(
+			connection,
+			SataServerProtoChunker(bypass_buff_to_read.clone()),
+		)
+		.split();
 		let mut first_packet = true;
 
 		let sender = Self::spawn_write_task(disable_load_bearing_sleep, sink)?;
@@ -258,43 +261,43 @@ impl<'fs> PCFSSataServer<'fs> {
 					parsed_packet.command_info(),
 				);
 				match parsed_packet.body() {
-					SataRequestBody::ChangeMode(ref mode) => {
+					SataRequestBody::ChangeMode(mode) => {
 						sender
-							.send(mode.handle(parsed_packet.header(), host_filesystem)?)
+							.send(mode.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::ChangeOwner(ref co) => {
+					SataRequestBody::ChangeOwner(co) => {
 						sender
 							.send(co.handle(parsed_packet.header())?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::CloseFile(ref cf) => {
+					SataRequestBody::CloseFile(cf) => {
 						sender
 							.send(cf.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::CloseFolder(ref cf) => {
+					SataRequestBody::CloseFolder(cf) => {
 						sender
 							.send(cf.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::CreateDirectory(ref cd) => {
+					SataRequestBody::CreateDirectory(cd) => {
 						sender
 							.send(cd.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::GetInfoByQuery(ref info) => {
+					SataRequestBody::GetInfoByQuery(info) => {
 						sender
 							.send(info.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::OpenFile(ref file) => {
+					SataRequestBody::OpenFile(file) => {
 						sender
 							.send(
 								file.handle(
@@ -307,7 +310,7 @@ impl<'fs> PCFSSataServer<'fs> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::OpenFolder(ref folder) => {
+					SataRequestBody::OpenFolder(folder) => {
 						sender
 							.send(
 								folder
@@ -317,13 +320,35 @@ impl<'fs> PCFSSataServer<'fs> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::Ping(ref ping) => {
+					SataRequestBody::Ping(ping) => {
 						debug!(
 							client.packet.header = valuable(parsed_packet.header()),
 							client.packet.command_info = valuable(parsed_packet.command_info()),
 							client.packet.body = valuable(ping),
 							"received ping packet from client",
 						);
+
+						if parsed_packet.header().flags() != 0 {
+							let flags = SataCapabilitiesFlags(parsed_packet.header().flags());
+
+							if !flags.intersects(SataCapabilitiesFlags::FAST_FILE_IO_SUPPORTED) {
+								debug!(
+									flags = valuable(&flags),
+									"Disabling FFIO because ping packet header requested it..."
+								);
+								supports_ffio = false;
+							}
+
+							if !flags
+								.intersects(SataCapabilitiesFlags::COMBINED_SEND_RECV_SUPPORTED)
+							{
+								debug!(
+									flags = valuable(&flags),
+									"Disabling CSR because ping packet header requested it..."
+								);
+								supports_csr = false;
+							}
+						}
 
 						sender
 							.send(ping.handle(
@@ -335,7 +360,7 @@ impl<'fs> PCFSSataServer<'fs> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::ReadFile(ref rfr) => {
+					SataRequestBody::ReadFile(rfr) => {
 						rfr.handle(
 							parsed_packet.header(),
 							host_filesystem,
@@ -344,13 +369,13 @@ impl<'fs> PCFSSataServer<'fs> {
 						)
 						.await?;
 					}
-					SataRequestBody::ReadDirectory(ref rd) => {
+					SataRequestBody::ReadDirectory(rd) => {
 						sender
 							.send(rd.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::Remove(ref rm) => {
+					SataRequestBody::Remove(rm) => {
 						sender
 							.send(
 								rm.handle(
@@ -363,7 +388,7 @@ impl<'fs> PCFSSataServer<'fs> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::Rewind(ref rewind) => {
+					SataRequestBody::Rewind(rewind) => {
 						sender
 							.send(
 								rewind
@@ -373,7 +398,7 @@ impl<'fs> PCFSSataServer<'fs> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::StatFile(ref st) => {
+					SataRequestBody::StatFile(st) => {
 						sender
 							.send(
 								SataGetInfoByQueryPacketBody::stat_fd(
@@ -386,7 +411,7 @@ impl<'fs> PCFSSataServer<'fs> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::WriteFile(ref wf) => {
+					SataRequestBody::WriteFile(wf) => {
 						sender
 							.send(
 								wf.handle(
@@ -415,7 +440,7 @@ impl<'fs> PCFSSataServer<'fs> {
 	/// with them.
 	fn spawn_write_task(
 		disable_load_bearing_sleep: bool,
-		mut sink: SplitSink<Framed<TcpStream, SataProtoChunker>, Bytes>,
+		mut sink: SplitSink<Framed<TcpStream, SataServerProtoChunker>, Bytes>,
 	) -> Result<Sender<Bytes>, CatBridgeError> {
 		let (sender, mut receiver) = channel::<Bytes>(PCFS_SATA_TCP_PACKET_BUFFER_SIZE);
 
@@ -532,8 +557,11 @@ impl PCFSSataServer<'static> {
 	) -> Result<(), CatBridgeError> {
 		connection.set_nodelay(true).map_err(NetworkError::IO)?;
 		let bypass_buff_to_read = Arc::new(AtomicUsize::new(0));
-		let (sink, mut stream) =
-			Framed::new(connection, SataProtoChunker(bypass_buff_to_read.clone())).split();
+		let (sink, mut stream) = Framed::new(
+			connection,
+			SataServerProtoChunker(bypass_buff_to_read.clone()),
+		)
+		.split();
 		let mut first_packet = true;
 
 		let sender = Self::spawn_write_task(disable_load_bearing_sleep, sink)?;
@@ -560,43 +588,43 @@ impl PCFSSataServer<'static> {
 					parsed_packet.command_info(),
 				);
 				match parsed_packet.body() {
-					SataRequestBody::ChangeMode(ref mode) => {
+					SataRequestBody::ChangeMode(mode) => {
 						sender
-							.send(mode.handle(parsed_packet.header(), host_filesystem)?)
+							.send(mode.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::ChangeOwner(ref co) => {
+					SataRequestBody::ChangeOwner(co) => {
 						sender
 							.send(co.handle(parsed_packet.header())?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::CloseFile(ref cf) => {
+					SataRequestBody::CloseFile(cf) => {
 						sender
 							.send(cf.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::CloseFolder(ref cf) => {
+					SataRequestBody::CloseFolder(cf) => {
 						sender
 							.send(cf.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::CreateDirectory(ref cd) => {
+					SataRequestBody::CreateDirectory(cd) => {
 						sender
 							.send(cd.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::GetInfoByQuery(ref info) => {
+					SataRequestBody::GetInfoByQuery(info) => {
 						sender
 							.send(info.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::OpenFile(ref file) => {
+					SataRequestBody::OpenFile(file) => {
 						sender
 							.send(
 								file.handle(
@@ -609,7 +637,7 @@ impl PCFSSataServer<'static> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::OpenFolder(ref folder) => {
+					SataRequestBody::OpenFolder(folder) => {
 						sender
 							.send(
 								folder
@@ -619,7 +647,7 @@ impl PCFSSataServer<'static> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::Ping(ref ping) => {
+					SataRequestBody::Ping(ping) => {
 						debug!(
 							client.packet.header = valuable(parsed_packet.header()),
 							client.packet.command_info = valuable(parsed_packet.command_info()),
@@ -637,7 +665,7 @@ impl PCFSSataServer<'static> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::ReadFile(ref rfr) => {
+					SataRequestBody::ReadFile(rfr) => {
 						rfr.handle(
 							parsed_packet.header(),
 							host_filesystem,
@@ -646,13 +674,13 @@ impl PCFSSataServer<'static> {
 						)
 						.await?;
 					}
-					SataRequestBody::ReadDirectory(ref rd) => {
+					SataRequestBody::ReadDirectory(rd) => {
 						sender
 							.send(rd.handle(parsed_packet.header(), host_filesystem).await?)
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::Remove(ref rm) => {
+					SataRequestBody::Remove(rm) => {
 						sender
 							.send(
 								rm.handle(
@@ -665,7 +693,7 @@ impl PCFSSataServer<'static> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::Rewind(ref rewind) => {
+					SataRequestBody::Rewind(rewind) => {
 						sender
 							.send(
 								rewind
@@ -675,7 +703,7 @@ impl PCFSSataServer<'static> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::StatFile(ref st) => {
+					SataRequestBody::StatFile(st) => {
 						sender
 							.send(
 								SataGetInfoByQueryPacketBody::stat_fd(
@@ -688,7 +716,7 @@ impl PCFSSataServer<'static> {
 							.await
 							.map_err(NetworkError::SendQueueFailure)?;
 					}
-					SataRequestBody::WriteFile(ref wf) => {
+					SataRequestBody::WriteFile(wf) => {
 						sender
 							.send(
 								wf.handle(

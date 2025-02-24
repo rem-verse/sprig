@@ -6,11 +6,19 @@ use thiserror::Error;
 /// Error's specific to calling a specific PCFS API.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
 pub enum PCFSApiError {
+	#[error("Mode string is expected to match '(r|w|a)b?+?', but did not! invalid mode: {0}")]
+	#[diagnostic(code(cat_dev::api::fsmeul::pcfs::bad_mode_string))]
+	BadModeString(String),
 	/// `PCFS` Sata protocol only supports [`u32::MAX`] packet sizes because they
 	/// store length of body as a [`u32`].
-	#[error("This packet body is too large to ever fit in a PCFS Sata Packet, is: 0x{0:02X?} bytes long, max is 0xFFFFFFFF!")]
+	#[error(
+		"This packet body is too large to ever fit in a PCFS Sata Packet, is: 0x{0:02X?} bytes long, max is 0xFFFFFFFF!"
+	)]
 	#[diagnostic(code(cat_dev::api::fsemul::pcfs::packet_too_large_for_sata))]
 	PacketTooLargeForSata(usize),
+	#[error("The requested path: [{0}] is too long, paths must be no more than 511 bytes.")]
+	#[diagnostic(code(cat_dev::api::fsemul::pcfs::path_too_long))]
+	PathTooLong(String),
 	/// Requested path is not inside of a mapped directory.
 	#[error("The requested path: [{0}] was not inside of a mapped directory, cannot serve.")]
 	#[diagnostic(code(cat_dev::api::fsemul::pcfs::path_not_mapped))]

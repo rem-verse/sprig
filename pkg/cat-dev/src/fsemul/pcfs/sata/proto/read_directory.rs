@@ -4,21 +4,24 @@
 //! directory. This does not recurse.
 
 use crate::errors::NetworkParseError;
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+
+#[cfg(feature = "clients")]
+use crate::fsemul::pcfs::{errors::PCFSApiError, sata::proto::get_info_by_query::PCFSSataFdInfo};
+#[cfg(feature = "clients")]
+use std::ffi::CStr;
 
 #[cfg(feature = "servers")]
 use crate::{
 	errors::CatBridgeError,
 	fsemul::{
 		host_filesystem::HostFilesystem,
-		pcfs::sata_proto::{
-			construct_sata_response, SataGetInfoByQueryPacketBody, SataPacketHeader,
+		pcfs::sata::proto::{
+			SataGetInfoByQueryPacketBody, SataPacketHeader, construct_sata_response,
 		},
 	},
 };
-#[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
 #[cfg(feature = "servers")]
 use std::path::PathBuf;
 #[cfg(feature = "servers")]
@@ -27,7 +30,7 @@ use tracing::debug;
 #[cfg(feature = "servers")]
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
-#[cfg(feature = "servers")]
+#[cfg(any(feature = "clients", feature = "servers"))]
 /// No more items in this directory! sorry!
 const NO_MORE_ITEMS: u32 = 0xFFF0_FFFC;
 
@@ -38,8 +41,18 @@ pub struct SataReadDirPacketBody {
 }
 
 impl SataReadDirPacketBody {
+	/// Create a new read directory packet body.
+	#[must_use]
+	pub const fn new(file_descriptor: i32) -> Self {
+		Self { file_descriptor }
+	}
+
 	#[must_use]
 	pub const fn file_descriptor(&self) -> i32 {
+		self.file_descriptor
+	}
+
+	pub const fn set_file_descriptor(&mut self) -> i32 {
 		self.file_descriptor
 	}
 
@@ -74,7 +87,8 @@ impl SataReadDirPacketBody {
 
 			return Self::construct_error_repsonse(request_header, NO_MORE_ITEMS);
 		};
-		let Ok(info) = SataGetInfoByQueryPacketBody::info_for_path(&item) else {
+		let Ok(info) = SataGetInfoByQueryPacketBody::info_for_path(host_filesystem, &item).await
+		else {
 			debug!(
 				packet.fd = self.file_descriptor,
 				packet.typ = "PCFSSrvReadDirectory",
@@ -118,6 +132,20 @@ impl SataReadDirPacketBody {
 		buff.put_u32(error_code);
 		buff.extend_from_slice(&[0; 0x154]);
 		Ok(construct_sata_response(request_header, 0, buff.freeze())?)
+	}
+}
+
+impl From<&SataReadDirPacketBody> for Bytes {
+	fn from(value: &SataReadDirPacketBody) -> Self {
+		let mut buff = BytesMut::with_capacity(4);
+		buff.put_i32(value.file_descriptor);
+		buff.freeze()
+	}
+}
+
+impl From<SataReadDirPacketBody> for Bytes {
+	fn from(value: SataReadDirPacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 
@@ -170,6 +198,162 @@ impl Valuable for SataReadDirPacketBody {
 			SATA_READ_DIRECTORY_PACKET_BODY_FIELDS,
 			&[Valuable::as_value(&self.file_descriptor)],
 		));
+	}
+}
+
+#[cfg(feature = "clients")]
+#[derive(Clone, Debug, PartialEq, Eq, Valuable)]
+pub struct DirectoryItemResponse {
+	/// The underlying return code for this directory item.
+	return_code: u32,
+	/// The next bit of file information, if there are any items left in the
+	/// directory.
+	next_file_info: Option<(PCFSSataFdInfo, String)>,
+}
+
+#[cfg(feature = "clients")]
+impl DirectoryItemResponse {
+	/// Create a Directory Item.
+	///
+	/// This assumes there was another item in the directory and we want to
+	/// return it.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 255 bytes.
+	pub fn new_next(info: PCFSSataFdInfo, path: String) -> Result<Self, PCFSApiError> {
+		if path.len() > 255 {
+			return Err(PCFSApiError::PathTooLong(path));
+		}
+
+		Ok(Self {
+			return_code: 0,
+			next_file_info: Some((info, path)),
+		})
+	}
+
+	/// Return that there's nothing left in the directory.
+	#[must_use]
+	pub const fn new_nothing_left() -> Self {
+		Self {
+			return_code: NO_MORE_ITEMS,
+			next_file_info: None,
+		}
+	}
+
+	/// Create a new directory item response given an error code.
+	#[must_use]
+	pub const fn new_error_code(rc: u32) -> Self {
+		Self {
+			return_code: rc,
+			next_file_info: None,
+		}
+	}
+
+	/// Get the underlying return code for this directory item.
+	#[must_use]
+	pub const fn return_code(&self) -> u32 {
+		self.return_code
+	}
+
+	/// Return if this directory item was 'successfully' fetched.
+	///
+	/// This is really only useful when performing manual construction of the
+	/// read directory packet. As when deserializing we will always return a
+	/// proper error code if it's not successful.
+	#[must_use]
+	pub fn is_successful(&self) -> bool {
+		[NO_MORE_ITEMS, 0].contains(&self.return_code)
+	}
+
+	/// Get the file that was returned as being next in the directory.
+	#[must_use]
+	pub const fn file_info(&self) -> Option<&(PCFSSataFdInfo, String)> {
+		self.next_file_info.as_ref()
+	}
+
+	/// Consume the underlying packet, and just get the next file info if there
+	/// is any.
+	#[must_use]
+	pub fn take_file_info(self) -> Option<(PCFSSataFdInfo, String)> {
+		self.next_file_info
+	}
+}
+
+#[cfg(feature = "clients")]
+impl From<&DirectoryItemResponse> for Bytes {
+	fn from(value: &DirectoryItemResponse) -> Self {
+		if let Some(nfi) = value.file_info() {
+			let mut buff = BytesMut::with_capacity(0x158);
+			buff.put_u32(value.return_code());
+			buff.extend(Bytes::from(&nfi.0));
+			let path_bytes = nfi.1.as_bytes();
+			buff.extend(Bytes::from(Vec::from(path_bytes)));
+			buff.extend(BytesMut::zeroed(256 - path_bytes.len()));
+			buff.freeze()
+		} else {
+			let mut bytes = BytesMut::with_capacity(4);
+			bytes.put_u32(value.return_code());
+			bytes.freeze()
+		}
+	}
+}
+
+#[cfg(feature = "clients")]
+impl From<DirectoryItemResponse> for Bytes {
+	fn from(value: DirectoryItemResponse) -> Self {
+		Self::from(&value)
+	}
+}
+
+#[cfg(feature = "clients")]
+impl TryFrom<Bytes> for DirectoryItemResponse {
+	type Error = NetworkParseError;
+
+	fn try_from(mut value: Bytes) -> Result<Self, Self::Error> {
+		if value.len() < 4 {
+			return Err(NetworkParseError::NotEnoughData(
+				"DirectoryItemResponse",
+				4,
+				value.len(),
+				value,
+			));
+		}
+
+		// Okay we've at least got an rc....
+		let rc = value.get_u32();
+		if rc != 0 && rc != NO_MORE_ITEMS {
+			return Err(NetworkParseError::ErrorCode(rc));
+		}
+		if rc == NO_MORE_ITEMS {
+			return Ok(DirectoryItemResponse::new_nothing_left());
+		}
+
+		// rc is now guaranteed to be 0... We should expect a full packet.
+		if value.len() < 0x154 {
+			return Err(NetworkParseError::NotEnoughData(
+				"DirectoryItemResponse",
+				0x154,
+				value.len(),
+				value,
+			));
+		}
+		if value.len() > 0x154 {
+			return Err(NetworkParseError::UnexpectedTrailer(
+				"DirectoryItemResponse",
+				value.slice(0x154..),
+			));
+		}
+
+		let fd_info = PCFSSataFdInfo::try_from(value.slice(..84))?;
+		let path_bytes = value.slice(84..);
+		let path =
+			CStr::from_bytes_until_nul(&path_bytes).map_err(NetworkParseError::BadCString)?;
+
+		Ok(Self {
+			return_code: rc,
+			next_file_info: Some((fd_info, path.to_str()?.to_owned())),
+		})
 	}
 }
 

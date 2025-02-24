@@ -114,12 +114,18 @@ fn protect_bridge(
 	if let Some((existing_bridge_ip, _is_default)) = state.get_bridge(bridge_name) {
 		if existing_bridge_ip != Some(bridge_ip) {
 			if is_protecting {
-				println!("\nERROR : The specified IP address {bridge_ip} conflicts with an existing entry !");
+				println!(
+					"\nERROR : The specified IP address {bridge_ip} conflicts with an existing entry !"
+				);
 				std::process::exit(-1);
 			} else if let Some(ex_bridge_ip) = existing_bridge_ip {
-				println!("\nWARNING : IP address for bridge \"{bridge_name}\" updated from {ex_bridge_ip} to {bridge_ip}");
+				println!(
+					"\nWARNING : IP address for bridge \"{bridge_name}\" updated from {ex_bridge_ip} to {bridge_ip}"
+				);
 			} else {
-				println!("\nWARNING : IP address for bridge \"{bridge_name}\" updated from to {bridge_ip}");
+				println!(
+					"\nWARNING : IP address for bridge \"{bridge_name}\" updated from to {bridge_ip}"
+				);
 			}
 		}
 	}

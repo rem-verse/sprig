@@ -2,8 +2,8 @@
 //!
 //! This does not iterate over the directory at all, just opens the directory.
 
-use crate::errors::NetworkParseError;
-use bytes::Bytes;
+use crate::{errors::NetworkParseError, fsemul::pcfs::errors::PCFSApiError};
+use bytes::{Bytes, BytesMut};
 use std::ffi::CStr;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
@@ -11,13 +11,13 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 use crate::{
 	errors::CatBridgeError,
 	fsemul::{
-		host_filesystem::ResolvedLocation,
-		pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
 		HostFilesystem,
+		host_filesystem::ResolvedLocation,
+		pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
 	},
 };
 #[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
 #[cfg(feature = "servers")]
 use tracing::debug;
 
@@ -49,9 +49,46 @@ pub struct SataOpenFolderPacketBody {
 }
 
 impl SataOpenFolderPacketBody {
+	/// Attempt to construct a new open folder packet.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn new(path: String) -> Result<Self, PCFSApiError> {
+		if path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(path));
+		}
+
+		Ok(Self { path })
+	}
+
 	#[must_use]
 	pub fn path(&self) -> &str {
 		self.path.as_str()
+	}
+
+	/// Update the path to send in this particular open folder packet.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn set_path(&mut self, new_path: String) -> Result<(), PCFSApiError> {
+		if new_path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(new_path));
+		}
+
+		self.path = new_path;
+		Ok(())
 	}
 
 	/// Handle opening a folder upon request.
@@ -114,6 +151,23 @@ impl SataOpenFolderPacketBody {
 		buff.put_u32(0);
 
 		Ok(construct_sata_response(packet_header, 0, buff.freeze())?)
+	}
+}
+
+impl From<&SataOpenFolderPacketBody> for Bytes {
+	fn from(value: &SataOpenFolderPacketBody) -> Self {
+		let mut result = BytesMut::with_capacity(0x200);
+		result.extend_from_slice(value.path.as_bytes());
+		// These are C Strings so we need a NUL terminator.
+		// Pad with `0`, til we get a full path with a nul terminator.
+		result.extend(BytesMut::zeroed(0x200 - result.len()));
+		result.freeze()
+	}
+}
+
+impl From<SataOpenFolderPacketBody> for Bytes {
+	fn from(value: SataOpenFolderPacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 

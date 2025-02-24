@@ -71,7 +71,9 @@ fn main() {
 		println!("-----------------------------------------------------");
 		let all_bridges = host_env.list_bridges();
 		if all_bridges.len() == 67598 {
-			println!("WARNING : Too many entries in the INI file; please reduce the number of entries and try again");
+			println!(
+				"WARNING : Too many entries in the INI file; please reduce the number of entries and try again"
+			);
 		}
 
 		for (name, (opt_ip, is_default)) in all_bridges {

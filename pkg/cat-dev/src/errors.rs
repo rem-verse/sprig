@@ -42,7 +42,9 @@ pub enum CatBridgeError {
 	/// - [`tokio::sync::mpsc`]
 	///
 	/// Each of these contain more information.
-	#[error("We could not send a message locally to another part of the process. This channel must've been closed unexpectedly.")]
+	#[error(
+		"We could not send a message locally to another part of the process. This channel must've been closed unexpectedly."
+	)]
 	#[diagnostic(code(cat_dev::closed_channel))]
 	ClosedChannel,
 	/// See [`FSError`] for details.
@@ -68,7 +70,9 @@ pub enum CatBridgeError {
 	#[error("We could not spawn a task (a lightweight thread) to do work on.")]
 	#[diagnostic(code(cat_dev::spawn_failure))]
 	SpawnFailure(IoError),
-	#[error("This cat-dev API requires a 32 bit usize, and this machine does not have it, please upgrade your machine.")]
+	#[error(
+		"This cat-dev API requires a 32 bit usize, and this machine does not have it, please upgrade your machine."
+	)]
 	#[diagnostic(code(cat_dev::unsupported_bits_per_core))]
 	UnsupportedBitsPerCore,
 }
@@ -91,13 +95,16 @@ pub enum APIError {
 	///
 	/// This usually means we don't have a network interface we can communicate
 	/// on that has an IPv4 address assigned.
-	#[error("We could not find the local hosts ipv4 address which is needed if an ip isn't explicitly passed in.")]
+	#[error(
+		"We could not find the local hosts ipv4 address which is needed if an ip isn't explicitly passed in."
+	)]
 	#[diagnostic(code(cat_dev::api::no_host_ip_found))]
 	NoHostIpFound,
 }
 
 /// Trying to interact with the filesystem has resulted in an error.
 #[derive(Error, Diagnostic, Debug)]
+#[non_exhaustive]
 pub enum FSError {
 	/// We need a place to read/store a list of all the bridges on your host.
 	///
@@ -105,7 +112,9 @@ pub enum FSError {
 	/// that file should go. Please either contribute a path for your OS to use,
 	/// or manually provide the host bridge path (this can only be done on the
 	/// newer versions of tools).
-	#[error("We can't find the path to store a complete list of host-bridges, please use explicit paths instead.")]
+	#[error(
+		"We can't find the path to store a complete list of host-bridges, please use explicit paths instead."
+	)]
 	#[diagnostic(code(cat_dev::fs::cant_find_hostenv_path))]
 	CantFindHostEnvPath,
 	#[error(transparent)]
@@ -155,6 +164,7 @@ pub enum FSError {
 /// covers errors related to interacting with the network. If you're looking
 /// for bogus data from the network errors look at [`NetworkParseError`].*
 #[derive(Error, Diagnostic, Debug)]
+#[non_exhaustive]
 pub enum NetworkError {
 	/// We failed to bind to a local address to listen for packets from the
 	/// network.
@@ -197,19 +207,27 @@ pub enum NetworkError {
 	#[diagnostic(transparent)]
 	Parse(#[from] NetworkParseError),
 	/// The client requested too many bytes to actively serve.
-	#[error("The client requested too many bytes to send over a connection at once (larger than usize::MAX on your architecture): {0}")]
+	#[error(
+		"The client requested too many bytes to send over a connection at once (larger than usize::MAX on your architecture): {0}"
+	)]
 	#[diagnostic(code(cat_dev::net::requested_size_too_large))]
 	RequestedSizeTooLarge(u128),
 	/// If we failed to call `setsockopt` through libc.
 	///
 	/// For example if on linux see: <https://linux.die.net/man/2/setsockopt>
-	#[error("Failed to set the socket we're bound on as a broadcast address, this is needed to discover CAT devices.")]
+	#[error(
+		"Failed to set the socket we're bound on as a broadcast address, this is needed to discover CAT devices."
+	)]
 	#[diagnostic(code(cat_dev::net::set_broadcast_failure))]
 	SetBroadcastFailure,
 	/// Error adding a packet to a queue to send.
 	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
 	#[diagnostic(code(cat_dev::net::send_queue_failure))]
 	SendQueueFailure(#[from] SendError<Bytes>),
+	/// Error adding a packet to a queue to send.
+	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
+	#[diagnostic(code(cat_dev::net::send_queue_failure))]
+	SendMultiQueueFailure(#[from] SendError<(Option<Bytes>, Option<Bytes>)>),
 	/// We waited too long to send/receive data from the network.
 	///
 	/// There may be something wrong with our network connection, or the targets
@@ -244,9 +262,14 @@ pub enum NetworkParseError {
 	BadCString(#[from] FromBytesUntilNulError),
 	/// We expected to read a packet containing exactly a set of bytes,
 	/// unfortunatley it did not contain those _Exact_ bytes.
-	#[error("Tried to read Packet of type ({0}) from network, must be encoded exactly as [{1:02x?}], but got [{2:02x?}]")]
+	#[error(
+		"Tried to read Packet of type ({0}) from network, must be encoded exactly as [{1:02x?}], but got [{2:02x?}]"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::doesnt_match_static_data))]
 	DoesntMatchStaticPayload(&'static str, &'static [u8], Bytes),
+	#[error("Internal Protocol responded with an error code: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::error_code))]
+	ErrorCode(u32),
 	/// A field encoded within a packet was not correct (e.g. a string wasn't
 	/// UTF-8).
 	#[error("Reading Field {1} from Packet {0}, was not encoded correctly must be encoded as {2}")]
@@ -254,11 +277,15 @@ pub enum NetworkParseError {
 	FieldEncodedIncorrectly(&'static str, &'static str, &'static str),
 	/// A field encoded within a packet requires a minimum number of bytes, but
 	/// the field was not long enough.
-	#[error("Tried Reading Field {1} from Packet {0}. This Field requires at least {2} bytes, but only had {3}, bytes: {4:02x?}")]
+	#[error(
+		"Tried Reading Field {1} from Packet {0}. This Field requires at least {2} bytes, but only had {3}, bytes: {4:02x?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::field_not_long_enough))]
 	FieldNotLongEnough(&'static str, &'static str, usize, usize, Bytes),
 	/// A field encoded within a packet has a maximum length that was exceeded.
-	#[error("Tried Reading Field {1} from Packet {0}. This field is at max {2} bytes, but had {3}, bytes: {4:02x?}")]
+	#[error(
+		"Tried Reading Field {1} from Packet {0}. This field is at max {2} bytes, but had {3}, bytes: {4:02x?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::field_too_long))]
 	FieldTooLong(&'static str, &'static str, usize, usize, Bytes),
 	#[error(transparent)]
@@ -270,12 +297,16 @@ pub enum NetworkParseError {
 	MION(#[from] MIONProtocolError),
 	/// The overall size of the packet was too short, and we cannot successfully
 	/// parse it.
-	#[error("Tried to read Packet of type ({0}) from network needs at least {1} bytes, but only got {2} bytes: {3:02x?}")]
+	#[error(
+		"Tried to read Packet of type ({0}) from network needs at least {1} bytes, but only got {2} bytes: {3:02x?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::not_enough_data))]
 	NotEnoughData(&'static str, usize, usize, Bytes),
 	/// The overall size of the packet was too long, and there was unexpected
 	/// data at the end, a.k.a. the "Trailer".
-	#[error("Unexpected Trailer for Packet `{0}` received from the network (we're not sure what do with this extra data), extra bytes: {1:02x?}")]
+	#[error(
+		"Unexpected Trailer for Packet `{0}` received from the network (we're not sure what do with this extra data), extra bytes: {1:02x?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::unexpected_trailer))]
 	UnexpectedTrailer(&'static str, Bytes),
 	/// We expected to read UTF-8 data from the network, but it wasn't UTF-8.

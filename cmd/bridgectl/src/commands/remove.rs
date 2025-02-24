@@ -3,10 +3,10 @@
 //! Specifically remove a bridge from your host state file aka your `bridge_env.ini`.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{get_targeted_bridge_name, lease_bridge_config_mut},
 	exit_codes::{REMOVE_BRIDGE_DOESNT_EXIST, REMOVE_COULD_NOT_SAVE_TO_DISK},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use miette::miette;
 use tracing::{error, info};

@@ -3,8 +3,8 @@
 use crate::{
 	errors::{APIError, CatBridgeError, NetworkError},
 	fsemul::{
-		atapi::proto::{read_packet_temp_will_break::handle_read_dlf, ChunkATAPIEmulatorCodec},
 		HostFilesystem,
+		atapi::proto::{ChunkATAPIEmulatorCodec, read_packet_temp_will_break::handle_read_dlf},
 	},
 };
 use bytes::{BufMut, Bytes, BytesMut};
@@ -16,7 +16,7 @@ use tokio::{
 	task::Builder as TaskBuilder,
 };
 use tokio_util::codec::Framed;
-use tracing::{debug, error, error_span, Instrument};
+use tracing::{Instrument, debug, error, error_span};
 
 /// The default port to use for hosting the ATAPI Server.
 pub const DEFAULT_ATAPI_PORT: u16 = 7974_u16;
@@ -131,10 +131,14 @@ impl<'fs> AtapiServer<'fs> {
 
 				match &packet[..2] {
 					[0x3, _] => {
-						debug!("Would have sent 32 bytes of various descriptions back... not sure which...");
+						debug!(
+							"Would have sent 32 bytes of various descriptions back... not sure which..."
+						);
 					}
 					[0x12, _] => {
-						debug!("Would have sent 96 bytes of various descriptions back... not sure which...");
+						debug!(
+							"Would have sent 96 bytes of various descriptions back... not sure which..."
+						);
 					}
 					[0xCF, 0x80] => {
 						debug!("ATAPI Event packet sent!");
@@ -263,10 +267,14 @@ impl AtapiServer<'static> {
 
 				match &packet[..2] {
 					[0x3, _] => {
-						debug!("Would have sent 32 bytes of various descriptions back... not sure which...");
+						debug!(
+							"Would have sent 32 bytes of various descriptions back... not sure which..."
+						);
 					}
 					[0x12, _] => {
-						debug!("Would have sent 96 bytes of various descriptions back... not sure which...");
+						debug!(
+							"Would have sent 96 bytes of various descriptions back... not sure which..."
+						);
 					}
 					[0xCF, 0x80] => {
 						debug!("ATAPI Event packet sent!");

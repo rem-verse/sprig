@@ -1,15 +1,15 @@
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{get_byte_value, get_targeted_bridge_ip},
 	exit_codes::{
 		SET_PARAMS_FAILED_TO_SET_PARAMS, SET_PARAMS_INVALID_PARAMETER_SET_STRING,
 		SET_PARAMS_INVALID_PARAMETER_VALUE, SET_PARAMS_NO_PARAMETERS_SPECIFIED,
 	},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
 	parameter::set_parameters,
-	proto::parameter::well_known::{validate_value_at_index, ParameterLocationSpecification},
+	proto::parameter::well_known::{ParameterLocationSpecification, validate_value_at_index},
 };
 use miette::miette;
 use std::net::Ipv4Addr;

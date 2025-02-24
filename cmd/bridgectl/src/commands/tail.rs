@@ -1,9 +1,9 @@
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{coalesce_serial_ports, get_targeted_bridge_ip},
 	exit_codes::TAIL_COULD_NOT_SPAWN,
 	knobs::cli::SharedSerialPortFlags,
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use miette::miette;
 use std::path::PathBuf;

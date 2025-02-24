@@ -4,13 +4,13 @@
 //! is one way to transfer files/blocks form the PC to the filesystem.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN, BOOT_FSEMUL_SERVER_ERROR},
 	knobs::env::CONNECTION_TIMEOUT,
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::{
-	fsemul::{sdio::server::SdioClient, HostFilesystem},
+	fsemul::{HostFilesystem, sdio::server::SdioClient},
 	mion::proto::cgis::SetupParameters,
 };
 use miette::miette;
@@ -69,10 +69,15 @@ pub async fn serve_sdio(
 					add_context_to(
 						miette!("Failed to connect to cat-dev to serve data over SDIO"),
 						[
-							miette!("Please ensure the device is running and has no error lights on."),
-							miette!("A reboot of the cat-dev device, and letting it settle may fix this."),
+							miette!(
+								"Please ensure the device is running and has no error lights on."
+							),
+							miette!(
+								"A reboot of the cat-dev device, and letting it settle may fix this."
+							),
 							cause.into(),
-						].into_iter(),
+						]
+						.into_iter(),
 					),
 				);
 			}

@@ -4,18 +4,16 @@
 //! actual `uid`/`gid`. This is because windows doesn't have the concept of a
 //! uid/gid.
 
-use crate::errors::NetworkParseError;
-use bytes::Bytes;
+use crate::{errors::NetworkParseError, fsemul::pcfs::errors::PCFSApiError};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::ffi::CStr;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[cfg(feature = "servers")]
 use crate::{
 	errors::CatBridgeError,
-	fsemul::pcfs::sata_proto::{construct_sata_response, SataPacketHeader},
+	fsemul::pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
 };
-#[cfg(feature = "servers")]
-use bytes::{BufMut, BytesMut};
 
 /// A packet to change the owner of a file.
 ///
@@ -40,17 +38,66 @@ pub struct SataChangeOwnerPacketBody {
 }
 
 impl SataChangeOwnerPacketBody {
+	/// Attempt to construct a new change owner packet.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn new(path: String, uid: u32, gid: u32) -> Result<Self, PCFSApiError> {
+		if path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(path));
+		}
+
+		Ok(Self { path, uid, gid })
+	}
+
 	#[must_use]
 	pub fn path(&self) -> &str {
 		self.path.as_str()
 	}
+
+	/// Update the path to send in this particular change owner packet.
+	///
+	/// ## Errors
+	///
+	/// If the path is longer than 511 bytes. Normally the max path is 512 bytes,
+	/// but because we need to encode our data as a C-String with a NUL
+	/// terminator we cannot be longer than 511 bytes.
+	///
+	/// Consider using relative/mapped paths if possible when dealing with long
+	/// paths.
+	pub fn set_path(&mut self, new_path: String) -> Result<(), PCFSApiError> {
+		if new_path.len() > 511 {
+			return Err(PCFSApiError::PathTooLong(new_path));
+		}
+
+		self.path = new_path;
+		Ok(())
+	}
+
 	#[must_use]
 	pub const fn uid(&self) -> u32 {
 		self.uid
 	}
+
+	/// Set the user id to send for this packet.
+	pub const fn set_uid(&mut self, new_uid: u32) {
+		self.uid = new_uid;
+	}
+
 	#[must_use]
 	pub const fn gid(&self) -> u32 {
 		self.gid
+	}
+
+	/// Set the group id to send for this packet.
+	pub const fn set_gid(&mut self, new_gid: u32) {
+		self.gid = new_gid;
 	}
 
 	/// Handle a change owner request.
@@ -103,6 +150,25 @@ impl TryFrom<Bytes> for SataChangeOwnerPacketBody {
 			uid,
 			gid,
 		})
+	}
+}
+
+impl From<&SataChangeOwnerPacketBody> for Bytes {
+	fn from(value: &SataChangeOwnerPacketBody) -> Self {
+		let mut result = BytesMut::with_capacity(0x208);
+		result.extend_from_slice(value.path.as_bytes());
+		// These are C Strings so we need a NUL terminator.
+		// Pad with `0`, til we get a full path with a nul terminator.
+		result.extend(BytesMut::zeroed(0x200 - result.len()));
+		result.put_u32(value.uid);
+		result.put_u32(value.gid);
+		result.freeze()
+	}
+}
+
+impl From<SataChangeOwnerPacketBody> for Bytes {
+	fn from(value: SataChangeOwnerPacketBody) -> Self {
+		Self::from(&value)
 	}
 }
 
