@@ -17,7 +17,7 @@ use crate::{
 use bytes::{BufMut, Bytes, BytesMut};
 use mac_address::MacAddress;
 use std::{
-	fmt::{Display, Formatter, Result as FmtResult},
+	fmt::{Display, Formatter, Result as FmtResult, Write},
 	net::Ipv4Addr,
 };
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
@@ -250,14 +250,14 @@ impl MionIdentity {
 	/// displayed in a list view.
 	#[must_use]
 	pub fn fpga_version(&self) -> String {
-		let mut fpga_version = String::new();
+		let mut fpga_version = String::with_capacity(8);
 		for byte in [
 			self.fpga_version[3],
 			self.fpga_version[2],
 			self.fpga_version[1],
 			self.fpga_version[0],
 		] {
-			fpga_version.push_str(&format!("{byte:x}"));
+			_ = write!(&mut fpga_version, "{byte:x}");
 		}
 		fpga_version
 	}
@@ -265,14 +265,14 @@ impl MionIdentity {
 	/// displayed in a detail view.
 	#[must_use]
 	pub fn detailed_fpga_version(&self) -> String {
-		let mut fpga_version = String::new();
+		let mut fpga_version = String::with_capacity(8);
 		for byte in [
 			self.fpga_version[3],
 			self.fpga_version[2],
 			self.fpga_version[1],
 			self.fpga_version[0],
 		] {
-			fpga_version.push_str(&format!("{byte:02x}"));
+			_ = write!(&mut fpga_version, "{byte:02x}");
 		}
 		fpga_version
 	}

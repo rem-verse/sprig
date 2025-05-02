@@ -3,7 +3,6 @@
 use crate::{
 	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
 	fsemul::{
-		atapi::errors::ATAPIProtocolError,
 		pcfs::errors::{PCFSApiError, SataProtocolError},
 		sdio::errors::{SDIOAPIError, SDIOProtocolError},
 	},
@@ -117,9 +116,6 @@ impl From<FSEmulFSError> for CatBridgeError {
 pub enum FSEmulProtocolError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
-	ATAPI(#[from] ATAPIProtocolError),
-	#[error(transparent)]
-	#[diagnostic(transparent)]
 	PCFSSata(#[from] SataProtocolError),
 	#[error(transparent)]
 	#[diagnostic(transparent)]
@@ -133,22 +129,6 @@ impl From<FSEmulProtocolError> for NetworkError {
 }
 impl From<FSEmulProtocolError> for CatBridgeError {
 	fn from(value: FSEmulProtocolError) -> Self {
-		Self::Network(value.into())
-	}
-}
-
-impl From<ATAPIProtocolError> for NetworkParseError {
-	fn from(value: ATAPIProtocolError) -> Self {
-		Self::FSEmul(value.into())
-	}
-}
-impl From<ATAPIProtocolError> for NetworkError {
-	fn from(value: ATAPIProtocolError) -> Self {
-		Self::Parse(value.into())
-	}
-}
-impl From<ATAPIProtocolError> for CatBridgeError {
-	fn from(value: ATAPIProtocolError) -> Self {
 		Self::Network(value.into())
 	}
 }

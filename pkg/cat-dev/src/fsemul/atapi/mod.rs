@@ -8,10 +8,5 @@
 //! you got a search request for ATAPI, and were looking for actual real ATAPI
 //! code. Not this weird nintendo variant.
 
-#[cfg(feature = "clients")]
-pub mod client;
-pub mod errors;
-#[cfg(any(feature = "clients", feature = "servers"))]
-pub mod proto;
 #[cfg(feature = "servers")]
 pub mod server;

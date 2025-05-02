@@ -436,7 +436,7 @@ impl RawSyncSerialPort {
 					Some(&[c, ..]) if c.is_ascii_digit() => return None,
 					// Accept the rest.
 					Some(_) => (),
-				};
+				}
 
 				// There's a bunch of ttyS* ports that are not really serial ports.
 				//

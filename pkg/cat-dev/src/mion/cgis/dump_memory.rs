@@ -7,15 +7,19 @@
 
 use crate::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	mion::{cgis::AUTHZ_HEADER, proto::cgis::MIONCGIErrors},
+	mion::{
+		cgis::{AUTHZ_HEADER, encode_url_parameters},
+		proto::cgis::MIONCGIErrors,
+	},
 };
 use bytes::{Bytes, BytesMut};
 use fnv::FnvHashMap;
 use futures::{StreamExt, future::Either};
 use reqwest::{Client, Response, Version};
-use serde::Serialize;
 use std::{
+	fmt::Display,
 	net::Ipv4Addr,
+	ops::Deref,
 	sync::atomic::{AtomicU8, Ordering as AtomicOrdering},
 	time::Duration,
 };
@@ -388,14 +392,11 @@ fn extract_memory_table_body(body: &str) -> Result<String, MIONCGIErrors> {
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_memory_request<UrlEncodableType>(
+pub async fn do_raw_memory_request(
 	client: &Client,
 	mion_ip: Ipv4Addr,
-	url_parameters: UrlEncodableType,
-) -> Result<Response, NetworkError>
-where
-	UrlEncodableType: Serialize,
-{
+	url_parameters: &[(impl Deref<Target = str>, impl Display)],
+) -> Result<Response, NetworkError> {
 	Ok(client
 		.post(format!("http://{mion_ip}/dbg/mem_dump.cgi"))
 		.version(Version::HTTP_11)
@@ -405,10 +406,7 @@ where
 			"user-agent",
 			format!("cat-dev/{}", env!("CARGO_PKG_VERSION")),
 		)
-		.body::<String>(
-			serde_urlencoded::to_string(&url_parameters)
-				.map_err(MIONCGIErrors::FormDataEncodeError)?,
-		)
+		.body::<String>(encode_url_parameters(url_parameters))
 		.send()
 		.await?)
 }

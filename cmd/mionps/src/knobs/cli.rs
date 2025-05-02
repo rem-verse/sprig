@@ -88,13 +88,11 @@ impl<Ty: Iterator<Item = String>> From<Ty> for CliOpts {
 				_ => {
 					if opts.ip_address.is_none() {
 						opts.ip_address = Some(item);
-						continue;
 					} else if !read_offset_like {
 						if let Ok(value) = item.parse::<u16>() {
 							opts.offset = Some(value);
 						}
 						read_offset_like = true;
-						continue;
 					}
 				}
 			}

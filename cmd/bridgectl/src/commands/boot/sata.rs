@@ -7,10 +7,6 @@
 use crate::{
 	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
-	knobs::env::{
-		FSEMUL_DISABLE_REMOVAL, PCFS_DISABLE_CSR, PCFS_DISABLE_FFIO,
-		PCFS_DISABLE_LOAD_BEARING_SLEEP,
-	},
 	utils::add_context_to,
 };
 use cat_dev::fsemul::{HostFilesystem, pcfs::sata::server::PCFSSataServer};
@@ -37,10 +33,10 @@ pub async fn serve_sata(
 		host_filesystem,
 		host_ip,
 		fsemul_sata_port,
-		disable_real_removal || (*FSEMUL_DISABLE_REMOVAL),
-		!disable_ffio && !(*PCFS_DISABLE_FFIO),
-		!disable_csr && !(*PCFS_DISABLE_CSR),
-		disable_load_bearing_sleep || (*PCFS_DISABLE_LOAD_BEARING_SLEEP),
+		disable_real_removal,
+		!disable_ffio,
+		!disable_csr,
+		disable_load_bearing_sleep,
 	)
 	.await
 	{

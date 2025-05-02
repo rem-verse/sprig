@@ -3,17 +3,12 @@
 use bytes::Bytes;
 use mac_address::MacParseError;
 use miette::Diagnostic;
-use serde_urlencoded::ser::Error as SerdeUrlEncodeError;
 use std::{net::AddrParseError, num::ParseIntError};
 use thiserror::Error;
 
 /// Errors related to handling and dealing with the HTML CGI pages.
 #[derive(Debug, Diagnostic, Error, PartialEq, Eq)]
 pub enum MIONCGIErrors {
-	/// See [`serde_urlencoded::ser::Error`] for details.
-	#[error("Failed to encode data as form data: {0}")]
-	#[diagnostic(code(cat_dev::net::parse::mion::cgi::encode::form_data_error))]
-	FormDataEncodeError(#[from] SerdeUrlEncodeError),
 	/// The HTML response we got was expected to contain hexadecimal bytes.
 	///
 	/// We could not parse one of these hexadecimal bytes. Either the device

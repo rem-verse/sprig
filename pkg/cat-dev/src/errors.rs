@@ -9,7 +9,7 @@ use crate::{
 	mion::errors::{MIONAPIError, MIONProtocolError},
 };
 use bytes::Bytes;
-use miette::Diagnostic;
+use miette::{Diagnostic, Report};
 use std::{ffi::FromBytesUntilNulError, str::Utf8Error, string::FromUtf8Error, time::Duration};
 use thiserror::Error;
 use tokio::{io::Error as IoError, sync::mpsc::error::SendError, task::JoinError};
@@ -18,11 +18,19 @@ use tokio::{io::Error as IoError, sync::mpsc::error::SendError, task::JoinError}
 use walkdir::Error as WalkdirError;
 
 #[cfg(feature = "clients")]
+use crate::net::client::errors::CommonNetClientNetworkError;
+#[cfg(feature = "clients")]
 use local_ip_address::Error as LocalIpAddressError;
 #[cfg(feature = "clients")]
 use network_interface::Error as NetworkInterfaceError;
 #[cfg(feature = "clients")]
 use reqwest::Error as ReqwestError;
+
+#[cfg(any(feature = "clients", feature = "servers"))]
+use crate::net::errors::{CommonNetAPIError, CommonNetNetworkError};
+
+#[cfg(feature = "servers")]
+use crate::net::server::models::ResponseStreamMessage;
 
 /// The 'top-level' error type for this entire crate, all error types
 /// wrap underneath this.
@@ -70,6 +78,10 @@ pub enum CatBridgeError {
 	#[error("We could not spawn a task (a lightweight thread) to do work on.")]
 	#[diagnostic(code(cat_dev::spawn_failure))]
 	SpawnFailure(IoError),
+	/// An unknown error occured.
+	#[error("An unknown error we couldn't pin down occured: {0:?}")]
+	#[diagnostic(code(cat_dev::unknown))]
+	UnknownError(Report),
 	#[error(
 		"This cat-dev API requires a 32 bit usize, and this machine does not have it, please upgrade your machine."
 	)]
@@ -83,8 +95,14 @@ pub enum CatBridgeError {
 /// All the APIs within this crate will have errors will be collapsed under
 /// this particular error type. There will be no inner separation between
 /// modules.
-#[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Error, Diagnostic, Debug)]
 pub enum APIError {
+	/// Common network related API errors.
+	#[cfg(any(feature = "clients", feature = "servers"))]
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	CommonNet(#[from] CommonNetAPIError),
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	FSEmul(#[from] FSEmulAPIError),
@@ -100,6 +118,13 @@ pub enum APIError {
 	)]
 	#[diagnostic(code(cat_dev::api::no_host_ip_found))]
 	NoHostIpFound,
+}
+
+#[cfg(any(feature = "clients", feature = "servers"))]
+impl From<CommonNetAPIError> for CatBridgeError {
+	fn from(value: CommonNetAPIError) -> Self {
+		Self::from(APIError::CommonNet(value))
+	}
 }
 
 /// Trying to interact with the filesystem has resulted in an error.
@@ -180,6 +205,18 @@ pub enum NetworkError {
 	#[error("Failed to bind to a local address to receive packets.")]
 	#[diagnostic(code(cat_dev::net::bind_failure))]
 	BindFailure,
+	#[cfg(feature = "clients")]
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	CommonClient(#[from] CommonNetClientNetworkError),
+	/// An error has occurred in our common network framework.
+	#[cfg(any(feature = "clients", feature = "servers"))]
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	CommonNet(#[from] CommonNetNetworkError),
+	#[error("A duplicate stream id was somehow attempted to be registered: {0}")]
+	#[diagnostic(code(cat_dev::net::duplicate_stream_id))]
+	DuplicateStreamId(u64),
 	#[error("Expected some sort of data from other side, but got none.")]
 	#[diagnostic(code(cat_dev::net::expected_data))]
 	ExpectedData,
@@ -225,6 +262,11 @@ pub enum NetworkError {
 	#[diagnostic(code(cat_dev::net::send_queue_failure))]
 	SendQueueFailure(#[from] SendError<Bytes>),
 	/// Error adding a packet to a queue to send.
+	#[cfg(feature = "servers")]
+	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
+	#[diagnostic(code(cat_dev::net::send_queue_failure))]
+	SendQueueMessageFailure(#[from] SendError<ResponseStreamMessage>),
+	/// Error adding a packet to a queue to send.
 	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
 	#[diagnostic(code(cat_dev::net::send_queue_failure))]
 	SendMultiQueueFailure(#[from] SendError<(Option<Bytes>, Option<Bytes>)>),
@@ -237,6 +279,20 @@ pub enum NetworkError {
 	)]
 	#[diagnostic(code(cat_dev::net::timeout))]
 	Timeout(Duration),
+}
+
+#[cfg(feature = "clients")]
+impl From<CommonNetClientNetworkError> for CatBridgeError {
+	fn from(value: CommonNetClientNetworkError) -> Self {
+		Self::Network(value.into())
+	}
+}
+
+#[cfg(any(feature = "clients", feature = "servers"))]
+impl From<CommonNetNetworkError> for CatBridgeError {
+	fn from(value: CommonNetNetworkError) -> Self {
+		Self::Network(value.into())
+	}
 }
 
 #[cfg(feature = "clients")]

@@ -180,6 +180,24 @@ pub static FSEMUL_DISABLE_REMOVAL: LazyLock<bool> = LazyLock::new(|| {
 		== "1"
 });
 
+/// Enables our ATAPI server to go "full throttle", and potentially overwhelm
+/// the MION.
+///
+/// *YOU SHOULD NOT DISABLE LOAD BEARING SLEEP IF EVER TALKING TO A REAL, NON
+/// MODIFIED CAT-DEV. YOU WILL EXPERIENCE BUGS. THE MION WILL ACK PACKETS BUT
+/// NOT ACTUALLY PROCESS THEM.*
+///
+/// Environment Variable Name: `ATAPI_DISABLE_LOAD_BEARING_SLEEP`
+/// Expected Values: `1`, or `0` (`1` meaning true, `0` the default).
+/// Type: [`bool`]
+pub static ATAPI_DISABLE_LOAD_BEARING_SLEEP: LazyLock<bool> = LazyLock::new(|| {
+	env_var("ATAPI_DISABLE_LOAD_BEARING_SLEEP")
+		.ok()
+		.as_deref()
+		.unwrap_or("0")
+		== "1"
+});
+
 /// Determines if we should disable 'combined send/recv' for PCFS.
 ///
 /// Environment Variable Name: `DISABLE_CSR_FOR_PCFS`
@@ -206,7 +224,7 @@ pub static PCFS_DISABLE_FFIO: LazyLock<bool> = LazyLock::new(|| {
 		== "1"
 });
 
-/// Enables our PCFS client to go "full throttle", and potentially overwhelm
+/// Enables our PCFS server to go "full throttle", and potentially overwhelm
 /// the MION.
 ///
 /// *YOU SHOULD NOT DISABLE LOAD BEARING SLEEP IF EVER TALKING TO A REAL, NON
@@ -236,7 +254,7 @@ pub static PCFS_DISABLE_LOAD_BEARING_SLEEP: LazyLock<bool> = LazyLock::new(|| {
 pub static PCFS_IS_SATA: LazyLock<bool> =
 	LazyLock::new(|| env_var("USE_PCFS_OVER_SATA").ok().as_deref().unwrap_or("1") == "1");
 
-/// Enables our SDIO client to go "full throttle", and potentially overwhelm
+/// Enables our SDIO server to go "full throttle", and potentially overwhelm
 /// the MION.
 ///
 /// *YOU SHOULD NOT DISABLE LOAD BEARING SLEEP IF EVER TALKING TO A REAL, NON

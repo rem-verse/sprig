@@ -4,15 +4,14 @@
 use crate::{
 	errors::{APIError, CatBridgeError, NetworkError},
 	mion::{
-		cgis::{do_simple_request, parse_result_from_body},
+		cgis::{do_simple_request, encode_url_parameters, parse_result_from_body},
 		proto::cgis::{ControlOperation, MIONCGIErrors, SetParameter},
 	},
 };
 use fnv::FnvHashMap;
 use local_ip_address::local_ip;
 use reqwest::{Client, Method};
-use serde::Serialize;
-use std::net::Ipv4Addr;
+use std::{fmt::Display, net::Ipv4Addr, ops::Deref};
 use tracing::warn;
 
 /// Perform a `get_info` request given a host, and a name.
@@ -290,22 +289,16 @@ pub async fn power_on_v2_with_raw_client(
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_control_request<UrlEncodableType>(
+pub async fn do_raw_control_request(
 	client: &Client,
 	mion_ip: Ipv4Addr,
-	url_parameters: UrlEncodableType,
-) -> Result<String, NetworkError>
-where
-	UrlEncodableType: Serialize,
-{
+	url_parameters: &[(impl Deref<Target = str>, impl Display)],
+) -> Result<String, NetworkError> {
 	do_simple_request::<String>(
 		client,
 		Method::POST,
 		format!("http://{mion_ip}/mion/control.cgi"),
-		Some(
-			serde_urlencoded::to_string(&url_parameters)
-				.map_err(MIONCGIErrors::FormDataEncodeError)?,
-		),
+		Some(encode_url_parameters(url_parameters)),
 	)
 	.await
 }

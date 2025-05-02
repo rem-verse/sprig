@@ -17,7 +17,10 @@ use std::{
 	hash::RandomState,
 	io::{Error as IOError, SeekFrom},
 	path::{Path, PathBuf},
-	sync::atomic::{AtomicI32, Ordering as AtomicOrdering},
+	sync::{
+		Arc,
+		atomic::{AtomicI32, Ordering as AtomicOrdering},
+	},
 };
 use tokio::{
 	fs::{
@@ -39,18 +42,18 @@ static DIRECTORY_FD: AtomicI32 = AtomicI32::new(1);
 /// methods to make getting files/generating default files/etc. easy. Most of
 /// the actual logic for turning a request from `SDIO`, `ATAPI`, etc. all come
 /// from those client/server implementations rather than the logic living here.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct HostFilesystem {
 	/// The path to the base data directory to serve a filesystem out of.
 	cafe_sdk_path: PathBuf,
 	/// List of open file handles.
 	///
 	/// This contains a value of (file, file size, path).
-	open_file_handles: ConcurrentMap<i32, (File, u64, PathBuf)>,
+	open_file_handles: Arc<ConcurrentMap<i32, (File, u64, PathBuf)>>,
 	/// List of open directory "handles".
 	///
 	/// This contains a value of (read directory, is end, path)
-	open_folder_handles: ConcurrentMap<i32, (ReadDir, bool, PathBuf)>,
+	open_folder_handles: Arc<ConcurrentMap<i32, (ReadDir, bool, PathBuf)>>,
 	/// A set of folders that we've "marked" as read-only.
 	///
 	/// We don't actually synchronize this to the filesystem because the original
@@ -60,7 +63,7 @@ pub struct HostFilesystem {
 	///
 	/// This is not the case on older windows distributions, unix based distros,
 	/// or similar.
-	folders_marked_read_only: ConcurrentSet<PathBuf>,
+	folders_marked_read_only: Arc<ConcurrentSet<PathBuf>>,
 }
 
 impl HostFilesystem {
@@ -132,9 +135,9 @@ impl HostFilesystem {
 
 		Ok(Self {
 			cafe_sdk_path,
-			folders_marked_read_only: ConcurrentSet::new(),
-			open_file_handles: ConcurrentMap::new(),
-			open_folder_handles: ConcurrentMap::new(),
+			folders_marked_read_only: Arc::new(ConcurrentSet::new()),
+			open_file_handles: Arc::new(ConcurrentMap::new()),
+			open_folder_handles: Arc::new(ConcurrentMap::new()),
 		})
 	}
 
@@ -484,6 +487,7 @@ impl HostFilesystem {
 	}
 
 	/// Check if a path is allowed to be writable.
+	#[must_use]
 	pub fn path_allows_writes(&self, path: &Path) -> bool {
 		// TODO(mythra): check FSEmulAttributeRules
 		!path.to_string_lossy().contains("%DISC_EMU_DIR")

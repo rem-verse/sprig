@@ -71,7 +71,11 @@ use crate::{
 	exit_codes::BOOT_CGI_FAILURE,
 	knobs::{
 		cli::{FSEmulConfigurationFlags, SharedSerialPortFlags},
-		env::PCFS_IS_SATA,
+		env::{
+			ATAPI_DISABLE_LOAD_BEARING_SLEEP, FSEMUL_DISABLE_REMOVAL, PCFS_DISABLE_CSR,
+			PCFS_DISABLE_FFIO, PCFS_DISABLE_LOAD_BEARING_SLEEP, PCFS_IS_SATA,
+			SDIO_DISABLE_LOAD_BEARING_SLEEP,
+		},
 	},
 };
 use cat_dev::mion::{
@@ -136,6 +140,7 @@ pub async fn handle_boot(
 		setup_params
 			.as_ref()
 			.map(SetupParameters::atapi_emulator_port),
+		fsemul_flags.disable_load_bearing_sleep_for_atapi() || *ATAPI_DISABLE_LOAD_BEARING_SLEEP,
 	)
 	.await;
 	serve_sdio(
@@ -144,7 +149,7 @@ pub async fn handle_boot(
 		file_system,
 		get_sdio_control_port().await,
 		get_sdio_printf_port().await,
-		fsemul_flags.disable_load_bearing_sleep_for_sdio(),
+		fsemul_flags.disable_load_bearing_sleep_for_sdio() || *SDIO_DISABLE_LOAD_BEARING_SLEEP,
 	)
 	.await;
 	let will_use_sata = get_will_use_sata(disable_sata);
@@ -158,10 +163,10 @@ pub async fn handle_boot(
 				.or(lease_fsemul_config_optionally()
 					.await
 					.and_then(|emul| emul.get_pcfs_sata_port())),
-			fsemul_flags.disable_real_removal(),
-			fsemul_flags.disable_ffio(),
-			fsemul_flags.disable_csr(),
-			fsemul_flags.disable_load_bearing_sleep_for_pcfs(),
+			fsemul_flags.disable_real_removal() || *FSEMUL_DISABLE_REMOVAL,
+			fsemul_flags.disable_ffio() || *PCFS_DISABLE_FFIO,
+			fsemul_flags.disable_csr() || *PCFS_DISABLE_CSR,
+			fsemul_flags.disable_load_bearing_sleep_for_pcfs() || *PCFS_DISABLE_LOAD_BEARING_SLEEP,
 		)
 		.await;
 		Some(p)

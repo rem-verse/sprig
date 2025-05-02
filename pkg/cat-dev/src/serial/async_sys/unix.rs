@@ -145,6 +145,7 @@ impl RawAsyncSerialPort {
 					unfilled.len(),
 				))
 			});
+
 			match result {
 				Ok(result) => {
 					let read = result?;
@@ -152,7 +153,7 @@ impl RawAsyncSerialPort {
 					buf.advance(read);
 					return Poll::Ready(Ok(()));
 				}
-				Err(_would_block) => continue,
+				Err(_would_block) => {}
 			}
 		}
 	}
@@ -166,9 +167,10 @@ impl RawAsyncSerialPort {
 					libc::write(inner.as_raw_fd(), buf.as_ptr().cast(), buf.len())
 				})
 			});
+
 			match result {
 				Ok(result) => return Poll::Ready(result),
-				Err(_would_block) => continue,
+				Err(_would_block) => {}
 			}
 		}
 	}
@@ -188,9 +190,10 @@ impl RawAsyncSerialPort {
 					libc::writev(inner.as_raw_fd(), bufs.as_ptr().cast(), buf_count)
 				})
 			});
+
 			match result {
 				Ok(result) => return Poll::Ready(result),
-				Err(_would_block) => continue,
+				Err(_would_block) => {}
 			}
 		}
 	}

@@ -5,6 +5,10 @@
 	// Where this becomes significantly more helpful to read as it's out of
 	// context.
 	clippy::module_name_repetitions,
+	// I really don't like clippy trying to control how i choose to input my
+	// markdown that gets rendered.
+	clippy::doc_lazy_continuation,
+	clippy::doc_overindented_list_items,
 )]
 
 pub mod commands;
