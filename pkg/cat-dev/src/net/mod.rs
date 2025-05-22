@@ -26,6 +26,8 @@ use std::{
 
 /// The default slowdown to use for cat-dev units that seems to work.
 pub const DEFAULT_CAT_DEV_SLOWDOWN: Duration = Duration::from_millis(25);
+/// The default amount to chunk write calls as to not overwhelm the cat-dev.
+pub const DEFAULT_CAT_DEV_CHUNK_SIZE: usize = 8192;
 /// The default "slow-loris" timeout or how long before we should error
 /// because a connection is taking too long to send us a damn packet.
 const DEFAULT_SLOWLORIS_TIMEOUT: Duration = Duration::from_secs(10 * 60);

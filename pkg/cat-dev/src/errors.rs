@@ -5,7 +5,7 @@
 //! specific item.
 
 use crate::{
-	fsemul::errors::{FSEmulAPIError, FSEmulFSError, FSEmulProtocolError},
+	fsemul::errors::{FSEmulAPIError, FSEmulFSError, FSEmulNetworkError, FSEmulProtocolError},
 	mion::errors::{MIONAPIError, MIONProtocolError},
 };
 use bytes::Bytes;
@@ -163,9 +163,9 @@ pub enum FSError {
 	#[diagnostic(code(cat_dev::fs::io))]
 	IO(#[from] IoError),
 	#[cfg(feature = "servers")]
-	#[error("Error iterating through directory: {0:?}")]
-	#[diagnostic(code(cat_dev::fs::iterating_directory_error))]
-	IteratingDirectoryError(#[from] WalkdirError),
+	#[error("Error iterating through folder: {0:?}")]
+	#[diagnostic(code(cat_dev::fs::iterating_folder_error))]
+	IteratingFolderError(#[from] WalkdirError),
 	#[error("Expect file to have at least: {0} line(s), but it was only: {1} line(s) long.")]
 	#[diagnostic(code(cat_dev::fs::too_few_lines))]
 	TooFewLines(usize, usize),
@@ -220,6 +220,9 @@ pub enum NetworkError {
 	#[error("Expected some sort of data from other side, but got none.")]
 	#[diagnostic(code(cat_dev::net::expected_data))]
 	ExpectedData,
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	FSEmul(#[from] FSEmulNetworkError),
 	#[cfg(feature = "clients")]
 	/// See [`reqwest::Error`] for details.
 	#[error("Underlying HTTP client error: {0}")]

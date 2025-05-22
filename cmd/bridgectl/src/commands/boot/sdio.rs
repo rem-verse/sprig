@@ -6,12 +6,16 @@
 use crate::{
 	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN, BOOT_FSEMUL_SERVER_ERROR},
-	knobs::env::CONNECTION_TIMEOUT,
+	knobs::env::SDIO_OVERRIDE_LOAD_BEARING_SLEEP_MS,
 	utils::add_context_to,
 };
 use cat_dev::{
-	fsemul::{HostFilesystem, sdio::server::SdioClient},
+	fsemul::{
+		HostFilesystem,
+		sdio::server::{SDIOStreamState, sdio_server},
+	},
 	mion::proto::cgis::SetupParameters,
+	net::server::TCPServer,
 };
 use miette::miette;
 use std::net::Ipv4Addr;
@@ -41,13 +45,17 @@ pub async fn serve_sdio(
 	let opt_data_port =
 		override_control_port.or(setup_params.map(SetupParameters::sdio_block_port));
 
-	let sdio_client = match SdioClient::connect(
+	let sdio_client = match sdio_server(
 		bridge_ip,
 		opt_printf_port,
 		opt_data_port,
-		*CONNECTION_TIMEOUT,
 		host_file_system,
+		*SDIO_OVERRIDE_LOAD_BEARING_SLEEP_MS,
 		disable_load_bearing_sleep,
+		None,
+		false,
+		// Can be overriden with an environt variable.
+		false,
 	)
 	.await
 	{
@@ -91,10 +99,10 @@ pub async fn serve_sdio(
 
 /// Actually spawn the background task that will process incoming requests,
 /// responses from the SDIO ports of MION communication.
-fn spawn_sdio_task(sdio_client: SdioClient<'static>) {
+fn spawn_sdio_task(sdio_client: TCPServer<SDIOStreamState>) {
 	if let Err(cause) = TaskBuilder::new().name("bridgectl::boot::serve_sdio").spawn(async move {
 		tokio::select! {
-			result = sdio_client.serve_concurrently() => {
+			result = sdio_client.connect() => {
 				if let Err(cause) = result {
 					if SHOULD_LOG_JSON() {
 						error!(

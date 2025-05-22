@@ -4,7 +4,7 @@ use crate::{
 	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
 	fsemul::{
 		pcfs::errors::{PCFSApiError, SataProtocolError},
-		sdio::errors::{SDIOAPIError, SDIOProtocolError},
+		sdio::errors::{SDIOAPIError, SDIONetworkError, SDIOProtocolError},
 	},
 };
 use bytes::Bytes;
@@ -81,7 +81,7 @@ pub enum FSEmulFSError {
 	#[diagnostic(code(cat_dev::fs::fsemul::cant_find_path))]
 	CantFindPath,
 	/// We cannot find the root `CAFE_SDK` path.
-	#[error("We can't find the root Cafe SDK directory, please use explicit paths instead.")]
+	#[error("We can't find the root Cafe SDK folder, please use explicit paths instead.")]
 	#[diagnostic(code(cat_dev::fs::fsemul::cant_find_cafe_sdk_path))]
 	CantFindCafeSdkPath,
 	/// The passed in Cafe SDK path did not have the appropriate directories.
@@ -108,6 +108,31 @@ pub enum FSEmulFSError {
 impl From<FSEmulFSError> for CatBridgeError {
 	fn from(value: FSEmulFSError) -> Self {
 		Self::FS(value.into())
+	}
+}
+
+/// Errors on the network side of dealing with FS Emulation.
+#[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
+pub enum FSEmulNetworkError {
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	SDIO(#[from] SDIONetworkError),
+}
+
+impl From<FSEmulNetworkError> for CatBridgeError {
+	fn from(value: FSEmulNetworkError) -> Self {
+		Self::Network(value.into())
+	}
+}
+
+impl From<SDIONetworkError> for NetworkError {
+	fn from(value: SDIONetworkError) -> Self {
+		Self::FSEmul(value.into())
+	}
+}
+impl From<SDIONetworkError> for CatBridgeError {
+	fn from(value: SDIONetworkError) -> Self {
+		Self::Network(value.into())
 	}
 }
 

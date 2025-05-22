@@ -49,7 +49,7 @@ pub async fn initialize_fsemul_config(fsemul_config_flags: &FSEmulConfigurationF
 			);
 		}
 	}
-	let host_default_path = HostFilesystem::default_cafe_directory();
+	let host_default_path = HostFilesystem::default_cafe_folder();
 	if host_default_path.is_none() {
 		if SHOULD_LOG_JSON() {
 			info!(

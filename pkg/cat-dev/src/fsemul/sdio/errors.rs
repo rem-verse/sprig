@@ -1,7 +1,9 @@
 //! Errors related to SDIO protocols.
 
+use bytes::Bytes;
 use miette::Diagnostic;
 use thiserror::Error;
+use tokio::sync::mpsc::error::SendError as BlockingSendError;
 
 /// An API Error for interacting with the SDIO client.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
@@ -15,10 +17,32 @@ pub enum SDIOAPIError {
 	#[error("The channel provided was invalid, (first byte: {0:02x}, should be <0xC), (full: {1})")]
 	#[diagnostic(code(cat_dev::api::fsemul::sdio::invalid_channel))]
 	InvalidChannel(u8, u32),
-	#[cfg(feature = "clients")]
-	#[error("Cannot call `serve` on `SdioServer` twice!")]
-	#[diagnostic(code(cat_dev::api::fsemul::sdio::cannot_serve_server_twice))]
-	CannotServeServerTwice,
+}
+
+/// Error dealing with the network side of handling the SDIO protocol.
+#[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
+pub enum SDIONetworkError {
+	#[error("Failed to request a read of: {0:?} bytes from the data stream.")]
+	#[diagnostic(code(cat_dev::net::fsemul::sdio::data_stream::cannot_request_read))]
+	CannotRequestReadFromDataStream(#[from] BlockingSendError<usize>),
+	#[error("Cannot queue a write to the data stream for SDIO: {0:?}")]
+	#[diagnostic(code(cat_dev::net::fsemul::sdio::data_stream::cannot_queue_write))]
+	CannotQueueWriteToDataStream(#[from] BlockingSendError<Bytes>),
+	#[error(
+		"The SDIO data stream did not respond with any data, this must mean it was closed previously in error."
+	)]
+	#[diagnostic(code(cat_dev::net::fsemul::sdio::data_stream::did_not_respond))]
+	DataStreamDidNotRespond,
+	#[error(
+		"Packet coming in on stream: {0} did not get a data stream allocated, internal developer error?"
+	)]
+	#[diagnostic(code(cat_dev::net::fsemul::sdio::data_stream::missing))]
+	DataStreamMissing(u64),
+	#[error(
+		"Packet coming in on stream: {0} did not get a buffer allocated, internal developer error?"
+	)]
+	#[diagnostic(code(cat_dev::net::fsemul::sdio::printf::missing_buffer))]
+	PrintfMissingBuffer(u64),
 }
 
 /// Error serializing/deserializing the SDIO protocol.
@@ -51,4 +75,7 @@ pub enum SDIOProtocolError {
 	)]
 	#[diagnostic(code(cat_dev::net::parse::fsemul::sdio::printf::unknown_message_type))]
 	UnknownPrintfMessageType(u16),
+	#[error("Expected a character length of: {0}, but got a character length of: {1}")]
+	#[diagnostic(code(cat_dev::net::parse::fsemul::sdio::printf::invalid_character_length))]
+	InvalidPrintfCharacterLength(usize, usize, Bytes),
 }

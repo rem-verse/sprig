@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![recursion_limit = "2048"]
 #![allow(
 	// I dislike this rule... We import things elsewhere, usually outside of
   // modules themselves.

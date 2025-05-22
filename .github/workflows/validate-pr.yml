@@ -9,7 +9,7 @@ on:
 jobs:
   lint-bash:
     name: Lint Bash Scripts
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v4
@@ -23,7 +23,7 @@ jobs:
         run: ./.github/scripts/lint-bash.sh
   lint-pwsh:
     name: Lint Powershell Scripts
-    runs-on: windows-2022
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - name: Install PSScriptAnalyzer
@@ -37,7 +37,7 @@ jobs:
         run: ./.github/scripts/lint-pwsh.ps1
   fmt-and-clippy:
     name: Format & Clippy
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -50,7 +50,7 @@ jobs:
     name: Build
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, windows-2022, windows-2025, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -62,7 +62,7 @@ jobs:
     name: Run non doc tests
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, windows-2022, windows-2025, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +79,7 @@ jobs:
     name: Run doc tests
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, windows-2022, windows-2025, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

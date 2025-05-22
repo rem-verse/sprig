@@ -1,4 +1,4 @@
-//! Definitions, and handlers for the `StatFile` packet type.
+//! Definitions for the `StatFile` packet type, and it's response types.
 //!
 //! This doesn't actually "handle" anything itself. As this is the same as
 //! `GetInfoByQuery` query type 5. So we just parse as a body, and then in

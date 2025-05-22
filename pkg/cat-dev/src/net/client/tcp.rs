@@ -704,6 +704,10 @@ impl TCPClient {
 	/// [`Self::broadcast_send`] to send to all, and receive all their responses
 	/// back.
 	///
+	/// This _will_ return the stream that was used as the 'primary', the
+	/// request-id to wait for a response later or otherwise, and the optional
+	/// response if we waited for one.
+	///
 	/// ## Errors
 	///
 	/// This function will error if we run into any issues writing or reading the
@@ -712,7 +716,7 @@ impl TCPClient {
 		&self,
 		body: BodyTy,
 		wait_for_response_timeout: Option<Duration>,
-	) -> Result<(RequestID, Option<Response>), NetworkError> {
+	) -> Result<(u64, RequestID, Option<Response>), NetworkError> {
 		let active_sid = self.get_active_sid().await?;
 
 		// This will be cloned, and modified for each stream we send out too.
@@ -751,7 +755,7 @@ impl TCPClient {
 
 		match wait_for_response_timeout {
 			// Don't drain/wait for responses when there are none.
-			None | Some(EMPTY_TIMEOUT) => Ok((req_id, None)),
+			None | Some(EMPTY_TIMEOUT) => Ok((active_sid, req_id, None)),
 			Some(duration) => {
 				let mut tasks;
 				// If we keep all responsese
@@ -769,11 +773,11 @@ impl TCPClient {
 
 				for (got_stream_id, response) in responses {
 					if got_stream_id == active_sid {
-						return Ok((req_id, response));
+						return Ok((active_sid, req_id, response));
 					}
 				}
 
-				Ok((req_id, None))
+				Ok((active_sid, req_id, None))
 			}
 		}
 	}

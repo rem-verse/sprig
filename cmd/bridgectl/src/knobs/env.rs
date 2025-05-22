@@ -137,27 +137,6 @@ pub static BRIDGECTL_SERIAL_PORT: LazyLock<Option<PathBuf>> =
 pub static CAFE_ROOT: LazyLock<Option<PathBuf>> =
 	LazyLock::new(|| env_var_os("CAFE_ROOT").map(PathBuf::from));
 
-/// A way of configuring the timeout for connecting to a bridge.
-///
-/// note: there is always going to be a timeout the default is usually well
-/// higher than we expect to ever see. However, we want folks to be able to
-/// configure it themselves.
-///
-/// Environment Variable Name: `BRIDGECTL_CONNECTION_TIMEOUT_SECONDS`
-/// Expected Values: Empty, or a number of seconds.
-/// Type: [`u64`]
-pub static CONNECTION_TIMEOUT: LazyLock<Option<Duration>> = LazyLock::new(|| {
-	env_var("BRIDGECTL_CONNECTION_TIMEOUT_SECONDS").ok().and_then(|val| {
-		match val.parse::<u64>() {
-			Ok(val) => Some(Duration::from_secs(val)),
-			Err(cause) => {
-				warn!(?cause, "Not honoring environment variable `BRIDGECTL_CONNECTION_TIMEOUT_SECONDS`, not a valid second number.");
-				None
-			}
-		}
-	})
-});
-
 /// A way of specifying the path to the `fsemul.ini` file if it's not in
 /// a standard location.
 ///
@@ -178,6 +157,23 @@ pub static FSEMUL_DISABLE_REMOVAL: LazyLock<bool> = LazyLock::new(|| {
 		.as_deref()
 		.unwrap_or("0")
 		== "1"
+});
+
+/// Change the load bearing sleep time for your MION when communicating over
+/// ATAPI.
+///
+/// *YOU SHOULD NOT MESS WITH THIS LOAD BEARING SLEEP UNLESS EXPLICITLY TOLD TOO
+/// WHEN TALKING TO A REAL NON MODIFIED CAT-DEV. YOU WILL EXPERIENCE BUGS.*
+///
+/// Environment Variable Name: `ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS`
+/// Expected Value: u64 of milliseconds (default is 25)
+/// Type: [`Option<Duration>`]
+pub static ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS: LazyLock<Option<Duration>> = LazyLock::new(|| {
+	env_var("ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS")
+		.ok()
+		.as_deref()
+		.and_then(|value| value.parse::<u64>().ok())
+		.map(Duration::from_millis)
 });
 
 /// Enables our ATAPI server to go "full throttle", and potentially overwhelm
@@ -224,6 +220,23 @@ pub static PCFS_DISABLE_FFIO: LazyLock<bool> = LazyLock::new(|| {
 		== "1"
 });
 
+/// Change the load bearing sleep time for your MION when communicating over
+/// PCFS.
+///
+/// *YOU SHOULD NOT MESS WITH THIS LOAD BEARING SLEEP UNLESS EXPLICITLY TOLD TOO
+/// WHEN TALKING TO A REAL NON MODIFIED CAT-DEV. YOU WILL EXPERIENCE BUGS.*
+///
+/// Environment Variable Name: `PCFS_OVERRIDE_LOAD_BEARING_SLEEP_MS`
+/// Expected Value: u64 of milliseconds (default is 25)
+/// Type: [`Option<Duration>`]
+pub static PCFS_OVERRIDE_LOAD_BEARING_SLEEP_MS: LazyLock<Option<Duration>> = LazyLock::new(|| {
+	env_var("PCFS_OVERRIDE_LOAD_BEARING_SLEEP_MS")
+		.ok()
+		.as_deref()
+		.and_then(|value| value.parse::<u64>().ok())
+		.map(Duration::from_millis)
+});
+
 /// Enables our PCFS server to go "full throttle", and potentially overwhelm
 /// the MION.
 ///
@@ -253,6 +266,23 @@ pub static PCFS_DISABLE_LOAD_BEARING_SLEEP: LazyLock<bool> = LazyLock::new(|| {
 /// Type: [`bool`]
 pub static PCFS_IS_SATA: LazyLock<bool> =
 	LazyLock::new(|| env_var("USE_PCFS_OVER_SATA").ok().as_deref().unwrap_or("1") == "1");
+
+/// Change the load bearing sleep time for your MION when communicating over
+/// SDIO.
+///
+/// *YOU SHOULD NOT MESS WITH THIS LOAD BEARING SLEEP UNLESS EXPLICITLY TOLD TOO
+/// WHEN TALKING TO A REAL NON MODIFIED CAT-DEV. YOU WILL EXPERIENCE BUGS.*
+///
+/// Environment Variable Name: `SDIO_OVERRIDE_LOAD_BEARING_SLEEP_MS`
+/// Expected Value: u64 of milliseconds (default is 25)
+/// Type: [`Option<Duration>`]
+pub static SDIO_OVERRIDE_LOAD_BEARING_SLEEP_MS: LazyLock<Option<Duration>> = LazyLock::new(|| {
+	env_var("SDIO_OVERRIDE_LOAD_BEARING_SLEEP_MS")
+		.ok()
+		.as_deref()
+		.and_then(|value| value.parse::<u64>().ok())
+		.map(Duration::from_millis)
+});
 
 /// Enables our SDIO server to go "full throttle", and potentially overwhelm
 /// the MION.

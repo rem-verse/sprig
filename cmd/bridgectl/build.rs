@@ -2,7 +2,7 @@
 //!
 //! Which is licensed under APACHE2/MIT at the time of copying.
 
-use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+use std::io::Error as IoError;
 
 fn env(key: &str) -> Result<std::ffi::OsString, String> {
 	println!("cargo:rerun-if-env-changed={key}");
@@ -32,15 +32,9 @@ fn command(prog: &str, args: &[&str], cwd: Option<std::path::PathBuf>) -> Result
 		}
 		Ok(stdout)
 	} else if let Some(code) = out.status.code() {
-		Err(IoError::new(
-			IoErrorKind::Other,
-			format!("{prog}: terminated with {code}"),
-		))
+		Err(IoError::other(format!("{prog}: terminated with {code}")))
 	} else {
-		Err(IoError::new(
-			IoErrorKind::Other,
-			format!("{prog}: killed by signal"),
-		))
+		Err(IoError::other(format!("{prog}: killed by signal")))
 	}
 }
 

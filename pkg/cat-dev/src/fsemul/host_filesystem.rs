@@ -33,7 +33,7 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 use whoami::username;
 
 /// Current "FD" for directories. Just a counter going up.
-static DIRECTORY_FD: AtomicI32 = AtomicI32::new(1);
+static FOLDER_FD: AtomicI32 = AtomicI32::new(1);
 
 /// A wrapper around interacting with the 'host' or PC filesystem for the
 /// various times a cat-dev will reach out to the host.
@@ -50,7 +50,7 @@ pub struct HostFilesystem {
 	///
 	/// This contains a value of (file, file size, path).
 	open_file_handles: Arc<ConcurrentMap<i32, (File, u64, PathBuf)>>,
-	/// List of open directory "handles".
+	/// List of open folder "handles".
 	///
 	/// This contains a value of (read directory, is end, path)
 	open_folder_handles: Arc<ConcurrentMap<i32, (ReadDir, bool, PathBuf)>>,
@@ -81,18 +81,18 @@ impl HostFilesystem {
 	/// notice spurious errors with case-insensitivity on linux specifically. If
 	/// transferring an SDK from a Windows/Mac Case Insensitive to a Mac/Linux
 	/// case sensitive file system. It is recommended users
-	/// create their own directory using our recovery tools, rather than
+	/// create their own folder using our recovery tools, rather than
 	/// rsync'ing a path over from case-insensitive, to case-sensitive.
 	///
 	/// ## Errors
 	///
-	/// If the Cafe SDK directory is corrupt, or can't be found. A Cafe SDK
-	/// directory is considered corrupt if it is missing core files that we
+	/// If the Cafe SDK folder is corrupt, or can't be found. A Cafe SDK
+	/// folder is considered corrupt if it is missing core files that we
 	/// _need_ to be able to serve a Cafe-OS distribution. These file
 	/// requirements may change from version to version of this crate, but should
-	/// always be compatible with a clean cafe sdk directory.
+	/// always be compatible with a clean cafe sdk folder.
 	pub async fn from_cafe_dir(cafe_dir: Option<PathBuf>) -> Result<Self, FSError> {
-		let Some(cafe_sdk_path) = cafe_dir.or_else(Self::default_cafe_directory) else {
+		let Some(cafe_sdk_path) = cafe_dir.or_else(Self::default_cafe_folder) else {
 			return Err(FSEmulFSError::CantFindCafeSdkPath.into());
 		};
 
@@ -290,10 +290,10 @@ impl HostFilesystem {
 	///
 	/// ## Errors
 	///
-	/// If the path doesn't exist, then we can't open the directory.
+	/// If the path doesn't exist, then we can't open the folder.
 	pub async fn open_folder(&self, path: &PathBuf) -> Result<i32, FSError> {
 		let dhandle = read_dir(path).await?;
-		let fake_fd = DIRECTORY_FD.fetch_add(1, AtomicOrdering::SeqCst);
+		let fake_fd = FOLDER_FD.fetch_add(1, AtomicOrdering::SeqCst);
 
 		self.open_folder_handles
 			.insert(fake_fd, (dhandle, false, path.clone()))
@@ -301,12 +301,12 @@ impl HostFilesystem {
 		Ok(fake_fd)
 	}
 
-	/// Mark a directory as being 'read-only' for this session.
+	/// Mark a folder as being 'read-only' for this session.
 	///
 	/// ## Errors
 	///
-	/// If we could not actually insert the directory into the read only map.
-	pub async fn mark_directory_read_only(&self, path: PathBuf) -> Result<(), FSError> {
+	/// If we could not actually insert the folder into the read only map.
+	pub async fn mark_folder_read_only(&self, path: PathBuf) -> Result<(), FSError> {
 		self.folders_marked_read_only
 			.insert_async(path)
 			.await
@@ -314,13 +314,13 @@ impl HostFilesystem {
 			.map_err(FSError::IO)
 	}
 
-	/// Mark a directory as being 'read-only' for this session.
-	pub async fn ensure_directory_not_read_only(&self, path: &PathBuf) {
+	/// Mark a folder as being 'read-write' for this session.
+	pub async fn ensure_folder_not_read_only(&self, path: &PathBuf) {
 		self.folders_marked_read_only.remove_async(path).await;
 	}
 
-	/// Check if a directory is marked as being read only.
-	pub async fn directory_is_read_only(&self, path: &PathBuf) -> bool {
+	/// Check if a folder is marked as being read only.
+	pub async fn folder_is_read_only(&self, path: &PathBuf) -> bool {
 		self.folders_marked_read_only.contains_async(path).await
 	}
 
@@ -368,7 +368,7 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If opening another read dir call does not work.
-	pub async fn reverse_directory(&self, fd: i32) -> Result<(), FSError> {
+	pub async fn reverse_folder(&self, fd: i32) -> Result<(), FSError> {
 		let Some(mut real_entry) = self.open_folder_handles.get_async(&fd).await else {
 			return Ok(());
 		};
@@ -650,7 +650,7 @@ impl HostFilesystem {
     unreachable_code,
   )]
 	#[must_use]
-	pub fn default_cafe_directory() -> Option<PathBuf> {
+	pub fn default_cafe_folder() -> Option<PathBuf> {
 		#[cfg(target_os = "windows")]
 		{
 			return Some(PathBuf::from(r"C:\cafe_sdk"));
@@ -796,9 +796,10 @@ impl Valuable for HostFilesystem {
 pub enum ResolvedLocation {
 	/// A location on a particular filesystem.
 	///
-	/// This contains a tuple of:
-	///
-	/// `(ResolvedPath, ClosestExistingCanonicalDirectory)`
+	/// This location _may not exist_. There is a boolean in this struct that
+	/// tells you the final resolved location, the closest resolved location for
+	/// permission checks, and if the path exists and is the same between
+	/// resolution, and what actually exists.
 	Filesystem(FilesystemLocation),
 	/// A network location to fetch.
 	///
@@ -987,7 +988,7 @@ mod unit_tests {
 	#[test]
 	pub fn can_find_default_cafe_directory() {
 		assert!(
-			HostFilesystem::default_cafe_directory().is_some(),
+			HostFilesystem::default_cafe_folder().is_some(),
 			"Failed to find default cafe directory for your OS",
 		);
 	}
@@ -1364,7 +1365,7 @@ mod unit_tests {
 				.is_none()
 		);
 		// Rewind to get to reads again!
-		fs.reverse_directory(dfd)
+		fs.reverse_folder(dfd)
 			.await
 			.expect("Failed to reverse directory search!");
 		assert!(

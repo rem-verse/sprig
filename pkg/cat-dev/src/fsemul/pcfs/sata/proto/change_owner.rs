@@ -1,4 +1,4 @@
-//! Definitions, and handlers for the `ChangeOwner` packet type.
+//! Definitions for the `ChangeOwner` packet type, and it's response types.
 //!
 //! For some reason this always responds with an error. Rather than setting an
 //! actual `uid`/`gid`. This is because windows doesn't have the concept of a
@@ -8,12 +8,6 @@ use crate::{errors::NetworkParseError, fsemul::pcfs::errors::PCFSApiError};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::ffi::CStr;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
-
-#[cfg(feature = "servers")]
-use crate::{
-	errors::CatBridgeError,
-	fsemul::pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
-};
 
 /// A packet to change the owner of a file.
 ///
@@ -98,23 +92,6 @@ impl SataChangeOwnerPacketBody {
 	/// Set the group id to send for this packet.
 	pub const fn set_gid(&mut self, new_gid: u32) {
 		self.gid = new_gid;
-	}
-
-	/// Handle a change owner request.
-	///
-	/// This will always fail.
-	///
-	/// ## Errors
-	///
-	/// If we cannot construct a sata response packet because our data to send
-	/// was somehow too large (this should never happen).
-	#[cfg(feature = "servers")]
-	pub fn handle(&self, request_header: &SataPacketHeader) -> Result<Bytes, CatBridgeError> {
-		let mut buff = BytesMut::with_capacity(4);
-		// We always error.
-		buff.put_u32(0xFFF0_FFE0);
-
-		Ok(construct_sata_response(request_header, 0, buff.freeze())?)
 	}
 }
 
@@ -201,42 +178,5 @@ impl Valuable for SataChangeOwnerPacketBody {
 				Valuable::as_value(&self.gid),
 			],
 		));
-	}
-}
-
-#[cfg(test)]
-mod unit_tests {
-	#[cfg(feature = "servers")]
-	use super::*;
-
-	#[cfg(feature = "servers")]
-	#[tokio::test]
-	pub async fn change_mode_request() {
-		let request = SataChangeOwnerPacketBody {
-			path: "/%SLC_EMU_DIR/to-query/file.txt".to_owned(),
-			uid: 0,
-			gid: 0,
-		};
-		let mocked_header = SataPacketHeader {
-			packet_data_len: 0,
-			packet_id: 0,
-			flags: 0,
-			version: 0,
-			timestamp_on_host: 0,
-			pid_on_host: 0,
-		};
-
-		let mut response = request
-			.handle(&mocked_header)
-			.expect("Failed to handle change owner!");
-		assert_eq!(response.len(), 4 + 0x20, "Packet is not correct size!");
-		// Okay first chop off the header, we don't care.
-		_ = response.split_to(0x20);
-		assert_eq!(
-			response,
-			Bytes::from(vec![
-				0xFF, 0xF0, 0xFF, 0xE0, // RC
-			]),
-		);
 	}
 }

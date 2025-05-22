@@ -649,6 +649,12 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		self.initial_service = BoxCloneService::new(layer.layer(self.initial_service.clone()));
 	}
 
+	/// Get a reference to the current state of the server.
+	#[must_use]
+	pub const fn state(&self) -> &State {
+		&self.state
+	}
+
 	/// "Connect" to our remote client address, and start serving ourselves to
 	/// whoever we connect too.
 	///

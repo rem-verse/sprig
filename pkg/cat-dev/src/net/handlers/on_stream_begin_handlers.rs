@@ -30,7 +30,7 @@ pub trait OnRequestStreamBeginHandler<ParamTy, State: Clone + Send + Sync + 'sta
 	fn call(self, event: RequestStreamEvent<State>) -> Self::Future;
 }
 
-/// Allow any async function without arguments to be a handler
+/// Allow any async function without arguments to be a handler.
 #[cfg(feature = "clients")]
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State> OnRequestStreamBeginHandler<(), State>
 	for UnderlyingFnType

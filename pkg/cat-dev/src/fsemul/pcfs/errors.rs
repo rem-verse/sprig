@@ -5,6 +5,7 @@ use thiserror::Error;
 
 /// Error's specific to calling a specific PCFS API.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PCFSApiError {
 	#[error("Mode string is expected to match '(r|w|a)b?+?', but did not! invalid mode: {0}")]
 	#[diagnostic(code(cat_dev::api::fsmeul::pcfs::bad_mode_string))]
@@ -23,6 +24,12 @@ pub enum PCFSApiError {
 	#[error("The requested path: [{0}] was not inside of a mapped directory, cannot serve.")]
 	#[diagnostic(code(cat_dev::api::fsemul::pcfs::path_not_mapped))]
 	PathNotMapped(String),
+	#[cfg(feature = "servers")]
+	#[error(
+		"The server was not configured correctly (programmer error), please report that extension: {0} did not load properly!"
+	)]
+	#[diagnostic(code(cat_dev::api::fsemul::pcfs::missing_server_extension))]
+	MissingCriticalExtension(String),
 }
 
 /// Error serializing/deserializing the PCFS Sata protocol.

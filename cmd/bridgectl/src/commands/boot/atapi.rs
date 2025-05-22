@@ -7,6 +7,7 @@
 use crate::{
 	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
+	knobs::env::ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS,
 	utils::add_context_to,
 };
 use cat_dev::{
@@ -36,8 +37,10 @@ pub async fn serve_atapi(
 		host_filesystem.clone(),
 		host_ip,
 		Some(port),
-		None,
+		*ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS,
 		disable_load_bearing_sleep,
+		None,
+		false,
 		// Can be overriden with env var at the cat-dev level.
 		false,
 	)

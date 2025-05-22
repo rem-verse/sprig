@@ -1,4 +1,4 @@
-//! Definitions, and handlers for the `ReadFile` packet type.
+//! Definitions for the `ReadFile` packet type, and it's response types.
 //!
 //! This is what actively handles reading bytes out of a file. With either
 //! FFIO, and Combined Send/Recv options being turned on/off.
@@ -6,27 +6,6 @@
 use crate::{errors::NetworkParseError, fsemul::pcfs::sata::proto::MoveToFileLocation};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
-
-#[cfg(feature = "servers")]
-use crate::{
-	errors::{CatBridgeError, NetworkError},
-	fsemul::{
-		HostFilesystem,
-		pcfs::sata::proto::{SataPacketHeader, construct_sata_response},
-	},
-};
-#[cfg(feature = "servers")]
-use tokio::sync::mpsc::Sender;
-#[cfg(feature = "servers")]
-use tracing::debug;
-
-#[cfg(feature = "servers")]
-/// A filesystem error occured.
-const FS_ERROR: u32 = 0xFFF0_FFE0;
-#[cfg(feature = "servers")]
-/// This should be half of the total size of the buffer which should always be
-/// more than enough.
-const MAX_PACKET_LEN: usize = 32768_usize;
 
 /// A packet to read the contents of an already open file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,126 +84,6 @@ impl SataReadFilePacketBody {
 	#[must_use]
 	pub const fn should_move(&self) -> bool {
 		self.should_move
-	}
-
-	/// Handle reading from a file that is already open.
-	///
-	/// ## Errors
-	///
-	/// If we cannot construct a sata response packet because our data to send
-	/// was somehow too large (this should ideally never happen), or if we're
-	/// running on a 16 bit system.
-	#[cfg(feature = "servers")]
-	pub async fn handle(
-		&self,
-		request_header: &SataPacketHeader,
-		host_filesystem: &HostFilesystem,
-		ffio_supported: bool,
-		output_channel: &Sender<Bytes>,
-	) -> Result<(), CatBridgeError> {
-		if self.should_move {
-			match self.move_to_pointer {
-				MoveToFileLocation::Begin => {
-					if host_filesystem.seek_file(self.handle, true).await.is_err() {
-						debug!(
-							packet.fd = self.handle,
-							packet.typ = "PCFSSrvReadFile",
-							"Failed to seek to beginning of file!",
-						);
-
-						return Self::construct_error(request_header, FS_ERROR, output_channel)
-							.await;
-					}
-				}
-				MoveToFileLocation::Current => {
-					// Luckily to move to current, we don't need to move at all.
-				}
-				MoveToFileLocation::End => {
-					if host_filesystem.seek_file(self.handle, false).await.is_err() {
-						debug!(
-							packet.fd = self.handle,
-							packet.typ = "PCFSSrvReadFile",
-							"Failed to seek to end of file of file!",
-						);
-
-						return Self::construct_error(request_header, FS_ERROR, output_channel)
-							.await;
-					}
-				}
-			}
-		}
-
-		let Some(file_size) = host_filesystem.file_length(self.handle).await else {
-			debug!(
-				packet.fd = self.handle,
-				packet.typ = "PCFSSrvReadFile",
-				"Failed to query length of file!",
-			);
-
-			return Self::construct_error(request_header, FS_ERROR, output_channel).await;
-		};
-		let Ok(Some(read_file)) = host_filesystem
-			.read_file(
-				self.handle,
-				usize::try_from(self.block_size)
-					.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?
-					* usize::try_from(self.block_count)
-						.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?,
-			)
-			.await
-		else {
-			debug!(
-				packet.fd = self.handle,
-				packet.typ = "PCFSSrvReadFile",
-				"Failed to read bytes of from file!",
-			);
-
-			return Self::construct_error(request_header, FS_ERROR, output_channel).await;
-		};
-
-		if ffio_supported {
-			let mut buff = BytesMut::with_capacity(read_file.len() + 0x24);
-			// The header is normally just 'malloc'd and not cleared between
-			// buffers. Luckily for us we can just zero it out, and it's easier than
-			// actually dealing with whatever random bytes PCFSServer would normally
-			// send.
-			buff.extend_from_slice(&[0; 0x20]);
-			buff.put_u32(u32::try_from(file_size).unwrap_or(u32::MAX));
-			buff.extend(read_file);
-
-			for chunk in buff.chunks(MAX_PACKET_LEN) {
-				// WE have to copy this vec with chunks allocations, this is because a
-				// vector has potential seperated allocations that are not linear in
-				// memory.
-				//
-				// So they may not lay on the exact boundaries we want to chunk in. So
-				// we have to copy the data to get them in the linear area we want.
-				output_channel
-					.send(Bytes::from(Vec::from(chunk)))
-					.await
-					.map_err(NetworkError::SendQueueFailure)?;
-			}
-
-			Ok(())
-		} else {
-			todo!("Implement non-FFIO support.")
-		}
-	}
-
-	#[cfg(feature = "servers")]
-	async fn construct_error(
-		packet_header: &SataPacketHeader,
-		error_code: u32,
-		output_channel: &Sender<Bytes>,
-	) -> Result<(), CatBridgeError> {
-		let mut buff = BytesMut::with_capacity(8);
-		buff.put_u32(error_code);
-		output_channel
-			.send(construct_sata_response(packet_header, 0, buff.freeze())?)
-			.await
-			.map_err(NetworkError::SendQueueFailure)?;
-
-		Ok(())
 	}
 }
 
@@ -318,73 +177,5 @@ impl Valuable for SataReadFilePacketBody {
 				Valuable::as_value(&self.should_move),
 			],
 		));
-	}
-}
-
-#[cfg(test)]
-mod unit_tests {
-	#[cfg(feature = "servers")]
-	use super::*;
-	#[cfg(feature = "servers")]
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
-	};
-	#[cfg(feature = "servers")]
-	use tokio::{fs::OpenOptions, sync::mpsc::channel};
-
-	#[cfg(feature = "servers")]
-	#[tokio::test]
-	pub async fn simple_ffio_read_file_request() {
-		let (tempdir, fs) = create_temporary_host_filesystem().await;
-
-		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
-		tokio::fs::create_dir(&base_dir)
-			.await
-			.expect("Failed to create temporary directory for test!");
-		tokio::fs::write(join_many(&base_dir, ["file.txt"]), vec![0; 2])
-			.await
-			.expect("Failed to write test file!");
-		let mocked_header = SataPacketHeader {
-			packet_data_len: 0,
-			packet_id: 0,
-			flags: 0,
-			version: 0,
-			timestamp_on_host: 0,
-			pid_on_host: 0,
-		};
-
-		let mut open_options = OpenOptions::new();
-		open_options.read(true).create(false).write(false);
-		let fd = fs
-			.open_file(open_options, &join_many(&base_dir, ["file.txt"]))
-			.await
-			.expect("Failed to open file!");
-
-		let read_request = SataReadFilePacketBody {
-			block_count: 4,
-			block_size: 1,
-			handle: fd,
-			move_to_pointer: MoveToFileLocation::Begin,
-			should_move: false,
-		};
-
-		let (sender, mut receiver) = channel(1);
-
-		read_request
-			.handle(&mocked_header, &fs, true, &sender)
-			.await
-			.expect("Failed to handle read request!");
-		let response = receiver
-			.recv()
-			.await
-			.expect("Function edited without sending!");
-		let mut expected_response = BytesMut::new();
-		// Header
-		expected_response.extend_from_slice(&[0; 0x20]);
-		// File length.
-		expected_response.extend_from_slice(&2_u32.to_be_bytes());
-		// File data, and padding.
-		expected_response.extend_from_slice(&[0x00, 0x00, 0xCD, 0xCD]);
-		assert_eq!(response, expected_response.freeze());
 	}
 }

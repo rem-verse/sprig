@@ -1,4 +1,4 @@
-//! Definitions, and handlers for the 'PING' packet type.
+//! Definitions for the `PING` packet type, and it's response types.
 //!
 //! Ping packets are much like ping packet types in any sort of scenario, they
 //! are built to check availability. Not to mention ping packets confer what
@@ -8,44 +8,14 @@ use crate::errors::NetworkParseError;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
-#[cfg(feature = "servers")]
-use crate::fsemul::pcfs::{
-	errors::PCFSApiError,
-	sata::proto::{SataCommandInfo, SataPacketHeader, construct_sata_response},
-};
-
 /// A ZST that represents a ping packet coming in.
-#[derive(Clone, Debug, PartialEq, Eq, Valuable)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Valuable)]
 pub struct SataPingPacketBody;
 
 impl SataPingPacketBody {
 	#[must_use]
 	pub const fn new() -> Self {
 		Self
-	}
-
-	/// Handle a ping packet.
-	///
-	/// ## Errors
-	///
-	/// Should never error, but could error if we fail to construct the response
-	/// for some reason.
-	#[cfg(feature = "servers")]
-	pub fn handle(
-		&self,
-		request_header: &SataPacketHeader,
-		command_info: &SataCommandInfo,
-		server_and_client_supports_ffio: bool,
-		server_and_client_supports_csr: bool,
-	) -> Result<Bytes, PCFSApiError> {
-		let supports_ffio = command_info.capabilities.0 != 0 && server_and_client_supports_ffio;
-		let supports_csr = command_info.capabilities.0 != 0 && server_and_client_supports_csr;
-
-		construct_sata_response(
-			request_header,
-			0,
-			SataPongBody::new(supports_ffio, supports_csr),
-		)
 	}
 }
 
@@ -201,69 +171,5 @@ impl Valuable for SataPongBody {
 				Valuable::as_value(&self.combined_send_recv_enabled),
 			],
 		));
-	}
-}
-
-#[cfg(test)]
-mod unit_tests {
-	#[cfg(feature = "servers")]
-	use super::*;
-
-	#[cfg(feature = "servers")]
-	#[test]
-	pub fn can_respond_to_ping() {
-		let ping = SataPingPacketBody;
-
-		let example_ping_packet_header = SataPacketHeader {
-			packet_data_len: 0,
-			packet_id: 0,
-			flags: 0,
-			version: 0,
-			timestamp_on_host: 0,
-			pid_on_host: 0,
-		};
-		let example_command_info = SataCommandInfo {
-			user: (0, 0),
-			capabilities: (1, 0),
-			command: 0x14,
-		};
-
-		let all_supported = ping
-			.handle(
-				&example_ping_packet_header,
-				&example_command_info,
-				true,
-				true,
-			)
-			.expect("Failed to handle ping with all features enabled!");
-		let only_ffio_supported = ping
-			.handle(
-				&example_ping_packet_header,
-				&example_command_info,
-				true,
-				false,
-			)
-			.expect("Failed to handle ping with only ffio features enabled!");
-		let only_csr_supported = ping
-			.handle(
-				&example_ping_packet_header,
-				&example_command_info,
-				false,
-				true,
-			)
-			.expect("Failed to handle ping with only csr enabled!");
-		let none_supported = ping
-			.handle(
-				&example_ping_packet_header,
-				&example_command_info,
-				false,
-				false,
-			)
-			.expect("Failed to handle ping with only csr enabled!");
-
-		assert!(all_supported.ends_with(&[0xCA, 0xFE, 0x00, 0x03]));
-		assert!(only_ffio_supported.ends_with(&[0xCA, 0xFE, 0x00, 0x01]));
-		assert!(only_csr_supported.ends_with(&[0xCA, 0xFE, 0x00, 0x02]));
-		assert!(none_supported.ends_with(&[0x00, 0x00, 0x00, 0x00]));
 	}
 }

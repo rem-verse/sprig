@@ -1,4 +1,4 @@
-//! Definitions, and handlers for the `WriteFile` packet type.
+//! Definitions for the `WriteFile` packet type, and it's response types.
 //!
 //! This is what actively handles writing bytes to a file. With either
 //! FFIO, and Combined Send/Recv options being turned on/off.
@@ -6,32 +6,6 @@
 use crate::{errors::NetworkParseError, fsemul::pcfs::sata::proto::MoveToFileLocation};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
-
-#[cfg(feature = "servers")]
-use crate::{
-	errors::{CatBridgeError, NetworkError},
-	fsemul::{
-		HostFilesystem,
-		pcfs::sata::proto::{SataPacketHeader, SataServerProtoChunker, construct_sata_response},
-	},
-};
-#[cfg(feature = "servers")]
-use futures::{StreamExt, stream::SplitStream};
-#[cfg(feature = "servers")]
-use std::sync::{
-	Arc,
-	atomic::{AtomicUsize, Ordering as AtomicOrdering},
-};
-#[cfg(feature = "servers")]
-use tokio::net::TcpStream;
-#[cfg(feature = "servers")]
-use tokio_util::codec::Framed;
-#[cfg(feature = "servers")]
-use tracing::debug;
-
-#[cfg(feature = "servers")]
-/// A filesystem error occured.
-const FS_ERROR: u32 = 0xFFF0_FFE0;
 
 /// A packet to write to an already open file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,85 +84,6 @@ impl SataWriteFilePacketBody {
 	#[must_use]
 	pub const fn should_move(&self) -> bool {
 		self.should_move
-	}
-
-	/// Handle writing to a file that is already open.
-	///
-	/// ## Errors
-	///
-	/// If we cannot construct a sata response packet because our data to send
-	/// was somehow too large (this should ideally never happen), or if we're
-	/// running on a 16 bit system.
-	#[cfg(feature = "servers")]
-	pub async fn handle(
-		&self,
-		request_header: &SataPacketHeader,
-		host_filesystem: &HostFilesystem,
-		ffio_supported: bool,
-		socket: &mut SplitStream<Framed<TcpStream, SataServerProtoChunker>>,
-		override_ptr: &Arc<AtomicUsize>,
-	) -> Result<Bytes, CatBridgeError> {
-		if self.should_move {
-			match self.move_to_pointer {
-				MoveToFileLocation::Begin => {
-					if host_filesystem.seek_file(self.handle, true).await.is_err() {
-						debug!(
-							packet.fd = self.handle,
-							packet.typ = "PCFSSrvWriteFile",
-							"Failed to seek to beginning of file!",
-						);
-
-						return Self::construct_error(request_header, FS_ERROR);
-					}
-				}
-				MoveToFileLocation::Current => {
-					// Luckily to move to current, we don't need to move at all.
-				}
-				MoveToFileLocation::End => {
-					if host_filesystem.seek_file(self.handle, false).await.is_err() {
-						debug!(
-							packet.fd = self.handle,
-							packet.typ = "PCFSSrvWriteFile",
-							"Failed to seek to end of file!",
-						);
-
-						return Self::construct_error(request_header, FS_ERROR);
-					}
-				}
-			}
-		}
-
-		if ffio_supported {
-			let len_needed = usize::try_from(self.block_count * self.block_size)
-				.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
-			// Bypass header and such checks...
-			override_ptr.store(len_needed, AtomicOrdering::Release);
-			let buff = socket
-				.next()
-				.await
-				.ok_or_else(|| NetworkError::ExpectedData)?
-				.map_err(NetworkError::IO)?
-				.freeze();
-			host_filesystem
-				.write_file(self.file_descriptor(), buff)
-				.await?;
-
-			let mut result = BytesMut::with_capacity(4);
-			result.put_u32(self.block_count * self.block_size);
-			Ok(construct_sata_response(request_header, 0, result.freeze())?)
-		} else {
-			todo!("Implement non-FFIO support.")
-		}
-	}
-
-	#[cfg(feature = "servers")]
-	fn construct_error(
-		packet_header: &SataPacketHeader,
-		error_code: u32,
-	) -> Result<Bytes, CatBridgeError> {
-		let mut buff = BytesMut::with_capacity(8);
-		buff.put_u32(error_code);
-		Ok(construct_sata_response(packet_header, 0, buff.freeze())?)
 	}
 }
 

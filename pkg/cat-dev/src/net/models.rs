@@ -91,6 +91,11 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 		}
 	}
 
+	/// Swap the body of the request to something new.
+	pub fn swap_body(&mut self, new_body: Bytes) {
+		self.body = new_body;
+	}
+
 	/// Update the core request source.
 	pub const fn update_request_source(&mut self, source: SocketAddr, stream_id: Option<u64>) {
 		self.source_address = source;
@@ -531,6 +536,18 @@ impl NagleGuard {
 		}
 
 		Ok(None)
+	}
+}
+
+impl From<usize> for NagleGuard {
+	fn from(value: usize) -> Self {
+		NagleGuard::StaticSize(value)
+	}
+}
+
+impl From<&'static [u8]> for NagleGuard {
+	fn from(value: &'static [u8]) -> Self {
+		NagleGuard::EndSigilSearch(value)
 	}
 }
 

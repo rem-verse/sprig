@@ -4,8 +4,8 @@ use crate::{
 	errors::{APIError, CatBridgeError, FSError, NetworkError},
 	fsemul::{HostFilesystem, dlf::DiskLayoutFile},
 	net::{
-		DEFAULT_CAT_DEV_SLOWDOWN,
-		models::NagleGuard,
+		DEFAULT_CAT_DEV_CHUNK_SIZE, DEFAULT_CAT_DEV_SLOWDOWN,
+		additions::{RequestIDLayer, StreamIDLayer},
 		server::{
 			Router, TCPServer,
 			requestable::{Body, State},
@@ -22,6 +22,7 @@ use tokio::{
 	fs::{File, read as fs_read},
 	io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
+use tower::ServiceBuilder;
 use tracing::debug;
 
 /// The default port to use for hosting the ATAPI Server.
@@ -33,12 +34,19 @@ pub const DEFAULT_ATAPI_PORT: u16 = 7974_u16;
 ///
 /// If we cannot find a host ip to bind too, or cannot spin up the workers for
 /// the server.
+#[allow(
+	// TODO(mythra): we should probably extract this out into a builder
+	// pattern some day. That day is not today.
+	clippy::too_many_arguments,
+)]
 pub async fn create_atapi_server(
 	host_filesystem: HostFilesystem,
 	address: Option<Ipv4Addr>,
 	port: Option<u16>,
 	cat_dev_sleep_override: Option<Duration>,
 	fully_disable_cat_dev_sleep: bool,
+	chunk_override: Option<usize>,
+	fully_disable_chunk_override: bool,
 	trace_during_debug: bool,
 ) -> Result<TCPServer<HostFilesystem>, CatBridgeError> {
 	let Some(ip) = address.or_else(|| {
@@ -61,11 +69,25 @@ pub async fn create_atapi_server(
 		bound_address,
 		router,
 		(None, None),
-		NagleGuard::StaticSize(12),
+		12,
 		host_filesystem,
 		trace_during_debug,
 	)
 	.await?;
+
+	server.layer_initial_service(
+		ServiceBuilder::new()
+			.layer(RequestIDLayer)
+			.layer(StreamIDLayer),
+	);
+	server.set_chunk_output_at_size(if fully_disable_chunk_override {
+		None
+	} else if let Some(over_ride) = chunk_override {
+		Some(over_ride)
+	} else {
+		Some(DEFAULT_CAT_DEV_CHUNK_SIZE)
+	});
+
 	server.set_cat_dev_slowdown(if fully_disable_cat_dev_sleep {
 		None
 	} else {

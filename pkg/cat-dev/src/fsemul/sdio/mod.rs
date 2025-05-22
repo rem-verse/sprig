@@ -11,6 +11,8 @@
 
 #[cfg(feature = "clients")]
 pub mod client;
+#[cfg(any(feature = "clients", feature = "servers"))]
+pub(crate) mod data_stream;
 pub mod errors;
 #[cfg(any(feature = "clients", feature = "servers"))]
 pub mod proto;
@@ -18,6 +20,11 @@ pub mod proto;
 pub mod server;
 
 use std::time::Duration;
+
+#[cfg(any(feature = "clients", feature = "servers"))]
+use scc::HashMap as ConcurrentHashMap;
+#[cfg(any(feature = "clients", feature = "servers"))]
+use std::sync::LazyLock;
 
 /// The default port to use for "SDIO Printf/Control" communications.
 ///
@@ -35,9 +42,14 @@ pub const DEFAULT_SDIO_BLOCK_PORT: u16 = 7976;
 /// The timeout to initiate a TCP connection to SDIO.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The amount of TCP Packets that can be buffered per client.
+/// Underlying 'data' streams for a series of <stream id, data stream>.
 ///
-/// *note: this is not the size of an individual packet, or packets, but is
-/// just the amount of packets that can be queued.*
+/// The data stream is truly just a data stream, all the benefits of having
+/// this in a tcp client, or server, etc. just doesn't exist. It is an
+/// arbitrary stream of bytes in ever since of the word.
+///
+/// This gets populated on SDIO Control stream start, and cleaned up on SDIO
+/// Control stream end.
 #[cfg(any(feature = "clients", feature = "servers"))]
-const SDIO_TCP_PACKET_BUFFER_SIZE: usize = 8192_usize;
+static SDIO_DATA_STREAMS: LazyLock<ConcurrentHashMap<u64, data_stream::DataStream>> =
+	LazyLock::new(|| ConcurrentHashMap::with_capacity(1));

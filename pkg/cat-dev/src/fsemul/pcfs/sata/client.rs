@@ -1,5 +1,6 @@
 //! Client implementation for SATA over PCFS.
 
+/*
 use crate::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
 	fsemul::pcfs::{
@@ -8,10 +9,10 @@ use crate::{
 			DirectoryItemResponse, MoveToFileLocation, PCFSSataFdInfo, PCFSSataQueryResponse,
 			PCFSSataQueryType, SataCapabilitiesFlags, SataChangeModePacketBody,
 			SataChangeOwnerPacketBody, SataCloseFilePacketBody, SataCloseFolderPacketBody,
-			SataCommandInfo, SataCreateDirectoryPacketBody, SataGetInfoByQueryPacketBody,
+			SataCommandInfo, SataCreateFolderPacketBody, SataGetInfoByQueryPacketBody,
 			SataOpenFilePacketBody, SataOpenFolderPacketBody, SataPacketHeader, SataPingPacketBody,
-			SataPongBody, SataReadDirPacketBody, SataReadFilePacketBody, SataRemovePacketBody,
-			SataRewindDirPacketBody, SataStatFilePacketBody, SataWriteFilePacketBody,
+			SataPongBody, SataReadFilePacketBody, SataReadFolderPacketBody, SataRemovePacketBody,
+			SataRewindFolderPacketBody, SataStatFilePacketBody, SataWriteFilePacketBody,
 			construct_sata_request,
 		},
 	},
@@ -356,7 +357,7 @@ impl PCFSSataClient {
 				&SataPacketHeader::new(0),
 				&SataCommandInfo::new((0, 0), (0, 0), 0x0),
 				0,
-				SataCreateDirectoryPacketBody::new(path, set_write_mode)?,
+				SataCreateFolderPacketBody::new(path, set_write_mode)?,
 			)?)
 			.await
 			.map_err(NetworkError::IO)?;
@@ -702,7 +703,7 @@ impl PCFSSataClient {
 				&SataPacketHeader::new(0),
 				&SataCommandInfo::new((0, 0), (0, 0), 0x2),
 				0,
-				Bytes::from(SataReadDirPacketBody::new(file_descriptor)),
+				Bytes::from(SataReadFolderPacketBody::new(file_descriptor)),
 			)?)
 			.await
 			.map_err(NetworkError::IO)?;
@@ -832,7 +833,7 @@ impl PCFSSataClient {
 				&SataPacketHeader::new(0),
 				&SataCommandInfo::new((0, 0), (0, 0), 0x3),
 				0,
-				Bytes::from(SataRewindDirPacketBody::new(file_descriptor)),
+				Bytes::from(SataRewindFolderPacketBody::new(file_descriptor)),
 			)?)
 			.await
 			.map_err(NetworkError::IO)?;
@@ -1017,3 +1018,4 @@ impl PCFSSataClient {
 		Ok(fd)
 	}
 }
+*/
