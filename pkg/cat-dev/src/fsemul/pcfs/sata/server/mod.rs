@@ -43,7 +43,6 @@ use local_ip_address::local_ip;
 use std::{
 	net::{IpAddr, Ipv4Addr, SocketAddrV4},
 	time::Duration,
-	u32,
 };
 use tower::ServiceBuilder;
 use tracing::{field::valuable, warn};
@@ -114,6 +113,7 @@ impl FromRef<PCFSServerState> for u32 {
 	// TODO(mythra): we should probably extract this out into a builder
 	// pattern some day. That day is not today.
 	clippy::too_many_arguments,
+	clippy::fn_params_excessive_bools,
 )]
 pub async fn pcfs_sata_server(
 	host_filesystem: HostFilesystem,

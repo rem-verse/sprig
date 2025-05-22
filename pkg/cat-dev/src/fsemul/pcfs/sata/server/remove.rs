@@ -116,7 +116,7 @@ pub async fn handle_removal(
 				);
 			}
 		} else if fs_location.resolved_path().is_dir() {
-			if let Err(cause) = Self::rename_dir(fs_location.resolved_path()).await {
+			if let Err(cause) = rename_dir(fs_location.resolved_path()).await {
 				error!(
 				  ?cause,
 				  path = %fs_location.resolved_path().display(),
@@ -235,7 +235,8 @@ mod unit_tests {
 				.to_str()
 				.expect("Test paths must be UTF-8")
 				.to_owned(),
-		);
+		)
+		.expect("Failed to create sata remove packet body!");
 		let mocked_header = SataPacketHeader::new(0);
 		let bytes: Bytes = handle_removal(
 			mocked_header,
@@ -302,10 +303,11 @@ mod unit_tests {
 				.to_str()
 				.expect("Test paths must be UTF-8")
 				.to_owned(),
-		);
+		)
+		.expect("Failed to create sata remove packet body!");
 		let mocked_header = SataPacketHeader::new(0);
 
-		let bytes: Bytes = handle_removal(
+		let _bytes: Bytes = handle_removal(
 			mocked_header,
 			State(PCFSServerState::new(true, fs, 0)),
 			Body(request),

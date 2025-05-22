@@ -81,10 +81,12 @@ impl SataConnectionFlags {
 			.store(enabled, Ordering::Release);
 	}
 
+	#[allow(unused)]
 	pub fn version(&self) -> u32 {
 		self.version.load(Ordering::Acquire)
 	}
 
+	#[allow(unused)]
 	pub fn set_version(&self, version_num: u32) {
 		self.version.store(version_num, Ordering::Release);
 	}

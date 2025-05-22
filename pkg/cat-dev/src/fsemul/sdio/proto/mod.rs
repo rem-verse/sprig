@@ -17,10 +17,6 @@ use crate::fsemul::sdio::errors::SDIOProtocolError;
 pub const SDIO_BLOCK_SIZE: usize = 0x200_usize;
 /// The size of an SDIO Block we end up serving.
 pub const SDIO_BLOCK_SIZE_AS_U32: u32 = 0x200_u32;
-/// The size of a single TCP packet we should end up serving.
-pub const SDIO_TCP_PACKET_SIZE: usize = 0x10000_usize;
-/// The amount of blocks that can fit within a single packet.
-pub const SDIO_BLOCKS_PER_PACKET: usize = SDIO_TCP_PACKET_SIZE / SDIO_BLOCK_SIZE;
 
 /// The types of packets that can be received by the SDIO Control Port.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

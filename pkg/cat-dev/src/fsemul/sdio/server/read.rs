@@ -8,7 +8,7 @@ use crate::{
 		sdio::{
 			data_stream::DataStream,
 			errors::{SDIONetworkError, SDIOProtocolError},
-			proto::{SDIO_BLOCK_SIZE, SDIO_BLOCKS_PER_PACKET, read::SdioControlReadRequest},
+			proto::{SDIO_BLOCK_SIZE, read::SdioControlReadRequest},
 			server::SDIO_DATA_STREAMS,
 		},
 	},
@@ -21,7 +21,7 @@ use bytes::{Bytes, BytesMut};
 use std::path::PathBuf;
 use tokio::{
 	fs::{File, read as fs_read},
-	io::{AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom},
+	io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
 };
 use tracing::{info, warn};
 
@@ -116,43 +116,17 @@ async fn serve_padded_file_sdio(
 ) -> Result<(), CatBridgeError> {
 	let mut fd = File::open(path).await.map_err(FSError::IO)?;
 	fd.seek(offset).await.map_err(FSError::IO)?;
-	let mut blocks_left_to_serve =
+
+	let blocks_left_to_serve =
 		usize::try_from(blocks_requested).map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
-
-	// Small enough, ready to just be read one-shot.
-	if blocks_left_to_serve <= SDIO_BLOCKS_PER_PACKET {
-		let mut file_buff = BytesMut::with_capacity(blocks_left_to_serve * SDIO_BLOCK_SIZE);
-		let read_bytes = fd.read_buf(&mut file_buff).await.map_err(FSError::IO)?;
-		if read_bytes < blocks_left_to_serve * SDIO_BLOCK_SIZE {
-			let padding = BytesMut::zeroed((blocks_left_to_serve * SDIO_BLOCK_SIZE) - read_bytes);
-			file_buff.extend(padding);
-		}
-
-		data_channel.send(file_buff.freeze()).await?;
-	} else {
-		let mut exhausted_file = false;
-		let mut reader = BufReader::new(fd);
-
-		while blocks_left_to_serve > 0 {
-			let blocks_to_read = std::cmp::min(blocks_left_to_serve, SDIO_BLOCKS_PER_PACKET);
-			let bytes_to_read = blocks_to_read * SDIO_BLOCK_SIZE;
-			let mut file_buff = BytesMut::with_capacity(bytes_to_read);
-
-			if !exhausted_file {
-				let read_bytes = reader.read_buf(&mut file_buff).await.map_err(FSError::IO)?;
-				if read_bytes == 0 {
-					exhausted_file = true;
-				}
-			}
-
-			if file_buff.len() < bytes_to_read {
-				file_buff.extend(BytesMut::zeroed(bytes_to_read - file_buff.len()));
-			}
-
-			data_channel.send(file_buff.freeze()).await?;
-			blocks_left_to_serve -= blocks_to_read;
-		}
+	let total_byte_size = blocks_left_to_serve * SDIO_BLOCK_SIZE;
+	let mut file_buff = BytesMut::zeroed(total_byte_size);
+	let read_bytes = fd.read(&mut file_buff).await.map_err(FSError::IO)?;
+	if read_bytes < total_byte_size {
+		let padding = BytesMut::zeroed(total_byte_size - read_bytes);
+		file_buff.extend(padding);
 	}
+	data_channel.send(file_buff.freeze()).await?;
 
 	Ok(())
 }
@@ -168,16 +142,12 @@ async fn serve_zeroed_blocks(
 	blocks_requested: u32,
 	data_channel: &DataStream,
 ) -> Result<(), CatBridgeError> {
-	let mut blocks_as_size =
+	let blocks_as_size =
 		usize::try_from(blocks_requested).map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
 
-	while blocks_as_size > 0 {
-		let blocks_to_read = std::cmp::min(blocks_as_size, SDIO_BLOCKS_PER_PACKET);
-		let bytes_to_read = blocks_to_read * SDIO_BLOCK_SIZE;
-		let zero_buff = BytesMut::zeroed(bytes_to_read);
-		data_channel.send(zero_buff.freeze()).await?;
-		blocks_as_size -= blocks_to_read;
-	}
+	data_channel
+		.send(BytesMut::zeroed(blocks_as_size * SDIO_BLOCK_SIZE).freeze())
+		.await?;
 
 	Ok(())
 }

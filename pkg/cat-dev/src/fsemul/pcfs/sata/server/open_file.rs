@@ -2,7 +2,7 @@
 
 use crate::{
 	fsemul::{
-		host_filesystem::ResolvedLocation,
+		host_filesystem::{FilesystemLocation, ResolvedLocation},
 		pcfs::sata::{
 			proto::{
 				SataCommandInfo, SataFileDescriptorResult, SataOpenFilePacketBody,
@@ -26,10 +26,6 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 
 /// Handle opening a file upon request.
-#[allow(
-	// Yes clippy, this is what I want, which is why i wrote it.
-	clippy::permissions_set_readonly_false,
-)]
 pub async fn handle_open_file(
 	request_header: SataPacketHeader,
 	command_info: SataCommandInfo,
@@ -56,73 +52,17 @@ pub async fn handle_open_file(
 	// Since you can only have one of 'raw', if we want to check for
 	// 'a' || 'w', we can instead check for the absence of 'r'.
 	let mode = packet.mode();
-	if !state
-		.host_filesystem()
-		.path_allows_writes(fs_location.resolved_path())
-		&& (!mode.contains('r') || mode.contains('+'))
+	if let Some(error_response) = update_read_only_flags(
+		&request_header,
+		&command_info,
+		&state,
+		mode,
+		&fs_location,
+		packet.path(),
+	)
+	.await
 	{
-		debug!(
-			packet.mode = mode,
-			packet.path = packet.path(),
-			packet.typ = "PCFSSrvOpenFile",
-			"Path does not allow opening as writable!",
-		);
-
-		return SataResponse::new(
-			state.pid(),
-			request_header,
-			SataFileDescriptorResult::error(FS_ERROR),
-		);
-	}
-	let [allow_becoming_write, _, _, _] = command_info.capabilities().1.to_be_bytes();
-	// If it exists, we potentially need to change read only mode flag.
-	if fs_location.resolved_path().exists() {
-		let Ok(metadata) = fs_location.resolved_path().metadata() else {
-			debug!(
-				packet.path = packet.path(),
-				packet.typ = "PCFSSrvOpenFile",
-				"Failed to get metadata of resolved path!",
-			);
-
-			return SataResponse::new(
-				state.pid(),
-				request_header,
-				SataFileDescriptorResult::error(FS_ERROR),
-			);
-		};
-		let mut perms = metadata.permissions();
-		if perms.readonly() && !mode.contains('r') && allow_becoming_write == 0 {
-			debug!(
-				path.is_read_only = perms.readonly(),
-				packet.mode = mode,
-				packet.path = packet.path(),
-				packet.typ = "PCFSSrvOpenFile",
-				"Path is marked read-only, and mode was requested as non-read!",
-			);
-
-			return SataResponse::new(
-				state.pid(),
-				request_header,
-				SataFileDescriptorResult::error(FS_ERROR),
-			);
-		}
-		perms.set_readonly(false);
-		if set_permissions(fs_location.resolved_path(), perms)
-			.await
-			.is_err()
-		{
-			debug!(
-				packet.path = packet.path(),
-				packet.typ = "PCFSSrvOpenFile",
-				"Failed to update permissions as requested on open!"
-			);
-
-			return SataResponse::new(
-				state.pid(),
-				request_header,
-				SataFileDescriptorResult::error(FS_ERROR),
-			);
-		}
+		return error_response;
 	}
 
 	// Okay time to open!
@@ -173,6 +113,90 @@ pub async fn handle_open_file(
 		request_header,
 		SataFileDescriptorResult::success(fd),
 	)
+}
+
+#[allow(
+	// Yes clippy, this is what I want, which is why i wrote it.
+	clippy::permissions_set_readonly_false,
+)]
+async fn update_read_only_flags(
+	request_header: &SataPacketHeader,
+	command_info: &SataCommandInfo,
+	state: &PCFSServerState,
+	mode: &str,
+	fs_location: &FilesystemLocation,
+	path: &str,
+) -> Option<SataResponse<SataFileDescriptorResult>> {
+	if !state
+		.host_filesystem()
+		.path_allows_writes(fs_location.resolved_path())
+		&& (!mode.contains('r') || mode.contains('+'))
+	{
+		debug!(
+			packet.mode = mode,
+			packet.path = path,
+			packet.typ = "PCFSSrvOpenFile",
+			"Path does not allow opening as writable!",
+		);
+
+		return Some(SataResponse::new(
+			state.pid(),
+			request_header.clone(),
+			SataFileDescriptorResult::error(FS_ERROR),
+		));
+	}
+	let [allow_becoming_write, _, _, _] = command_info.capabilities().1.to_be_bytes();
+	// If it exists, we potentially need to change read only mode flag.
+	if fs_location.resolved_path().exists() {
+		let Ok(metadata) = fs_location.resolved_path().metadata() else {
+			debug!(
+				packet.path = path,
+				packet.typ = "PCFSSrvOpenFile",
+				"Failed to get metadata of resolved path!",
+			);
+
+			return Some(SataResponse::new(
+				state.pid(),
+				request_header.clone(),
+				SataFileDescriptorResult::error(FS_ERROR),
+			));
+		};
+		let mut perms = metadata.permissions();
+		if perms.readonly() && !mode.contains('r') && allow_becoming_write == 0 {
+			debug!(
+				path.is_read_only = perms.readonly(),
+				packet.mode = mode,
+				packet.path = path,
+				packet.typ = "PCFSSrvOpenFile",
+				"Path is marked read-only, and mode was requested as non-read!",
+			);
+
+			return Some(SataResponse::new(
+				state.pid(),
+				request_header.clone(),
+				SataFileDescriptorResult::error(FS_ERROR),
+			));
+		}
+		perms.set_readonly(false);
+		if set_permissions(fs_location.resolved_path(), perms)
+			.await
+			.is_err()
+		{
+			debug!(
+				packet.path = path,
+				packet.typ = "PCFSSrvOpenFile",
+				"Failed to update permissions as requested on open!"
+			);
+
+			return Some(SataResponse::new(
+				state.pid(),
+				request_header.clone(),
+				SataFileDescriptorResult::error(FS_ERROR),
+			));
+		}
+	}
+
+	None
 }
 
 #[cfg(test)]

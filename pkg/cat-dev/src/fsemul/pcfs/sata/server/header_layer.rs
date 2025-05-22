@@ -12,6 +12,7 @@ use crate::{
 	},
 	net::models::{FromRequest, FromRequestParts, Request, Response},
 };
+use bytes::Bytes;
 use std::{
 	convert::Infallible,
 	pin::Pin,
@@ -59,8 +60,8 @@ where
 		let mut inner_clone = self.inner.clone();
 
 		Box::pin(async move {
-			let mut body = req.body().clone();
-			let (as_header, ci, real_body) = match SataRequest::parse_opaque(body) {
+			let body = req.body().clone();
+			let (as_header, ci, real_body) = match SataRequest::<Bytes>::parse_opaque(body) {
 				Ok(success) => success.into_parts(),
 				Err(cause) => {
 					warn!(
@@ -88,9 +89,12 @@ where
 
 impl<State: Clone + Send + Sync + 'static> FromRequestParts<State> for SataCommandInfo {
 	async fn from_request_parts(req: &mut Request<State>) -> Result<Self, CatBridgeError> {
-		req.extensions().get::<SataCommandInfo>().ok_or_else(|| {
-			PCFSApiError::MissingCriticalExtension("SataCommandInfo".to_owned()).into()
-		})
+		req.extensions()
+			.get::<SataCommandInfo>()
+			.cloned()
+			.ok_or_else(|| {
+				PCFSApiError::MissingCriticalExtension("SataCommandInfo".to_owned()).into()
+			})
 	}
 }
 impl<State: Clone + Send + Sync + 'static> FromRequest<State> for SataCommandInfo {
@@ -105,9 +109,12 @@ impl<State: Clone + Send + Sync + 'static> FromRequest<State> for SataCommandInf
 
 impl<State: Clone + Send + Sync + 'static> FromRequestParts<State> for SataPacketHeader {
 	async fn from_request_parts(req: &mut Request<State>) -> Result<Self, CatBridgeError> {
-		req.extensions().get::<SataPacketHeader>().ok_or_else(|| {
-			PCFSApiError::MissingCriticalExtension("SataPacketHeader".to_owned()).into()
-		})
+		req.extensions()
+			.get::<SataPacketHeader>()
+			.cloned()
+			.ok_or_else(|| {
+				PCFSApiError::MissingCriticalExtension("SataPacketHeader".to_owned()).into()
+			})
 	}
 }
 impl<State: Clone + Send + Sync + 'static> FromRequest<State> for SataPacketHeader {

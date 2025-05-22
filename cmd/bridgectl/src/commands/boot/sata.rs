@@ -7,9 +7,16 @@
 use crate::{
 	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
+	knobs::env::PCFS_OVERRIDE_LOAD_BEARING_SLEEP_MS,
 	utils::add_context_to,
 };
-use cat_dev::fsemul::{HostFilesystem, pcfs::sata::server::PCFSSataServer};
+use cat_dev::{
+	fsemul::{
+		HostFilesystem,
+		pcfs::sata::server::{PCFSServerState, pcfs_sata_server},
+	},
+	net::server::TCPServer,
+};
 use miette::miette;
 use std::net::Ipv4Addr;
 use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};
@@ -29,14 +36,19 @@ pub async fn serve_sata(
 	disable_csr: bool,
 	disable_load_bearing_sleep: bool,
 ) -> u16 {
-	let sata_server = match PCFSSataServer::new(
-		host_filesystem,
+	let sata_server = match pcfs_sata_server(
+		host_filesystem.clone(),
 		host_ip,
 		fsemul_sata_port,
+		disable_ffio,
+		disable_csr,
 		disable_real_removal,
-		!disable_ffio,
-		!disable_csr,
+		*PCFS_OVERRIDE_LOAD_BEARING_SLEEP_MS,
 		disable_load_bearing_sleep,
+		None,
+		false,
+		// Still settable through env vars.
+		false,
 	)
 	.await
 	{
@@ -67,12 +79,12 @@ pub async fn serve_sata(
 	port
 }
 
-fn spawn_sata(sata_emulator: PCFSSataServer<'static>) {
+fn spawn_sata(sata_emulator: TCPServer<PCFSServerState>) {
 	if let Err(cause) = TaskBuilder::new()
 		.name("bridgectl::boot::serve_pcfs::sata")
 		.spawn(async move {
 			tokio::select! {
-				() = sata_emulator.serve_concurrently() => {}
+				_res = sata_emulator.bind() => {}
 				_ = ctrl_c_signal() => if SHOULD_LOG_JSON() {
 					info!(
 						id = "bridgectl::boot::sata_detected_ctrlc",

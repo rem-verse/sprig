@@ -1,6 +1,7 @@
 //! Handle iterating over a directory, getting a file that is in a directory.
 
 use crate::{
+	errors::CatBridgeError,
 	fsemul::pcfs::sata::{
 		proto::{
 			DirectoryItemResponse, PCFSSataFdInfo, SataPacketHeader, SataReadFolderPacketBody,
@@ -18,11 +19,15 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 
 /// Create a packet to then get the file information in the next file in a
 /// folder.
+///
+/// ## Errors
+///
+/// If the path is too long to encode into a packet.
 pub async fn handle_read_folder(
 	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
 	Body(packet): Body<SataReadFolderPacketBody>,
-) -> SataResponse<DirectoryItemResponse> {
+) -> Result<SataResponse<DirectoryItemResponse>, CatBridgeError> {
 	let fd = packet.file_descriptor();
 	let Ok(optional_next_item) = state.host_filesystem().next_in_folder(fd).await else {
 		debug!(
@@ -31,11 +36,11 @@ pub async fn handle_read_folder(
 			"Failed to query for next item in folder!",
 		);
 
-		return SataResponse::new(
+		return Ok(SataResponse::new(
 			state.pid(),
 			request_header,
 			DirectoryItemResponse::new_error_code(FS_ERROR),
-		);
+		));
 	};
 	let Some((item, components_to_remove)) = optional_next_item else {
 		debug!(
@@ -44,11 +49,11 @@ pub async fn handle_read_folder(
 			"No more items in directory!",
 		);
 
-		return SataResponse::new(
+		return Ok(SataResponse::new(
 			state.pid(),
 			request_header,
 			DirectoryItemResponse::new_nothing_left(),
-		);
+		));
 	};
 
 	let Ok(md) = item.metadata() else {
@@ -58,11 +63,11 @@ pub async fn handle_read_folder(
 			"Failed to get information for next file in folder!",
 		);
 
-		return SataResponse::new(
+		return Ok(SataResponse::new(
 			state.pid(),
 			request_header,
 			DirectoryItemResponse::new_error_code(FS_ERROR),
-		);
+		));
 	};
 	let info = PCFSSataFdInfo::get_info(state.host_filesystem(), &md, &item).await;
 
@@ -79,15 +84,18 @@ pub async fn handle_read_folder(
 			"UTF-8 path is too long, cant serve!",
 		);
 
-		return Self::construct_error_repsonse(request_header, FS_ERROR);
+		return Ok(SataResponse::new(
+			state.pid(),
+			request_header,
+			DirectoryItemResponse::new_error_code(FS_ERROR),
+		));
 	}
-	let byte_len = utf8.len();
 
-	SataResponse::new(
+	Ok(SataResponse::new(
 		state.pid(),
 		request_header,
-		DirectoryItemResponse::new_next(info, item.to_string_lossy().to_string()),
-	)
+		DirectoryItemResponse::new_next(info, utf8)?,
+	))
 }
 
 #[cfg(test)]
@@ -96,6 +104,7 @@ mod unit_tests {
 	use crate::fsemul::host_filesystem::test_helpers::{
 		create_temporary_host_filesystem, join_many,
 	};
+	use bytes::Bytes;
 
 	#[tokio::test]
 	pub async fn can_handle_read_directory() {
@@ -118,12 +127,15 @@ mod unit_tests {
 		let request = SataReadFolderPacketBody::new(dfd);
 
 		// First request should return file information, and path name.
-		let actual_file_response = handle_read_folder(
-			mocked_header,
-			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+		let actual_file_response: Bytes = handle_read_folder(
+			mocked_header.clone(),
+			State(PCFSServerState::new(true, fs.clone(), 0)),
+			Body(request.clone()),
 		)
-		.await;
+		.await
+		.expect("Failed to handle read folder request!")
+		.try_into()
+		.expect("Failed to serialize read folder response!");
 		assert_eq!(
 			&actual_file_response[0x20..0x48],
 			&[
@@ -180,10 +192,15 @@ mod unit_tests {
 		);
 
 		// Second one is an empty response.
-		let new_response = request
-			.handle(&mocked_header, &fs)
-			.await
-			.expect("Failed to get file information back from directory that was opened!");
+		let new_response: Bytes = handle_read_folder(
+			mocked_header,
+			State(PCFSServerState::new(true, fs.clone(), 0)),
+			Body(request),
+		)
+		.await
+		.expect("Failed to handle read folder request!")
+		.try_into()
+		.expect("Failed to serialize read folder response!");
 		assert_eq!(&new_response[0x20..0x24], &[0xFF, 0xF0, 0xFF, 0xFC]);
 		fs.close_folder(dfd).await;
 	}

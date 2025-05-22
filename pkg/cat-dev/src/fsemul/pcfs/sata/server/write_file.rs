@@ -57,7 +57,11 @@ pub async fn handle_write_file(
 						"Failed to seek to beginning of file!",
 					);
 
-					return Self::construct_error(request_header, FS_ERROR);
+					return Ok(SataResponse::new(
+						state.pid(),
+						request_header,
+						SataResultCode::error(FS_ERROR),
+					));
 				}
 			}
 			MoveToFileLocation::Current => {
@@ -76,7 +80,11 @@ pub async fn handle_write_file(
 						"Failed to seek to end of file!",
 					);
 
-					return Self::construct_error(request_header, FS_ERROR);
+					return Ok(SataResponse::new(
+						state.pid(),
+						request_header,
+						SataResultCode::error(FS_ERROR),
+					));
 				}
 			}
 		}

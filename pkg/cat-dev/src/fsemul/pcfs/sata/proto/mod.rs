@@ -155,6 +155,28 @@ impl SataPacketHeader {
 	}
 }
 
+impl From<&SataPacketHeader> for Bytes {
+	fn from(value: &SataPacketHeader) -> Self {
+		let mut buff = BytesMut::with_capacity(0x20);
+
+		buff.put_u32(value.packet_data_len);
+		buff.put_u32(value.packet_id);
+		buff.put_u32(value.flags);
+		buff.put_u32(value.version);
+		buff.put_u32(value.timestamp_on_host);
+		buff.put_u32(value.pid_on_host);
+		buff.extend([0; 8]);
+
+		buff.freeze()
+	}
+}
+
+impl From<SataPacketHeader> for Bytes {
+	fn from(value: SataPacketHeader) -> Self {
+		Self::from(&value)
+	}
+}
+
 impl TryFrom<Bytes> for SataPacketHeader {
 	type Error = NetworkParseError;
 
@@ -517,15 +539,13 @@ impl<InnerTy: Debug> SataRequest<InnerTy> {
 			));
 		}
 
-		let ci_bytes = body.split_off(0x20);
-		let real_body = body.split_off(0x14);
-		let header = SataPacketHeader::try_from(body)?;
-		let ci = SataCommandInfo::try_from(ci_bytes)?;
+		let header = SataPacketHeader::try_from(body.split_to(0x20))?;
+		let ci = SataCommandInfo::try_from(body.split_to(0x14))?;
 
 		Ok(SataRequest {
 			header,
 			command_info: ci,
-			body: real_body,
+			body,
 		})
 	}
 }
@@ -549,26 +569,12 @@ where
 	}
 }
 
-impl<'life, InnerTy: Debug> From<&'life SataRequest<InnerTy>> for Bytes
-where
-	Bytes: From<&'life InnerTy>,
-{
-	fn from(value: &SataRequest<InnerTy>) -> Self {
-		let body = Bytes::from(&value.body);
-		let mut packet = BytesMut::with_capacity(0x34 + body.len());
-		packet.extend(Bytes::from(&value.header));
-		packet.extend(Bytes::from(&value.command_info));
-		packet.extend(body);
-		packet.freeze()
-	}
-}
-
 impl<InnerTy: Debug> From<SataRequest<InnerTy>> for Bytes
 where
-	Bytes: From<InnerTy>,
+	InnerTy: Into<Bytes>,
 {
 	fn from(value: SataRequest<InnerTy>) -> Self {
-		let body = Bytes::from(value.body);
+		let body = value.body.into();
 		let mut packet = BytesMut::with_capacity(0x34 + body.len());
 		packet.extend(Bytes::from(&value.header));
 		packet.extend(Bytes::from(&value.command_info));
@@ -844,7 +850,10 @@ impl SataFileDescriptorResult {
 	}
 
 	/// The resulting file descriptor.
-	#[must_use]
+	///
+	/// ## Errors
+	///
+	/// If there was an error code.
 	pub const fn result(&self) -> Result<i32, u32> {
 		self.file_descriptor
 	}
@@ -861,7 +870,7 @@ impl From<&SataFileDescriptorResult> for Bytes {
 			}
 			Err(code) => {
 				response.put_u32(code);
-				response.put_i32(0xFFFF_FFFF);
+				response.put_i32(i32::from_be_bytes([0xFF, 0xFF, 0xFF, 0xFF]));
 			}
 		}
 
@@ -926,7 +935,12 @@ mod unit_tests {
 		}
 	}
 
-	fn parse_sata_request<BodyTy>(body: Bytes) -> (SataPacketHeader, SataCommandInfo, BodyTy) {
+	fn parse_sata_request<
+		ErrorTy: Into<NetworkParseError>,
+		BodyTy: Debug + TryFrom<Bytes, Error = ErrorTy>,
+	>(
+		body: Bytes,
+	) -> (SataPacketHeader, SataCommandInfo, BodyTy) {
 		SataRequest::try_from(body)
 			.expect("Failed to parse sata request!")
 			.into_parts()

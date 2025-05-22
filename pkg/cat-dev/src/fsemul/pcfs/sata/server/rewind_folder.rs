@@ -68,7 +68,7 @@ mod unit_tests {
 		// First request should return file information, and path name.
 		let actual_response: Bytes = handle_rewind_folder(
 			mocked_header,
-			State(PCFSServerState::new(true, fs, 0)),
+			State(PCFSServerState::new(true, fs.clone(), 0)),
 			Body(request),
 		)
 		.await

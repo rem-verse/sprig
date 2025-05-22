@@ -384,6 +384,12 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		})
 	}
 
+	/// Get the port that we're either binding too, or connecting too.
+	#[must_use]
+	pub const fn port(&self) -> u16 {
+		self.address_to_bind_or_connect_to.port()
+	}
+
 	/// Set the slowdown to before sending bytes from this server.
 	pub const fn set_cat_dev_slowdown(&mut self, slowdown: Option<Duration>) {
 		self.cat_dev_slowdown = slowdown;
