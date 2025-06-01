@@ -69,7 +69,8 @@ impl DataStream {
 					request_read_receiver,
 					read_response_sender,
 					send_bytes_receiver,
-					#[cfg(debug_assertions)] trace_io,
+					#[cfg(debug_assertions)]
+					trace_io,
 				)
 				.instrument(error_span!(
 				  "FSEmulSDIOClientDataStream",
@@ -128,7 +129,8 @@ impl DataStream {
 					request_read_receiver,
 					read_response_sender,
 					send_bytes_receiver,
-					#[cfg(debug_assertions)] trace_io,
+					#[cfg(debug_assertions)]
+					trace_io,
 				)
 				.instrument(error_span!(
 				  "FSEmulSDIOServerDataStream",

@@ -210,8 +210,7 @@ impl SDIOStreamState {
 		data_port: u16,
 		host_fs: HostFilesystem,
 		cat_dev_sleep: Option<Duration>,
-		#[cfg(debug_assertions)]
-		trace_during_debug: bool,
+		#[cfg(debug_assertions)] trace_during_debug: bool,
 	) -> Self {
 		Self {
 			chunk_size,
