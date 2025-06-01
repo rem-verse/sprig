@@ -121,6 +121,14 @@ pub async fn handle_boot(
 	// TODO(mythra): how can haz ownership?
 
 	if no_pcfs || !needs_pcfs {
+		// We are about to turn on a cat-dev without providing any "niceities" of
+		// PCFS. Including the Disc Emulator.
+		//
+		// As a result we need to ensure the state is set to "no disc in", otherwise
+		// the Wii-U components will show an error screen as they think a disc is in
+		// the tray, but they can't interact with the disc in anyway.
+		turn_down_for_disc(bridge_ip).await;
+
 		if is_modern_bridge {
 			boot_modern_without_pcfs(needs_pcfs, bridge_ip, host_ip, serial_task_handle).await;
 		} else {
@@ -129,6 +137,8 @@ pub async fn handle_boot(
 		return;
 	}
 
+	// TODO(mythra): properly serve a disc....
+	turn_down_for_disc(bridge_ip).await;
 	let file_system = lease_host_file_system().await;
 
 	let final_atapi_port = serve_atapi(
@@ -250,14 +260,6 @@ async fn boot_modern_without_pcfs(
 /// off emulation temporarily, or get info, or do any "smart" things. However,
 /// hey we can still turn these things on.
 async fn boot_legacy_without_pcfs(bridge_ip: Ipv4Addr, serial_handle: JoinHandle<()>) {
-	// We are about to turn on a cat-dev without providing any "niceities" of
-	// PCFS. Including the Disc Emulator.
-	//
-	// As a result we need to ensure the state is set to "no disc in", otherwise
-	// the Wii-U components will show an error screen as they think a disc is in
-	// the tray, but they can't interact with the disc in anyway.
-	turn_down_for_disc(bridge_ip).await;
-
 	match power_on(bridge_ip).await {
 		Ok(result_code) => {
 			if result_code {
