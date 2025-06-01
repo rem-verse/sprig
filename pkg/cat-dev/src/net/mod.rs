@@ -19,10 +19,12 @@ pub use ext_map::Extensions;
 #[cfg(test)]
 use std::sync::RwLock;
 use std::{
-	env::var as env_var,
-	sync::{LazyLock, atomic::AtomicU64},
+	sync::atomic::AtomicU64,
 	time::{Duration, SystemTime},
 };
+
+#[cfg(debug_assertions)]
+use std::{env::var as env_var, sync::LazyLock};
 
 /// The default slowdown to use for cat-dev units that seems to work.
 pub const DEFAULT_CAT_DEV_SLOWDOWN: Duration = Duration::from_millis(25);
@@ -37,6 +39,7 @@ static STREAM_ID: AtomicU64 = AtomicU64::new(1);
 static TCP_READ_BUFFER_SIZE: usize = 65536_usize;
 
 /// If we should be tracing IO regardless of what the user says.
+#[cfg(debug_assertions)]
 static SPRIG_TRACE_IO: LazyLock<bool> = LazyLock::new(|| {
 	if let Ok(variable) = env_var("SPRIG_FORCE_TRACE_ALL_IO") {
 		variable != "0" && !variable.is_empty()

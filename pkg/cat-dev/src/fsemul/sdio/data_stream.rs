@@ -22,7 +22,10 @@ use tokio::{
 	task::Builder as TaskBuilder,
 	time::sleep,
 };
-use tracing::{Instrument, debug, error, error_span};
+use tracing::{Instrument, error, error_span};
+
+#[cfg(debug_assertions)]
+use tracing::debug;
 
 /// A connection to a "data stream" for SDIO.
 ///
@@ -66,6 +69,7 @@ impl DataStream {
 					request_read_receiver,
 					read_response_sender,
 					send_bytes_receiver,
+					#[cfg(debug_assertions)]
 					trace_io,
 				)
 				.instrument(error_span!(
@@ -125,6 +129,7 @@ impl DataStream {
 					request_read_receiver,
 					read_response_sender,
 					send_bytes_receiver,
+					#[cfg(debug_assertions)]
 					trace_io,
 				)
 				.instrument(error_span!(

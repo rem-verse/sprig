@@ -106,6 +106,7 @@ pub async fn sdio_server(
 			} else {
 				Some(cat_dev_sleep_override.unwrap_or(DEFAULT_CAT_DEV_SLOWDOWN))
 			},
+			#[cfg(debug_assertions)]
 			trace_during_debug,
 		),
 		trace_during_debug,
@@ -147,6 +148,7 @@ async fn on_sdio_stream_begin(
 		addr,
 		event.state().cat_dev_slowdown,
 		event.state().chunk_size,
+		#[cfg(debug_assertions)]
 		event.state().trace_during_debug,
 	)
 	.await?;
@@ -197,6 +199,7 @@ pub struct SDIOStreamState {
 	/// The host filesystem that actually contains pointers to the filesystem.
 	host_fs: HostFilesystem,
 	/// Trace when debug mode is active.
+	#[cfg(debug_assertions)]
 	trace_during_debug: bool,
 }
 
@@ -207,13 +210,14 @@ impl SDIOStreamState {
 		data_port: u16,
 		host_fs: HostFilesystem,
 		cat_dev_sleep: Option<Duration>,
-		trace_during_debug: bool,
+		#[cfg(debug_assertions)] trace_during_debug: bool,
 	) -> Self {
 		Self {
 			chunk_size,
 			cat_dev_slowdown: cat_dev_sleep,
 			data_port,
 			host_fs,
+			#[cfg(debug_assertions)]
 			trace_during_debug,
 		}
 	}
