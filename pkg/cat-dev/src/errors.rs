@@ -12,7 +12,7 @@ use bytes::Bytes;
 use miette::{Diagnostic, Report};
 use std::{ffi::FromBytesUntilNulError, str::Utf8Error, string::FromUtf8Error, time::Duration};
 use thiserror::Error;
-use tokio::{io::Error as IoError, sync::mpsc::error::SendError, task::JoinError};
+use tokio::{io::Error as IoError, task::JoinError};
 
 #[cfg(feature = "servers")]
 use walkdir::Error as WalkdirError;
@@ -31,6 +31,8 @@ use crate::net::errors::{CommonNetAPIError, CommonNetNetworkError};
 
 #[cfg(feature = "servers")]
 use crate::net::server::models::ResponseStreamMessage;
+#[cfg(feature = "servers")]
+use tokio::sync::mpsc::error::SendError;
 
 /// The 'top-level' error type for this entire crate, all error types
 /// wrap underneath this.
@@ -214,9 +216,6 @@ pub enum NetworkError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	CommonNet(#[from] CommonNetNetworkError),
-	#[error("A duplicate stream id was somehow attempted to be registered: {0}")]
-	#[diagnostic(code(cat_dev::net::duplicate_stream_id))]
-	DuplicateStreamId(u64),
 	#[error("Expected some sort of data from other side, but got none.")]
 	#[diagnostic(code(cat_dev::net::expected_data))]
 	ExpectedData,
@@ -246,12 +245,6 @@ pub enum NetworkError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	Parse(#[from] NetworkParseError),
-	/// The client requested too many bytes to actively serve.
-	#[error(
-		"The client requested too many bytes to send over a connection at once (larger than usize::MAX on your architecture): {0}"
-	)]
-	#[diagnostic(code(cat_dev::net::requested_size_too_large))]
-	RequestedSizeTooLarge(u128),
 	/// If we failed to call `setsockopt` through libc.
 	///
 	/// For example if on linux see: <https://linux.die.net/man/2/setsockopt>
@@ -261,18 +254,10 @@ pub enum NetworkError {
 	#[diagnostic(code(cat_dev::net::set_broadcast_failure))]
 	SetBroadcastFailure,
 	/// Error adding a packet to a queue to send.
-	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
-	#[diagnostic(code(cat_dev::net::send_queue_failure))]
-	SendQueueFailure(#[from] SendError<Bytes>),
-	/// Error adding a packet to a queue to send.
 	#[cfg(feature = "servers")]
 	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
 	#[diagnostic(code(cat_dev::net::send_queue_failure))]
 	SendQueueMessageFailure(#[from] SendError<ResponseStreamMessage>),
-	/// Error adding a packet to a queue to send.
-	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
-	#[diagnostic(code(cat_dev::net::send_queue_failure))]
-	SendMultiQueueFailure(#[from] SendError<(Option<Bytes>, Option<Bytes>)>),
 	/// We waited too long to send/receive data from the network.
 	///
 	/// There may be something wrong with our network connection, or the targets
@@ -301,12 +286,6 @@ impl From<CommonNetNetworkError> for CatBridgeError {
 #[cfg(feature = "clients")]
 impl From<ReqwestError> for CatBridgeError {
 	fn from(value: ReqwestError) -> Self {
-		Self::Network(value.into())
-	}
-}
-
-impl From<SendError<Bytes>> for CatBridgeError {
-	fn from(value: SendError<Bytes>) -> Self {
 		Self::Network(value.into())
 	}
 }
@@ -341,12 +320,6 @@ pub enum NetworkParseError {
 	)]
 	#[diagnostic(code(cat_dev::net::parse::field_not_long_enough))]
 	FieldNotLongEnough(&'static str, &'static str, usize, usize, Bytes),
-	/// A field encoded within a packet has a maximum length that was exceeded.
-	#[error(
-		"Tried Reading Field {1} from Packet {0}. This field is at max {2} bytes, but had {3}, bytes: {4:02x?}"
-	)]
-	#[diagnostic(code(cat_dev::net::parse::field_too_long))]
-	FieldTooLong(&'static str, &'static str, usize, usize, Bytes),
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	FSEmul(#[from] FSEmulProtocolError),

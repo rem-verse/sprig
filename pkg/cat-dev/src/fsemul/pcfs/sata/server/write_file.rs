@@ -6,7 +6,7 @@ use crate::{
 		errors::PCFSApiError,
 		sata::{
 			proto::{
-				MoveToFileLocation, SataPacketHeader, SataResponse, SataResultCode,
+				MoveToFileLocation, SataRequest, SataResponse, SataResultCode,
 				SataWriteFilePacketBody,
 			},
 			server::{PCFSServerState, SataConnectionFlags},
@@ -34,13 +34,10 @@ pub async fn handle_write_file(
 		.get::<SataConnectionFlags>()
 		.cloned()
 		.ok_or_else(|| PCFSApiError::MissingCriticalExtension("SataConnectionFlags".to_owned()))?;
-	let request_header = req
-		.extensions()
-		.get::<SataPacketHeader>()
-		.cloned()
-		.ok_or_else(|| PCFSApiError::MissingCriticalExtension("SataPacketHEader".to_owned()))?;
 	let state = req.state();
-	let packet = SataWriteFilePacketBody::try_from(req.body().clone())?;
+	let request = SataRequest::<SataWriteFilePacketBody>::try_from(req.body().clone())?;
+	let request_header = request.header().clone();
+	let packet = request.body();
 
 	if packet.should_move() {
 		match packet.move_to_pointer() {

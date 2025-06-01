@@ -132,14 +132,14 @@ use crate::{
 	},
 };
 use bytes::{Bytes, BytesMut};
-use fnv::{FnvHashMap, FnvHashSet};
+use fnv::FnvHashSet;
 use futures::future::join_all;
 use scc::HashMap as ConcurrentMap;
 use std::{
 	convert::Infallible,
 	fmt::{Debug, Formatter, Result as FmtResult},
 	net::SocketAddr,
-	sync::{LazyLock, atomic::Ordering},
+	sync::{Arc, LazyLock, atomic::Ordering},
 	time::{Duration, SystemTime},
 };
 use tokio::{
@@ -159,11 +159,6 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 #[cfg(debug_assertions)]
 use crate::net::SPRIG_TRACE_IO;
 
-/// A map of streams that are actively being processed.
-///
-/// Used to mostly allow OOB Reads directly from the stream source.
-static RAW_STREAMS: LazyLock<Mutex<FnvHashMap<u64, TcpStream>>> =
-	LazyLock::new(|| Mutex::new(FnvHashMap::default()));
 /// A map of streams and the channels to queue a repsonse packet out on, in a
 /// complete out of band way.
 static OUT_OF_BAND_SENDERS: LazyLock<ConcurrentMap<u64, BoundedSender<ResponseStreamMessage>>> =
@@ -845,7 +840,7 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		nagle_guard: NagleGuard,
 		slowloris_timeout: Duration,
 		handler: BoxCloneService<Request<State>, Response, Infallible>,
-		tcp_stream: TcpStream,
+		mut tcp_stream: TcpStream,
 		client_address: SocketAddr,
 		pre_hook_cloned: Option<&'static dyn PreNagleFnTy>,
 		post_hook_cloned: Option<&'static dyn PostNagleFnTy>,
@@ -865,7 +860,7 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 			&mut send_responses,
 			&client_address,
 			&state,
-			tcp_stream,
+			&mut tcp_stream,
 			stream_id,
 		)
 		.await?
@@ -883,9 +878,11 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		let mut nagle_cache: Option<(BytesMut, SystemTime)> = None;
 
 		loop {
+			let mut buff = BytesMut::with_capacity(TCP_READ_BUFFER_SIZE);
 			tokio::select! {
 				received = packets_left_to_send.recv() => {
 					if Self::handle_server_write_to_connection(
+						&mut tcp_stream,
 						chunk_output_at_size,
 						received,
 						post_hook_cloned,
@@ -896,31 +893,15 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 						break;
 					}
 				}
-				opt_result = access_raw_stream(
-					stream_id,
-					async move |strm: &mut TcpStream| {
-						let mut buff = BytesMut::with_capacity(TCP_READ_BUFFER_SIZE);
-						let size = strm.read_buf(&mut buff).await.map_err(NetworkError::IO)?;
-						buff.truncate(size);
-						Ok::<BytesMut, NetworkError>(buff)
-					}
-				) => {
-					let buff = match opt_result.ok_or(CommonNetNetworkError::StreamNoLongerProcessing)? {
-						Ok(buff) => buff,
-						Err(cause) => {
-							debug!(
-								?cause,
-								"Failed to read data from connection.",
-							);
-							break;
-						}
-					};
-
+				res_size = tcp_stream.read_buf(&mut buff) => {
+					let size = res_size.map_err(NetworkError::IO)?;
+					buff.truncate(size);
 					if buff.is_empty() {
 						continue;
 					}
 
-					if Self::handle_server_read_from_connection(
+					let (should_break, returned_stream) = Self::handle_server_read_from_connection(
+						tcp_stream,
 						buff,
 						send_responses.clone(),
 						&nagle_guard,
@@ -932,7 +913,9 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 						state.clone(),
 						stream_id,
 						#[cfg(debug_assertions)] trace_io,
-					).await? {
+					).await?;
+					tcp_stream = returned_stream;
+					if should_break {
 						break;
 					}
 				}
@@ -941,8 +924,7 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 
 		OUT_OF_BAND_SENDERS.remove_async(&stream_id).await;
 		packets_left_to_send.close();
-		let mut strm = remove_raw_stream(stream_id).await;
-		std::mem::drop(strm.shutdown().await);
+		std::mem::drop(tcp_stream.shutdown().await);
 
 		Ok(())
 	}
@@ -952,11 +934,10 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		send_channel: &mut BoundedSender<ResponseStreamMessage>,
 		source_address: &SocketAddr,
 		state: &State,
-		tcp_stream: TcpStream,
+		tcp_stream: &mut TcpStream,
 		stream_id: u64,
 	) -> Result<bool, CatBridgeError> {
 		tcp_stream.set_nodelay(true).map_err(NetworkError::IO)?;
-		insert_raw_stream(stream_id, tcp_stream).await;
 		OUT_OF_BAND_SENDERS
 			.upsert_async(stream_id, send_channel.clone())
 			.await;
@@ -980,6 +961,7 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 	}
 
 	async fn handle_server_write_to_connection(
+		tcp_stream: &mut TcpStream,
 		chunk_output_on_size: Option<usize>,
 		to_send_to_client_opt: Option<ResponseStreamMessage>,
 		post_hook: Option<&'static dyn PostNagleFnTy>,
@@ -993,7 +975,7 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 
 		match to_send_to_client {
 			ResponseStreamMessage::Disconnect => {
-				trace!("stream-disconnect-message");
+				debug!("stream-disconnect-message");
 				Ok(true)
 			}
 			ResponseStreamMessage::Response(resp) => {
@@ -1025,15 +1007,11 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 								sleep(slowdown_ms).await;
 							}
 
-							access_raw_stream(stream_id, async move |strm: &mut TcpStream| {
-								strm.writable().await.map_err(NetworkError::IO)?;
-								strm.write_all(&full_response)
-									.await
-									.map_err(NetworkError::IO)?;
-								Ok::<(), NetworkError>(())
-							})
-							.await
-							.ok_or(CommonNetNetworkError::StreamNoLongerProcessing)??;
+							tcp_stream.writable().await.map_err(NetworkError::IO)?;
+							tcp_stream
+								.write_all(&full_response)
+								.await
+								.map_err(NetworkError::IO)?;
 						}
 					}
 				}
@@ -1056,6 +1034,7 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		clippy::too_many_arguments,
 	)]
 	async fn handle_server_read_from_connection<'data>(
+		mut stream: TcpStream,
 		mut buff: BytesMut,
 		channel: BoundedSender<ResponseStreamMessage>,
 		nagle_guard: &'data NagleGuard,
@@ -1067,7 +1046,7 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		state: State,
 		stream_id: u64,
 		#[cfg(debug_assertions)] trace_io: bool,
-	) -> Result<bool, CatBridgeError> {
+	) -> Result<(bool, TcpStream), CatBridgeError> {
 		if let Some(convert_fn) = cloned_pre_nagle {
 			block_in_place(|| {
 				(*convert_fn)(stream_id, &mut buff);
@@ -1101,21 +1080,27 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 					cause = ?CommonNetNetworkError::SlowlorisTimeout(total_duration),
 					"slowloris-detected",
 				);
-				return Ok(true);
+				return Ok((true, stream));
 			}
 
 			existing_buff.extend(buff.freeze());
 			buff = existing_buff;
 		}
 
+		let lockable_stream = Arc::new(Mutex::new(Some(stream)));
 		while let Some((start_of_packet, end_of_packet)) = nagle_guard.split(&buff)? {
 			let remaining_buff = buff.split_off(end_of_packet);
 			let _start_of_buff = buff.split_to(start_of_packet);
 			let req_body = buff.freeze();
 			buff = remaining_buff;
 
-			let mut request_object =
-				Request::new_with_state(req_body, client_address, state.clone(), Some(stream_id));
+			let mut request_object = Request::new_with_state_and_stream(
+				req_body,
+				client_address,
+				state.clone(),
+				Some(stream_id),
+				lockable_stream.clone(),
+			);
 			request_object.extensions_mut().insert(channel.clone());
 			if let Err(cause) = match handler.call(request_object).await {
 				Ok(ref resp) => {
@@ -1134,12 +1119,20 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 				);
 			}
 		}
+		{
+			let mut done_lock = lockable_stream.lock().await;
+			if let Some(strm) = done_lock.take() {
+				stream = strm;
+			} else {
+				return Err(CommonNetNetworkError::StreamNoLongerProcessing.into());
+			}
+		}
 
 		if !buff.is_empty() {
 			_ = nagle_cache.insert((buff, start_time));
 		}
 
-		Ok(false)
+		Ok((false, stream))
 	}
 }
 
@@ -1224,37 +1217,6 @@ impl<State: Clone + Debug + Send + Sync + Valuable + 'static> Valuable for TCPSe
 				Valuable::as_value(&self.trace_during_debug),
 			],
 		));
-	}
-}
-
-async fn insert_raw_stream(stream_id: u64, stream: TcpStream) {
-	let mut lock = (*RAW_STREAMS).lock().await;
-	lock.insert(stream_id, stream);
-}
-
-async fn remove_raw_stream(stream_id: u64) -> TcpStream {
-	let mut lock = (*RAW_STREAMS).lock().await;
-	match lock.remove(&stream_id) {
-		Some(val) => val,
-		None => unreachable!("Internal, never called in a place where it could be removed."),
-	}
-}
-
-/// Access the raw underlying stream.
-///
-/// THIS IS UNSAFE, AND YOU SHOULD ABSOLUTELY NOT USE THIS DIRECTLY.
-/// This is only possible to access *DURING* a stream actively being
-/// processed.
-pub(crate) async fn access_raw_stream<ReturnTy>(
-	stream_id: u64,
-	fn_ty: impl AsyncFnOnce(&'_ mut TcpStream) -> ReturnTy,
-) -> Option<ReturnTy> {
-	let mut lock = (*RAW_STREAMS).lock().await;
-	let potential_stream = lock.get_mut(&stream_id);
-	if let Some(stream) = potential_stream {
-		Some(fn_ty(stream).await)
-	} else {
-		None
 	}
 }
 

@@ -116,15 +116,22 @@ async fn serve_padded_file_sdio(
 ) -> Result<(), CatBridgeError> {
 	let mut fd = File::open(path).await.map_err(FSError::IO)?;
 	fd.seek(offset).await.map_err(FSError::IO)?;
-
 	let blocks_left_to_serve =
 		usize::try_from(blocks_requested).map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
 	let total_byte_size = blocks_left_to_serve * SDIO_BLOCK_SIZE;
+
 	let mut file_buff = BytesMut::zeroed(total_byte_size);
-	let read_bytes = fd.read(&mut file_buff).await.map_err(FSError::IO)?;
-	if read_bytes < total_byte_size {
-		let padding = BytesMut::zeroed(total_byte_size - read_bytes);
-		file_buff.extend(padding);
+	let mut bytes_read = 0;
+	while bytes_read < total_byte_size {
+		let read_this_go = fd
+			.read(&mut file_buff[bytes_read..])
+			.await
+			.map_err(FSError::IO)?;
+		// EOF, rest of the buff is already 0's, so no need to pad.
+		if read_this_go == 0 {
+			break;
+		}
+		bytes_read += read_this_go;
 	}
 	data_channel.send(file_buff.freeze()).await?;
 

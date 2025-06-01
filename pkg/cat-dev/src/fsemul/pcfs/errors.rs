@@ -3,9 +3,11 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+#[cfg(any(feature = "clients", feature = "servers"))]
+use crate::fsemul::pcfs::sata::proto::SataQueryResponse;
+
 /// Error's specific to calling a specific PCFS API.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum PCFSApiError {
 	#[error("Mode string is expected to match '(r|w|a)b?+?', but did not! invalid mode: {0}")]
 	#[diagnostic(code(cat_dev::api::fsmeul::pcfs::bad_mode_string))]
@@ -34,6 +36,7 @@ pub enum PCFSApiError {
 
 /// Error serializing/deserializing the PCFS Sata protocol.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SataProtocolError {
 	#[error("Mode string is expected to match '(r|w|a)b?+?', but did not! invalid mode: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::bad_mode_string))]
@@ -63,4 +66,8 @@ pub enum SataProtocolError {
 	#[error("Unknown file location to move too: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::unknown_file_location))]
 	UnknownFileLocation(u32),
+	#[cfg(any(feature = "clients", feature = "servers"))]
+	#[error("Sata query response returned the wrong type of response: {0:?}")]
+	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::wrong_query_response_type))]
+	WrongSataQueryResponse(SataQueryResponse),
 }

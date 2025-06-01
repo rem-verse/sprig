@@ -6,7 +6,6 @@ mod close_file;
 mod close_folder;
 mod connection_flags;
 mod create_folder;
-mod header_layer;
 mod info_by_query;
 mod open_file;
 mod open_folder;
@@ -22,12 +21,9 @@ use crate::{
 	fsemul::{
 		HostFilesystem,
 		pcfs::sata::{
-			proto::{SataCommandInfo, SataPacketHeader},
-			server::{
-				connection_flags::{
-					SATA_CONNECTION_FLAGS, SataConnectionFlags, SataConnectionFlagsLayer,
-				},
-				header_layer::SataHeaderParserLayer,
+			proto::SataRequest,
+			server::connection_flags::{
+				SATA_CONNECTION_FLAGS, SataConnectionFlags, SataConnectionFlagsLayer,
 			},
 		},
 	},
@@ -189,8 +185,7 @@ pub async fn pcfs_sata_server(
 		ServiceBuilder::new()
 			.layer(RequestIDLayer)
 			.layer(StreamIDLayer)
-			.layer(SataConnectionFlagsLayer)
-			.layer(SataHeaderParserLayer),
+			.layer(SataConnectionFlagsLayer),
 	);
 
 	server.set_chunk_output_at_size(if fully_disable_chunk_override {
@@ -209,17 +204,15 @@ pub async fn pcfs_sata_server(
 	Ok(server)
 }
 
-async fn unknown_packet_handler(
-	header: SataPacketHeader,
-	command_info: SataCommandInfo,
-	Body(extra_data): Body<Bytes>,
-) -> Response {
-	warn!(
-		header = valuable(&header),
-		command_info = valuable(&command_info),
-		body = format!("{:02X?}", extra_data),
-		"Unknown PCFS Sata packet!",
-	);
+async fn unknown_packet_handler(Body(request): Body<Bytes>) -> Response {
+	if let Ok(req) = SataRequest::<Bytes>::parse_opaque(request) {
+		warn!(
+			header = valuable(req.header()),
+			command_info = valuable(req.command_info()),
+			body = format!("{:02X?}", req.body()),
+			"Unknown PCFS Sata packet!",
+		);
+	}
 
 	Response::empty_close()
 }

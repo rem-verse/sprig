@@ -9,7 +9,7 @@ use crate::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata::{
 			proto::{
-				SataFileDescriptorResult, SataOpenFolderPacketBody, SataPacketHeader, SataResponse,
+				SataFileDescriptorResult, SataOpenFolderPacketBody, SataRequest, SataResponse,
 			},
 			server::PCFSServerState,
 		},
@@ -29,10 +29,12 @@ const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 
 /// Handle opening a folder upon request.
 pub async fn handle_open_folder(
-	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataOpenFolderPacketBody>,
+	Body(request): Body<SataRequest<SataOpenFolderPacketBody>>,
 ) -> SataResponse<SataFileDescriptorResult> {
+	let packet = request.body();
+	let request_header = request.header().clone();
+
 	let Ok(final_location) = state.host_filesystem().resolve_path(packet.path()) else {
 		debug!(
 			packet.path = packet.path(),
@@ -85,8 +87,9 @@ pub async fn handle_open_folder(
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use bytes::Bytes;
 
@@ -96,6 +99,7 @@ mod unit_tests {
 		let request = SataOpenFolderPacketBody::new("/%SLC_EMU_DIR/to-query/".to_owned())
 			.expect("Failed to create open folder packet!");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
 		tokio::fs::create_dir(&base_dir)
@@ -103,9 +107,8 @@ mod unit_tests {
 			.expect("Failed to create temporary directory for test!");
 
 		let mut response: Bytes = handle_open_folder(
-			mocked_header,
 			State(PCFSServerState::new(true, fs.clone(), 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()

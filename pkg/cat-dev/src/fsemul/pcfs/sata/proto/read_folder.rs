@@ -5,7 +5,7 @@
 
 use crate::{
 	errors::NetworkParseError,
-	fsemul::pcfs::{errors::PCFSApiError, sata::proto::get_info_by_query::PCFSSataFdInfo},
+	fsemul::pcfs::{errors::PCFSApiError, sata::proto::get_info_by_query::SataFDInfo},
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::ffi::CStr;
@@ -109,7 +109,7 @@ pub struct DirectoryItemResponse {
 	return_code: u32,
 	/// The next bit of file information, if there are any items left in the
 	/// directory.
-	next_file_info: Option<(PCFSSataFdInfo, String)>,
+	next_file_info: Option<(SataFDInfo, String)>,
 }
 
 impl DirectoryItemResponse {
@@ -121,7 +121,7 @@ impl DirectoryItemResponse {
 	/// ## Errors
 	///
 	/// If the path is longer than 255 bytes.
-	pub fn new_next(info: PCFSSataFdInfo, path: String) -> Result<Self, PCFSApiError> {
+	pub fn new_next(info: SataFDInfo, path: String) -> Result<Self, PCFSApiError> {
 		if path.len() > 255 {
 			return Err(PCFSApiError::PathTooLong(path));
 		}
@@ -168,14 +168,14 @@ impl DirectoryItemResponse {
 
 	/// Get the file that was returned as being next in the directory.
 	#[must_use]
-	pub const fn file_info(&self) -> Option<&(PCFSSataFdInfo, String)> {
+	pub const fn file_info(&self) -> Option<&(SataFDInfo, String)> {
 		self.next_file_info.as_ref()
 	}
 
 	/// Consume the underlying packet, and just get the next file info if there
 	/// is any.
 	#[must_use]
-	pub fn take_file_info(self) -> Option<(PCFSSataFdInfo, String)> {
+	pub fn take_file_info(self) -> Option<(SataFDInfo, String)> {
 		self.next_file_info
 	}
 }
@@ -243,7 +243,7 @@ impl TryFrom<Bytes> for DirectoryItemResponse {
 			));
 		}
 
-		let fd_info = PCFSSataFdInfo::try_from(value.slice(..84))?;
+		let fd_info = SataFDInfo::try_from(value.slice(..84))?;
 		let path_bytes = value.slice(84..);
 		let path =
 			CStr::from_bytes_until_nul(&path_bytes).map_err(NetworkParseError::BadCString)?;

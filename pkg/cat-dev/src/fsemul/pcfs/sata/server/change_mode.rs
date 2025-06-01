@@ -5,7 +5,7 @@ use crate::{
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata::{
-			proto::{SataChangeModePacketBody, SataPacketHeader, SataResponse, SataResultCode},
+			proto::{SataChangeModePacketBody, SataRequest, SataResponse, SataResultCode},
 			server::PCFSServerState,
 		},
 	},
@@ -27,10 +27,11 @@ const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 ///
 /// This handles setting read only mode one or off.
 pub async fn handle_change_mode(
-	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataChangeModePacketBody>,
+	Body(request): Body<SataRequest<SataChangeModePacketBody>>,
 ) -> SataResponse<SataResultCode> {
+	let request_header = request.header().clone();
+	let packet = request.body();
 	let Ok(final_location) = state.host_filesystem().resolve_path(packet.path()) else {
 		debug!(
 			packet.path = packet.path(),
@@ -130,8 +131,9 @@ pub async fn handle_change_mode(
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use bytes::Bytes;
 
@@ -142,6 +144,7 @@ mod unit_tests {
 			SataChangeModePacketBody::new("/%SLC_EMU_DIR/to-query/file.txt".to_owned(), false)
 				.expect("Failed to create change mode packet!");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		// Okay let's create some files and some sizes in there.
 		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
@@ -153,9 +156,8 @@ mod unit_tests {
 			.expect("Failed to write test file!");
 
 		let mut mode_resp: Bytes = handle_change_mode(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()

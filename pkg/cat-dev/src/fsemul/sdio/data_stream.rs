@@ -22,7 +22,7 @@ use tokio::{
 	task::Builder as TaskBuilder,
 	time::sleep,
 };
-use tracing::{Instrument, error, error_span};
+use tracing::{Instrument, debug, error, error_span};
 
 /// A connection to a "data stream" for SDIO.
 ///
@@ -50,6 +50,7 @@ impl DataStream {
 		client_address: SocketAddr,
 		server_address: SocketAddr,
 		stream: TcpStream,
+		#[cfg(debug_assertions)] trace_io: bool,
 	) -> Result<Self, CatBridgeError> {
 		let (request_read_sender, request_read_receiver) = bounded_channel(128);
 		let (read_response_sender, read_response_receiver) = bounded_channel(128);
@@ -65,6 +66,7 @@ impl DataStream {
 					request_read_receiver,
 					read_response_sender,
 					send_bytes_receiver,
+					trace_io,
 				)
 				.instrument(error_span!(
 				  "FSEmulSDIOClientDataStream",
@@ -97,10 +99,12 @@ impl DataStream {
 		address: SocketAddr,
 		cat_dev_sleep_for: Option<Duration>,
 		chunk_at_size: Option<usize>,
+		#[cfg(debug_assertions)] trace_io: bool,
 	) -> Result<Self, CatBridgeError> {
 		let stream = TcpStream::connect(address)
 			.await
 			.map_err(NetworkError::IO)?;
+		stream.set_nodelay(true).map_err(NetworkError::IO)?;
 
 		let (request_read_sender, request_read_receiver) = bounded_channel(128);
 		let (read_response_sender, read_response_receiver) = bounded_channel(128);
@@ -121,6 +125,7 @@ impl DataStream {
 					request_read_receiver,
 					read_response_sender,
 					send_bytes_receiver,
+					trace_io,
 				)
 				.instrument(error_span!(
 				  "FSEmulSDIOServerDataStream",
@@ -171,6 +176,7 @@ async fn do_data_stream(
 	mut request_read_receiver: BoundedReceiver<usize>,
 	read_response_sender: BoundedSender<Bytes>,
 	mut send_bytes_receiver: BoundedReceiver<Bytes>,
+	#[cfg(debug_assertions)] trace_io: bool,
 ) {
 	loop {
 		tokio::select! {
@@ -184,6 +190,16 @@ async fn do_data_stream(
 				  error!(?cause, requested_bytes = bytes_to_read, "Could not read bytes from data stream");
 				  break;
 			  }
+
+				#[cfg(debug_assertions)]
+				if trace_io {
+					debug!(
+						body.hex = format!("{buff:02x?}"),
+						body.str = String::from_utf8_lossy(&buff).to_string(),
+						"cat-dev-trace-input-data-stream",
+					);
+				}
+
 			  if let Err(cause) = read_response_sender.send(buff.freeze()).await {
 				  error!(?cause, "Could not send response back out that we received from data stream");
 				  break;
@@ -203,6 +219,19 @@ async fn do_data_stream(
 				};
 
 				for message in messages {
+					#[cfg(debug_assertions)]
+					if trace_io {
+						debug!(
+							body.hex = format!("{message:02x?}"),
+							body.str = String::from_utf8_lossy(&message).to_string(),
+							"cat-dev-trace-output-data-stream",
+						);
+					}
+
+					if let Err(cause) = raw_stream.writable().await {
+					  error!(?cause, "Could not wait for data stream to be writable");
+						break;
+					}
 				  if let Err(cause) = raw_stream.write_all(&message).await {
 					  error!(?cause, "Could not write response to data stream");
 					  break;

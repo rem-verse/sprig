@@ -75,7 +75,4 @@ pub enum SDIOProtocolError {
 	)]
 	#[diagnostic(code(cat_dev::net::parse::fsemul::sdio::printf::unknown_message_type))]
 	UnknownPrintfMessageType(u16),
-	#[error("Expected a character length of: {0}, but got a character length of: {1}")]
-	#[diagnostic(code(cat_dev::net::parse::fsemul::sdio::printf::invalid_character_length))]
-	InvalidPrintfCharacterLength(usize, usize, Bytes),
 }

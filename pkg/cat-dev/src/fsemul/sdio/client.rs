@@ -62,19 +62,28 @@ impl SDIOClient {
 		client.bind(bind_address_control).await?;
 
 		let cloned_data_start = data.clone();
-		client.set_on_stream_begin(|event: RequestStreamEvent<()>| async move {
+		#[cfg(debug_assertions)]
+		let copied_trace: bool = trace_during_debug;
+		client.set_on_stream_begin(move |event: RequestStreamEvent<()>| async move {
 			let sid = event.stream_id();
 			let (connection, server_location) = {
 				let guard = cloned_data_start.write().await;
 				guard.accept().await
 			}
 			.map_err(NetworkError::IO)?;
+			connection.set_nodelay(true).map_err(NetworkError::IO)?;
 			let client_location = connection.local_addr().map_err(NetworkError::IO)?;
 
 			_ = SDIO_DATA_STREAMS
 				.insert_async(
 					sid,
-					DataStream::from_stream(client_location, server_location, connection)?,
+					DataStream::from_stream(
+						client_location,
+						server_location,
+						connection,
+						#[cfg(debug_assertions)]
+						copied_trace,
+					)?,
 				)
 				.await;
 

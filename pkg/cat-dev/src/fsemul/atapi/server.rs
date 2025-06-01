@@ -1,7 +1,7 @@
 //! The server implementation for handling ATAPI Emulation.
 
 use crate::{
-	errors::{APIError, CatBridgeError, FSError, NetworkError},
+	errors::{APIError, CatBridgeError, FSError},
 	fsemul::{HostFilesystem, dlf::DiskLayoutFile},
 	net::{
 		DEFAULT_CAT_DEV_CHUNK_SIZE, DEFAULT_CAT_DEV_SLOWDOWN,
@@ -74,12 +74,12 @@ pub async fn create_atapi_server(
 		trace_during_debug,
 	)
 	.await?;
-
 	server.layer_initial_service(
 		ServiceBuilder::new()
 			.layer(RequestIDLayer)
 			.layer(StreamIDLayer),
 	);
+
 	server.set_chunk_output_at_size(if fully_disable_chunk_override {
 		None
 	} else if let Some(over_ride) = chunk_override {
@@ -87,7 +87,6 @@ pub async fn create_atapi_server(
 	} else {
 		Some(DEFAULT_CAT_DEV_CHUNK_SIZE)
 	});
-
 	server.set_cat_dev_slowdown(if fully_disable_cat_dev_sleep {
 		None
 	} else {
@@ -169,8 +168,8 @@ async fn handle_read_dlf(
 		packet[0xA],
 		packet[0xB],
 	])) << 11_u128;
-	let rl_as_usize = usize::try_from(read_length)
-		.map_err(|_| NetworkError::RequestedSizeTooLarge(read_length))?;
+	let rl_as_usize =
+		usize::try_from(read_length).map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
 
 	debug!(
 		atapi.packet_type = "read_address",

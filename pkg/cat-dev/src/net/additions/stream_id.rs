@@ -111,7 +111,7 @@ where
 
 		let span = error_span!(
 		  parent: parent_span,
-		  "LayeredStreamID",
+		  "WithStreamID",
 		  request.stream_id = %stream_id,
 		);
 		req.extensions_mut().insert::<StreamID>(stream_id);

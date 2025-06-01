@@ -6,7 +6,7 @@ use crate::{
 		pcfs::sata::{
 			proto::{
 				SataCommandInfo, SataFileDescriptorResult, SataOpenFilePacketBody,
-				SataPacketHeader, SataResponse,
+				SataPacketHeader, SataRequest, SataResponse,
 			},
 			server::PCFSServerState,
 		},
@@ -27,11 +27,13 @@ const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 
 /// Handle opening a file upon request.
 pub async fn handle_open_file(
-	request_header: SataPacketHeader,
-	command_info: SataCommandInfo,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataOpenFilePacketBody>,
+	Body(request): Body<SataRequest<SataOpenFilePacketBody>>,
 ) -> SataResponse<SataFileDescriptorResult> {
+	let packet = request.body();
+	let command_info = request.command_info();
+	let request_header = request.header().clone();
+
 	let Ok(final_location) = state.host_filesystem().resolve_path(packet.path()) else {
 		debug!(
 			packet.path = packet.path(),
@@ -54,7 +56,7 @@ pub async fn handle_open_file(
 	let mode = packet.mode();
 	if let Some(error_response) = update_read_only_flags(
 		&request_header,
-		&command_info,
+		command_info,
 		&state,
 		mode,
 		&fs_location,
@@ -227,10 +229,12 @@ mod unit_tests {
 			.expect("Failed to write test file!");
 
 		let mut response: Bytes = handle_open_file(
-			mocked_header,
-			mocked_command_info,
 			State(PCFSServerState::new(true, fs.clone(), 0)),
-			Body(request),
+			Body(SataRequest::new(
+				mocked_header,
+				mocked_command_info,
+				request,
+			)),
 		)
 		.await
 		.try_into()

@@ -47,7 +47,7 @@ pub struct SataGetInfoByQueryPacketBody {
 	/// - `%NETWORK`: <mounted network share path>
 	path: String,
 	/// The type of information we're looking for.
-	typ: PCFSSataQueryType,
+	typ: SataQueryType,
 }
 
 impl SataGetInfoByQueryPacketBody {
@@ -61,7 +61,7 @@ impl SataGetInfoByQueryPacketBody {
 	///
 	/// Consider using relative/mapped paths if possible when dealing with long
 	/// paths.
-	pub fn new(path: String, query_type: PCFSSataQueryType) -> Result<Self, PCFSApiError> {
+	pub fn new(path: String, query_type: SataQueryType) -> Result<Self, PCFSApiError> {
 		if path.len() > 511 {
 			return Err(PCFSApiError::PathTooLong(path));
 		}
@@ -73,11 +73,11 @@ impl SataGetInfoByQueryPacketBody {
 	}
 
 	#[must_use]
-	pub const fn query_type(&self) -> PCFSSataQueryType {
+	pub const fn query_type(&self) -> SataQueryType {
 		self.typ
 	}
 
-	pub const fn set_query_type(&mut self, new_type: PCFSSataQueryType) {
+	pub const fn set_query_type(&mut self, new_type: SataQueryType) {
 		self.typ = new_type;
 	}
 
@@ -152,7 +152,7 @@ impl TryFrom<Bytes> for SataGetInfoByQueryPacketBody {
 
 		Ok(Self {
 			path: final_path,
-			typ: PCFSSataQueryType::try_from(query_type)?,
+			typ: SataQueryType::try_from(query_type)?,
 		})
 	}
 }
@@ -187,7 +187,7 @@ impl Valuable for SataGetInfoByQueryPacketBody {
 
 /// The type of information we're looking for from our request.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Valuable)]
-pub enum PCFSSataQueryType {
+pub enum SataQueryType {
 	/// Get the amount of free disk space available to the calling application.
 	FreeDiskSpace,
 	/// Get the size of files in a directory, recursively.
@@ -198,18 +198,18 @@ pub enum PCFSSataQueryType {
 	FileDetails,
 }
 
-impl From<PCFSSataQueryType> for u32 {
-	fn from(value: PCFSSataQueryType) -> Self {
+impl From<SataQueryType> for u32 {
+	fn from(value: SataQueryType) -> Self {
 		match value {
-			PCFSSataQueryType::FreeDiskSpace => 0,
-			PCFSSataQueryType::SizeOfFolder => 1,
-			PCFSSataQueryType::FileCount => 2,
-			PCFSSataQueryType::FileDetails => 5,
+			SataQueryType::FreeDiskSpace => 0,
+			SataQueryType::SizeOfFolder => 1,
+			SataQueryType::FileCount => 2,
+			SataQueryType::FileDetails => 5,
 		}
 	}
 }
 
-impl TryFrom<u32> for PCFSSataQueryType {
+impl TryFrom<u32> for SataQueryType {
 	type Error = SataProtocolError;
 
 	fn try_from(value: u32) -> Result<Self, Self::Error> {
@@ -229,33 +229,33 @@ impl TryFrom<u32> for PCFSSataQueryType {
 /// just return a very basic "size" (e.g. file count, or file length, etc.).
 /// However the file stat query type actually returns all the information about
 /// a particular path.
-#[derive(Debug, Valuable)]
-pub enum PCFSSataQueryResponse {
+#[derive(Debug, Valuable, PartialEq, Eq)]
+pub enum SataQueryResponse {
 	/// An error has occured, and we are returning an error code.
 	ErrorCode(u32),
 	/// A size response that is guaranteed to fit within a u32.
 	///
 	/// Query types that return this:
 	///
-	/// - [`PCFSSataQueryType::FileCount`]
+	/// - [`SataQueryType::FileCount`]
 	SmallSize(u32),
 	/// A size response that is guaranteed to fit within a u64.
 	///
 	/// Query types that return this:
 	///
-	/// - [`PCFSSataQueryType::SizeOfFolder`]
-	/// - [`PCFSSataQueryType::FreeDiskSpace`]
+	/// - [`SataQueryType::SizeOfFolder`]
+	/// - [`SataQueryType::FreeDiskSpace`]
 	LargeSize(u64),
 	/// All the info about a particular file path.
 	///
 	/// Query types that return this:
 	///
-	/// - [`PCFSSataQueryType::FileDetails`]
-	FDInfo(PCFSSataFdInfo),
+	/// - [`SataQueryType::FileDetails`]
+	FDInfo(SataFDInfo),
 }
 
-impl PCFSSataQueryResponse {
-	/// Try to read a [`PCFSSataQueryResponse::SmallSize`] from a full response
+impl SataQueryResponse {
+	/// Try to read a [`SataQueryResponse::SmallSize`] from a full response
 	/// body.
 	///
 	/// ## Errors
@@ -273,7 +273,7 @@ impl PCFSSataQueryResponse {
 		Ok(Self::SmallSize(smol))
 	}
 
-	/// Try to read a [`PCFSSataQueryResponse::LargeSize`] from a full response
+	/// Try to read a [`SataQueryResponse::LargeSize`] from a full response
 	/// body.
 	///
 	/// ## Errors
@@ -291,7 +291,7 @@ impl PCFSSataQueryResponse {
 		Ok(Self::LargeSize(larg))
 	}
 
-	/// Try to read a [`PCFSSataQueryResponse::FDInfo`] from a full response
+	/// Try to read a [`SataQueryResponse::FDInfo`] from a full response
 	/// body.
 	///
 	/// ## Errors
@@ -304,36 +304,36 @@ impl PCFSSataQueryResponse {
 			return Err(NetworkParseError::ErrorCode(rc));
 		}
 
-		let fd_info = PCFSSataFdInfo::try_from(value)?;
+		let fd_info = SataFDInfo::try_from(value)?;
 
 		Ok(Self::FDInfo(fd_info))
 	}
 }
 
-impl From<&PCFSSataQueryResponse> for Bytes {
-	fn from(value: &PCFSSataQueryResponse) -> Self {
+impl From<&SataQueryResponse> for Bytes {
+	fn from(value: &SataQueryResponse) -> Self {
 		match value {
-			PCFSSataQueryResponse::FDInfo(fd_info) => {
+			SataQueryResponse::FDInfo(fd_info) => {
 				let mut buff = BytesMut::with_capacity(88);
 				buff.put_u32(0);
 				buff.extend(Bytes::from(fd_info));
 				buff.freeze()
 			}
-			PCFSSataQueryResponse::LargeSize(lorg) => {
+			SataQueryResponse::LargeSize(lorg) => {
 				let mut buff = BytesMut::with_capacity(88);
 				buff.put_u32(0);
 				buff.put_u64(*lorg);
 				buff.extend([0; 76]);
 				buff.freeze()
 			}
-			PCFSSataQueryResponse::SmallSize(smol) => {
+			SataQueryResponse::SmallSize(smol) => {
 				let mut buff = BytesMut::with_capacity(88);
 				buff.put_u32(0);
 				buff.put_u32(*smol);
 				buff.extend([0; 80]);
 				buff.freeze()
 			}
-			PCFSSataQueryResponse::ErrorCode(ec) => {
+			SataQueryResponse::ErrorCode(ec) => {
 				let mut buff = BytesMut::with_capacity(88);
 				buff.put_u32(*ec);
 				buff.extend_from_slice(&[0; 84]);
@@ -343,15 +343,15 @@ impl From<&PCFSSataQueryResponse> for Bytes {
 	}
 }
 
-impl From<PCFSSataQueryResponse> for Bytes {
-	fn from(value: PCFSSataQueryResponse) -> Self {
+impl From<SataQueryResponse> for Bytes {
+	fn from(value: SataQueryResponse) -> Self {
 		Self::from(&value)
 	}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Valuable)]
 /// The info related to the file/directory of the path queried.
-pub struct PCFSSataFdInfo {
+pub struct SataFDInfo {
 	/// The raw underlying flags for the file/directory at the path queried.
 	file_or_folder_flags: u32,
 	/// The permissions bits for the file/directory at the path queried.
@@ -365,7 +365,7 @@ pub struct PCFSSataFdInfo {
 	last_updated_timestamp: u64,
 }
 
-impl PCFSSataFdInfo {
+impl SataFDInfo {
 	/// File information for a particular file descriptor/path.
 	#[must_use]
 	pub async fn get_info(
@@ -479,8 +479,8 @@ impl PCFSSataFdInfo {
 	}
 }
 
-impl From<&PCFSSataFdInfo> for Bytes {
-	fn from(value: &PCFSSataFdInfo) -> Self {
+impl From<&SataFDInfo> for Bytes {
+	fn from(value: &SataFDInfo) -> Self {
 		let mut buff = BytesMut::with_capacity(84);
 		buff.put_u32(value.file_or_folder_flags);
 		buff.put_u32(value.perms);
@@ -498,19 +498,19 @@ impl From<&PCFSSataFdInfo> for Bytes {
 	}
 }
 
-impl From<PCFSSataFdInfo> for Bytes {
-	fn from(value: PCFSSataFdInfo) -> Self {
+impl From<SataFDInfo> for Bytes {
+	fn from(value: SataFDInfo) -> Self {
 		Self::from(&value)
 	}
 }
 
-impl TryFrom<Bytes> for PCFSSataFdInfo {
+impl TryFrom<Bytes> for SataFDInfo {
 	type Error = NetworkParseError;
 
 	fn try_from(mut value: Bytes) -> Result<Self, Self::Error> {
 		if value.len() < 84 {
 			return Err(NetworkParseError::FieldNotLongEnough(
-				"PCFSSataFdInfo",
+				"SataFDInfo",
 				"Body",
 				84,
 				value.len(),
@@ -519,7 +519,7 @@ impl TryFrom<Bytes> for PCFSSataFdInfo {
 		}
 		if value.len() > 84 {
 			return Err(NetworkParseError::UnexpectedTrailer(
-				"PCFSSataFdInfoBody",
+				"SataFDInfoBody",
 				value.slice(84..),
 			));
 		}
@@ -557,12 +557,12 @@ mod unit_tests {
 	#[test]
 	pub fn query_types_to_and_fro() {
 		for qt in vec![
-			PCFSSataQueryType::FreeDiskSpace,
-			PCFSSataQueryType::SizeOfFolder,
-			PCFSSataQueryType::FileCount,
-			PCFSSataQueryType::FileDetails,
+			SataQueryType::FreeDiskSpace,
+			SataQueryType::SizeOfFolder,
+			SataQueryType::FileCount,
+			SataQueryType::FileDetails,
 		] {
-			assert_eq!(Ok(qt), PCFSSataQueryType::try_from(u32::from(qt)));
+			assert_eq!(Ok(qt), SataQueryType::try_from(u32::from(qt)));
 		}
 	}
 }

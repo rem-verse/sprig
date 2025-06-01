@@ -19,12 +19,11 @@ use std::{
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
 #[cfg(feature = "servers")]
-use crate::{
-	errors::NetworkError,
-	net::{errors::CommonNetNetworkError, server::access_raw_stream},
-};
+use crate::{errors::NetworkError, net::errors::CommonNetNetworkError};
 #[cfg(feature = "servers")]
-use tokio::{io::AsyncReadExt, net::TcpStream};
+use std::sync::Arc;
+#[cfg(feature = "servers")]
+use tokio::{io::AsyncReadExt, net::TcpStream, sync::Mutex};
 
 /// Used to do reference-to-value conversions thus not consuming the input value.
 ///
@@ -56,6 +55,16 @@ pub struct Request<State: Clone + Send + Sync + 'static> {
 	state: State,
 	/// The stream ID this request came in on.
 	stream_id: Option<u64>,
+	/// Indicate that the response needs to read a certain size, ignoring
+	/// whatever the current NAGLE algorithim says.
+	///
+	/// This will still call 'post nagle hook', 'trace io', and will still
+	/// obey NAGLE timeouts. It just overrides the _kind_ of NAGLE we do.
+	#[cfg(feature = "clients")]
+	explicit_read_amount: Option<usize>,
+	/// Allow accessing the raw underlying stream while processing the request.
+	#[cfg(feature = "servers")]
+	stream_access: Option<Arc<Mutex<Option<TcpStream>>>>,
 }
 
 impl<State: Clone + Send + Sync + 'static> Request<State>
@@ -70,6 +79,10 @@ where
 			source_address,
 			state: Default::default(),
 			stream_id,
+			#[cfg(feature = "clients")]
+			explicit_read_amount: None,
+			#[cfg(feature = "servers")]
+			stream_access: None,
 		}
 	}
 }
@@ -88,6 +101,52 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 			source_address,
 			state,
 			stream_id,
+			#[cfg(feature = "clients")]
+			explicit_read_amount: None,
+			#[cfg(feature = "servers")]
+			stream_access: None,
+		}
+	}
+
+	#[cfg(feature = "clients")]
+	#[must_use]
+	pub fn new_with_state_and_read_amount(
+		body: Bytes,
+		source_address: SocketAddr,
+		state: State,
+		stream_id: Option<u64>,
+		explicit_read_amount: usize,
+	) -> Self {
+		Self {
+			body,
+			ext: Extensions::new(),
+			source_address,
+			state,
+			stream_id,
+			explicit_read_amount: Some(explicit_read_amount),
+			#[cfg(feature = "servers")]
+			stream_access: None,
+		}
+	}
+
+	#[cfg(feature = "servers")]
+	#[must_use]
+	pub fn new_with_state_and_stream(
+		body: Bytes,
+		source_address: SocketAddr,
+		state: State,
+		stream_id: Option<u64>,
+		stream: Arc<Mutex<Option<TcpStream>>>,
+	) -> Self {
+		Self {
+			body,
+			ext: Extensions::new(),
+			source_address,
+			state,
+			stream_id,
+			#[cfg(feature = "clients")]
+			explicit_read_amount: None,
+			stream_access: Some(stream),
 		}
 	}
 
@@ -117,6 +176,25 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 		}
 	}
 
+	/// A client has requested we send this request, and then read an explicit
+	/// amount of bytes, ignoring whatever the current NAGLE method is.
+	///
+	/// This is a utility only available when we are a client, and are receiving
+	/// a packet that changes what our nagle split is for it's specific response
+	/// while keeping the nalge the same otherwise.
+	#[cfg(feature = "clients")]
+	#[must_use]
+	pub const fn explicit_read_amount(&self) -> Option<usize> {
+		self.explicit_read_amount
+	}
+
+	/// Override the current NAGLE algorithm being used by this client for this
+	/// single request/response pair. Do a single non-nagle'd receive.
+	#[cfg(feature = "clients")]
+	pub const fn set_explicit_read_amount(&mut self, new_read_amount: usize) {
+		self.explicit_read_amount = Some(new_read_amount);
+	}
+
 	/// Attempt to read more bytes from the TCP Stream directly.
 	///
 	/// This is a utility only available when we are a server, and need to request
@@ -135,18 +213,22 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 		&self,
 		to_read: usize,
 	) -> Result<Bytes, CatBridgeError> {
-		if let Some(sid) = self.stream_id {
-			Ok(access_raw_stream(sid, async move |stream: &mut TcpStream| {
+		if let Some(strm) = self.stream_access.as_ref() {
+			let mut guard = strm.lock().await;
+
+			if let Some(stream) = guard.as_mut() {
 				let mut buff = BytesMut::with_capacity(to_read);
 				stream.readable().await.map_err(NetworkError::IO)?;
-				stream.read_buf(&mut buff).await.map_err(NetworkError::IO)?;
-				Ok::<Bytes, NetworkError>(buff.freeze())
-			})
-			.await
-			.ok_or(CommonNetNetworkError::StreamNoLongerProcessing)??)
-		} else {
-			Err(CommonNetNetworkError::StreamNoLongerProcessing.into())
+				let mut needed = to_read;
+				while needed > 0 {
+					let read = stream.read_buf(&mut buff).await.map_err(NetworkError::IO)?;
+					needed -= read;
+				}
+				return Ok::<Bytes, CatBridgeError>(buff.freeze());
+			}
 		}
+
+		Err(CommonNetNetworkError::StreamNoLongerProcessing.into())
 	}
 
 	#[must_use]
@@ -209,6 +291,10 @@ impl<State: Clone + Send + Sync + 'static> Clone for Request<State> {
 			source_address: self.source_address,
 			state: self.state.clone(),
 			stream_id: self.stream_id,
+			#[cfg(feature = "clients")]
+			explicit_read_amount: self.explicit_read_amount,
+			#[cfg(feature = "servers")]
+			stream_access: self.stream_access.clone(),
 		}
 	}
 }
@@ -218,13 +304,28 @@ where
 	State: Debug,
 {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
-		fmt.debug_struct("Request")
+		let mut dbg_struct = fmt.debug_struct("Request");
+
+		dbg_struct
 			.field("body", &self.body)
 			// Extensions can't be printed in debug by hyper, and in order to keep
 			// compatability ours don't.
 			.field("source_address", &self.source_address)
-			.field("stream_id", &self.stream_id)
-			.finish_non_exhaustive()
+			.field("stream_id", &self.stream_id);
+
+		#[cfg(feature = "clients")]
+		dbg_struct.field("explicit_read_amount", &self.explicit_read_amount);
+		#[cfg(feature = "servers")]
+		dbg_struct.field(
+			"stream_access",
+			&if self.stream_access.is_some() {
+				"<stream>"
+			} else {
+				"<none>"
+			},
+		);
+
+		dbg_struct.finish_non_exhaustive()
 	}
 }
 
@@ -232,6 +333,10 @@ const REQUEST_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("body"),
 	NamedField::new("source_address"),
 	NamedField::new("stream_id"),
+	#[cfg(feature = "clients")]
+	NamedField::new("explicit_read_amount"),
+	#[cfg(feature = "servers")]
+	NamedField::new("stream_access"),
 ];
 
 impl<State: Clone + Send + Sync + 'static> Structable for Request<State> {
@@ -252,6 +357,14 @@ impl<State: Clone + Send + Sync + 'static> Valuable for Request<State> {
 				Valuable::as_value(&format!("{:02X?}", self.body)),
 				Valuable::as_value(&format!("{}", self.source_address)),
 				Valuable::as_value(&self.stream_id),
+				#[cfg(feature = "clients")]
+				Valuable::as_value(&self.explicit_read_amount),
+				#[cfg(feature = "servers")]
+				Valuable::as_value(&if self.stream_access.is_some() {
+					"<stream>"
+				} else {
+					"<none>"
+				}),
 			],
 		));
 	}
@@ -302,6 +415,10 @@ impl Response {
 	}
 	pub fn set_body(&mut self, bytes: Bytes) {
 		self.body = Some(bytes);
+	}
+	#[must_use]
+	pub fn take_body(self) -> Option<Bytes> {
+		self.body
 	}
 
 	#[must_use]

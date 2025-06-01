@@ -157,7 +157,7 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 			return Err(SDIOProtocolError::UnknownPrintfPacketType(value[0]).into());
 		}
 
-		let character_length = u16::from_le_bytes([value[0x2], value[0x3]]);
+		let _character_length = u16::from_le_bytes([value[0x2], value[0x3]]);
 		let mut messages = Vec::with_capacity(1);
 		let mut read_size = 0;
 		loop {
@@ -186,16 +186,6 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 			}
 
 			return Err(SDIOProtocolError::UnknownPrintfMessageType(message_ty).into());
-		}
-
-		let got_size = read_size + 8 + (messages.len() * 4);
-		if got_size != usize::from(character_length) {
-			return Err(SDIOProtocolError::InvalidPrintfCharacterLength(
-				usize::from(character_length),
-				got_size,
-				value,
-			)
-			.into());
 		}
 
 		Ok(Self { messages })

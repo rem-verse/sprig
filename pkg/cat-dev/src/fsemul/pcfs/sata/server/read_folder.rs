@@ -4,8 +4,7 @@ use crate::{
 	errors::CatBridgeError,
 	fsemul::pcfs::sata::{
 		proto::{
-			DirectoryItemResponse, PCFSSataFdInfo, SataPacketHeader, SataReadFolderPacketBody,
-			SataResponse,
+			DirectoryItemResponse, SataFDInfo, SataReadFolderPacketBody, SataRequest, SataResponse,
 		},
 		server::PCFSServerState,
 	},
@@ -24,10 +23,12 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 ///
 /// If the path is too long to encode into a packet.
 pub async fn handle_read_folder(
-	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataReadFolderPacketBody>,
+	Body(request): Body<SataRequest<SataReadFolderPacketBody>>,
 ) -> Result<SataResponse<DirectoryItemResponse>, CatBridgeError> {
+	let packet = request.body();
+	let request_header = request.header().clone();
+
 	let fd = packet.file_descriptor();
 	let Ok(optional_next_item) = state.host_filesystem().next_in_folder(fd).await else {
 		debug!(
@@ -69,7 +70,7 @@ pub async fn handle_read_folder(
 			DirectoryItemResponse::new_error_code(FS_ERROR),
 		));
 	};
-	let info = PCFSSataFdInfo::get_info(state.host_filesystem(), &md, &item).await;
+	let info = SataFDInfo::get_info(state.host_filesystem(), &md, &item).await;
 
 	let utf8 = item
 		.components()
@@ -101,8 +102,9 @@ pub async fn handle_read_folder(
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use bytes::Bytes;
 
@@ -110,6 +112,7 @@ mod unit_tests {
 	pub async fn can_handle_read_directory() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
 		tokio::fs::create_dir(&base_dir)
@@ -128,9 +131,12 @@ mod unit_tests {
 
 		// First request should return file information, and path name.
 		let actual_file_response: Bytes = handle_read_folder(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs.clone(), 0)),
-			Body(request.clone()),
+			Body(SataRequest::new(
+				mocked_header.clone(),
+				mocked_ci.clone(),
+				request.clone(),
+			)),
 		)
 		.await
 		.expect("Failed to handle read folder request!")
@@ -193,9 +199,8 @@ mod unit_tests {
 
 		// Second one is an empty response.
 		let new_response: Bytes = handle_read_folder(
-			mocked_header,
 			State(PCFSServerState::new(true, fs.clone(), 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.expect("Failed to handle read folder request!")

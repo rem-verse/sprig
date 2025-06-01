@@ -83,6 +83,7 @@ use futures::future::join_all;
 use miette::miette;
 use scc::HashMap as ConcurrentHashMap;
 use std::{
+	collections::VecDeque,
 	fmt::{Debug, Formatter, Result as FmtResult},
 	hash::BuildHasherDefault,
 	net::{Ipv4Addr, SocketAddr, SocketAddrV4},
@@ -717,8 +718,6 @@ impl TCPClient {
 		body: BodyTy,
 		wait_for_response_timeout: Option<Duration>,
 	) -> Result<(u64, RequestID, Option<Response>), NetworkError> {
-		let active_sid = self.get_active_sid().await?;
-
 		// This will be cloned, and modified for each stream we send out too.
 		let mut request = Request::new_with_state(
 			body.try_into().map_err(|cause| {
@@ -731,55 +730,49 @@ impl TCPClient {
 		let req_id = RequestID::generate();
 		request.extensions_mut().insert(req_id.clone());
 
-		let mut ids = FnvHashSet::default();
-		self.streams
-			.scan_async(|stream_id, _stream| {
-				ids.insert(*stream_id);
-			})
-			.await;
-
-		let mut tasks = Vec::with_capacity(ids.len());
-		for id in &ids {
-			tasks.push(self.send_to_stream(
-				*id,
-				request.clone(),
-				wait_for_response_timeout.unwrap_or(DEFAULT_SLOWLORIS_TIMEOUT),
-			));
-		}
-		// join all gives us a Vec<Result>, we can collect that into one final
-		// result, to use.
-		join_all(tasks)
+		self.common_send(request, req_id, wait_for_response_timeout)
 			.await
-			.into_iter()
-			.collect::<Result<(), NetworkError>>()?;
+	}
 
-		match wait_for_response_timeout {
-			// Don't drain/wait for responses when there are none.
-			None | Some(EMPTY_TIMEOUT) => Ok((active_sid, req_id, None)),
-			Some(duration) => {
-				let mut tasks;
-				// If we keep all responsese
-				if self.keep_all_responses {
-					tasks = vec![self.get_response_from_stream(active_sid, req_id.clone())];
-				} else {
-					tasks = Vec::with_capacity(ids.len());
-					for id in ids {
-						tasks.push(self.get_response_from_stream(id, req_id.clone()));
-					}
-				}
-				let responses = timeout(duration, join_all(tasks))
-					.await
-					.map_err(|_| NetworkError::Timeout(duration))?;
+	/// Send a series of bytes over the wire potentially receiving responses back.
+	///
+	/// This will always only take the response from the 'primary server'. Even if
+	/// other servers respond first or at all. It will always be the primary
+	/// response.
+	///
+	/// If you want to truly access all the client streams at once use
+	/// [`Self::broadcast_send`] to send to all, and receive all their responses
+	/// back.
+	///
+	/// This _will_ return the stream that was used as the 'primary', the
+	/// request-id to wait for a response later or otherwise, and the optional
+	/// response if we waited for one.
+	///
+	/// ## Errors
+	///
+	/// This function will error if we run into any issues writing or reading the
+	/// bytes from the stream in a timely manner.
+	pub async fn send_with_read_amount<ErrorTy: Debug, BodyTy: TryInto<Bytes, Error = ErrorTy>>(
+		&self,
+		body: BodyTy,
+		wait_for_response_timeout: Option<Duration>,
+		explicit_read_amount: usize,
+	) -> Result<(u64, RequestID, Option<Response>), NetworkError> {
+		// This will be cloned, and modified for each stream we send out too.
+		let mut request = Request::new_with_state_and_read_amount(
+			body.try_into().map_err(|cause| {
+				CommonNetClientNetworkError::SerializationError(miette!("{cause:?}"))
+			})?,
+			SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+			(),
+			None,
+			explicit_read_amount,
+		);
+		let req_id = RequestID::generate();
+		request.extensions_mut().insert(req_id.clone());
 
-				for (got_stream_id, response) in responses {
-					if got_stream_id == active_sid {
-						return Ok((active_sid, req_id, response));
-					}
-				}
-
-				Ok((active_sid, req_id, None))
-			}
-		}
+		self.common_send(request, req_id, wait_for_response_timeout)
+			.await
 	}
 
 	/// The equivalent of [`send`], but get all the responses back out of this
@@ -914,6 +907,65 @@ impl TCPClient {
 		results
 	}
 
+	async fn common_send(
+		&self,
+		mock_req: Request<()>,
+		req_id: RequestID,
+		wait_for_response_timeout: Option<Duration>,
+	) -> Result<(u64, RequestID, Option<Response>), NetworkError> {
+		let active_sid = self.get_active_sid().await?;
+
+		let mut ids = FnvHashSet::default();
+		self.streams
+			.scan_async(|stream_id, _stream| {
+				ids.insert(*stream_id);
+			})
+			.await;
+
+		let mut tasks = Vec::with_capacity(ids.len());
+		for id in &ids {
+			tasks.push(self.send_to_stream(
+				*id,
+				mock_req.clone(),
+				wait_for_response_timeout.unwrap_or(DEFAULT_SLOWLORIS_TIMEOUT),
+			));
+		}
+		// join all gives us a Vec<Result>, we can collect that into one final
+		// result, to use.
+		join_all(tasks)
+			.await
+			.into_iter()
+			.collect::<Result<(), NetworkError>>()?;
+
+		match wait_for_response_timeout {
+			// Don't drain/wait for responses when there are none.
+			None | Some(EMPTY_TIMEOUT) => Ok((active_sid, req_id, None)),
+			Some(duration) => {
+				let mut tasks;
+				// If we keep all responsese
+				if self.keep_all_responses {
+					tasks = vec![self.get_response_from_stream(active_sid, req_id.clone())];
+				} else {
+					tasks = Vec::with_capacity(ids.len());
+					for id in ids {
+						tasks.push(self.get_response_from_stream(id, req_id.clone()));
+					}
+				}
+				let responses = timeout(duration, join_all(tasks))
+					.await
+					.map_err(|_| NetworkError::Timeout(duration))?;
+
+				for (got_stream_id, response) in responses {
+					if got_stream_id == active_sid {
+						return Ok((active_sid, req_id, response));
+					}
+				}
+
+				Ok((active_sid, req_id, None))
+			}
+		}
+	}
+
 	#[allow(
 		// all of our parameters are very well named, and types are not close to
 		// overlapping with each other.
@@ -971,10 +1023,7 @@ impl TCPClient {
 				.steal_send_requests_receiver()
 				.ok_or_else(|| CatBridgeError::ClosedChannel)?;
 
-			stream_lists
-				.insert_async(stream_id, active_stream)
-				.await
-				.map_err(|(stream_id, _stream)| NetworkError::DuplicateStreamId(stream_id))?;
+			std::mem::drop(stream_lists.insert_async(stream_id, active_stream).await);
 			// Update the active stream pointer if need be.
 			_ = active_stream_ptr.compare_exchange(
 				0,
@@ -993,6 +1042,7 @@ impl TCPClient {
 		// similar.
 		let mut nagle_cache: Option<(BytesMut, SystemTime)> = None;
 		let mut cached_request_id: Option<RequestID> = None;
+		let mut nagle_overrides: VecDeque<Option<NagleGuard>> = VecDeque::with_capacity(128);
 
 		loop {
 			tokio::select! {
@@ -1005,6 +1055,7 @@ impl TCPClient {
 						&mut cached_request_id,
 						stream_id,
 						&mut stream,
+						&mut nagle_overrides,
 						cat_dev_slowdown,
 						#[cfg(debug_assertions)]
 						trace_io,
@@ -1024,6 +1075,7 @@ impl TCPClient {
 					if Self::handle_client_read_from_connection(
 						buff,
 						&nagle_guard,
+						&mut nagle_overrides,
 						slowloris_timeout,
 						&mut nagle_cache,
 						response_sink_send.clone(),
@@ -1080,6 +1132,7 @@ impl TCPClient {
 	async fn handle_client_read_from_connection<'data>(
 		mut buff: BytesMut,
 		nagle_guard: &'data NagleGuard,
+		nagle_overrides: &mut VecDeque<Option<NagleGuard>>,
 		slowloris_timeout: Duration,
 		nagle_cache: &'data mut Option<(BytesMut, SystemTime)>,
 		response_output: BoundedSender<(Option<RequestID>, Response)>,
@@ -1126,7 +1179,13 @@ impl TCPClient {
 			buff = existing_buff;
 		}
 
-		while let Some((start_of_packet, end_of_packet)) = nagle_guard.split(&buff)? {
+		let mut current_nagle_guard = if let Some(Some(guard)) = nagle_overrides.front() {
+			guard
+		} else {
+			nagle_guard
+		};
+
+		while let Some((start_of_packet, end_of_packet)) = current_nagle_guard.split(&buff)? {
 			let remaining_buff = buff.split_off(end_of_packet);
 			let _start_of_buff = buff.split_to(start_of_packet);
 			let req_body = buff.freeze();
@@ -1140,6 +1199,15 @@ impl TCPClient {
 					?cause,
 					"internal queue failure will not send disconnect/response."
 				);
+			}
+
+			if !nagle_overrides.is_empty() {
+				nagle_overrides.pop_front();
+				current_nagle_guard = if let Some(Some(guard)) = nagle_overrides.front() {
+					guard
+				} else {
+					nagle_guard
+				};
 			}
 		}
 
@@ -1161,6 +1229,7 @@ impl TCPClient {
 		cached_request_id: &mut Option<RequestID>,
 		stream_id: u64,
 		raw_stream: &mut TcpStream,
+		nagle_overrides: &mut VecDeque<Option<NagleGuard>>,
 		cat_dev_slowdown: Option<Duration>,
 		#[cfg(debug_assertions)] trace_io: bool,
 	) -> Result<bool, CatBridgeError> {
@@ -1176,6 +1245,11 @@ impl TCPClient {
 				Ok(true)
 			}
 			RequestStreamMessage::Request(mut req) => {
+				if let Some(explicit_read) = req.explicit_read_amount() {
+					nagle_overrides.push_back(Some(NagleGuard::StaticSize(explicit_read)));
+				} else {
+					nagle_overrides.push_back(None);
+				}
 				if !req.body().is_empty() {
 					if let Ok(req_id) = RequestID::from_request_parts(&mut req).await {
 						_ = cached_request_id.insert(req_id);
@@ -1236,7 +1310,9 @@ impl TCPClient {
 			stream
 				.send_timeout(RequestStreamMessage::Request(base_request), timeout)
 				.await
-				.map_err(|cause| CommonNetClientNetworkError::CannotQueueSend(cause).into())
+				.map_err(|cause| {
+					CommonNetClientNetworkError::CannotQueueSend(format!("{cause:?}")).into()
+				})
 		} else {
 			// Stream must've gotten removed since we got our list.
 			Ok(())

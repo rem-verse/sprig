@@ -18,13 +18,14 @@ use crate::{
 use rand::{TryRngCore, rng};
 use std::{
 	convert::Infallible,
-	fmt::{Debug, Display, Formatter, Result as FmtResult},
+	fmt::{Debug, Display, Formatter, Result as FmtResult, Write},
 	ops::Deref,
 	sync::Arc,
 };
 use tower::{Layer, Service};
 use tracing::{
 	Id as TracingId, error_span,
+	field::valuable,
 	instrument::{Instrument, Instrumented},
 };
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
@@ -42,7 +43,10 @@ impl RequestID {
 		// If we don't feed in randomness here this is fine. Request ID's don't
 		// need to be unique _techincally_.
 		_ = rng().try_fill_bytes(&mut buff);
-		let id = format!("{buff:02x?}");
+		let mut id = String::with_capacity(32);
+		for byte in buff {
+			_ = write!(&mut id, "{byte:02x}");
+		}
 		Self(Arc::new(id))
 	}
 
@@ -175,8 +179,8 @@ where
 
 		let span = error_span!(
 		  parent: parent_span,
-		  "LayeredRequestID",
-		  request.id = %req_id,
+		  "WithRequestID",
+		  request.id = valuable(&req_id),
 		);
 		req.extensions_mut().insert::<RequestID>(req_id);
 		req.extensions_mut().insert::<Option<TracingId>>(span.id());

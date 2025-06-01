@@ -5,7 +5,7 @@ use crate::{
 	fsemul::{
 		HostFilesystem,
 		pcfs::sata::{
-			proto::{MoveToFileLocation, SataReadFilePacketBody},
+			proto::{MoveToFileLocation, SataReadFilePacketBody, SataRequest},
 			server::SataConnectionFlags,
 		},
 	},
@@ -27,8 +27,9 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 pub async fn handle_read_file(
 	flags: SataConnectionFlags,
 	State(fs): State<HostFilesystem>,
-	Body(packet): Body<SataReadFilePacketBody>,
+	Body(request): Body<SataRequest<SataReadFilePacketBody>>,
 ) -> Result<Bytes, CatBridgeError> {
+	let packet = request.body();
 	let handle = packet.file_descriptor();
 	let ffio_enabled = flags.ffio_enabled();
 
@@ -130,8 +131,9 @@ fn construct_ffio_error(error_code: u32) -> Bytes {
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use tokio::fs::OpenOptions;
 
@@ -159,7 +161,11 @@ mod unit_tests {
 		let response = handle_read_file(
 			SataConnectionFlags::new_with_flags(true, true),
 			State(fs),
-			Body(read_request),
+			Body(SataRequest::new(
+				SataPacketHeader::new(0),
+				SataCommandInfo::new((0, 0), (0, 0), 0),
+				read_request,
+			)),
 		)
 		.await
 		.expect("Failed to handle read file!");

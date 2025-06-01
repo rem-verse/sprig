@@ -12,8 +12,6 @@ mod tcp;
 pub use router::Router;
 pub use tcp::TCPServer;
 
-pub(crate) use tcp::access_raw_stream;
-
 #[cfg(test)]
 pub mod test_helpers {
 	pub use crate::net::server::router::test_helpers::*;

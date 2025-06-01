@@ -27,14 +27,14 @@ use std::{
 /// The default slowdown to use for cat-dev units that seems to work.
 pub const DEFAULT_CAT_DEV_SLOWDOWN: Duration = Duration::from_millis(25);
 /// The default amount to chunk write calls as to not overwhelm the cat-dev.
-pub const DEFAULT_CAT_DEV_CHUNK_SIZE: usize = 8192;
+pub const DEFAULT_CAT_DEV_CHUNK_SIZE: usize = 65536;
 /// The default "slow-loris" timeout or how long before we should error
 /// because a connection is taking too long to send us a damn packet.
 const DEFAULT_SLOWLORIS_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// An identifier for streams that increments globally.
 static STREAM_ID: AtomicU64 = AtomicU64::new(1);
 /// Determine how many bytes we should read in one "chunk" of a TCP Stream.
-static TCP_READ_BUFFER_SIZE: usize = 8192_usize;
+static TCP_READ_BUFFER_SIZE: usize = 65536_usize;
 
 /// If we should be tracing IO regardless of what the user says.
 static SPRIG_TRACE_IO: LazyLock<bool> = LazyLock::new(|| {

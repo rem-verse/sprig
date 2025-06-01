@@ -1,9 +1,7 @@
 //! Error types specifically for clients in CAT-DEV.
 
-use crate::net::client::models::RequestStreamMessage;
 use miette::{Diagnostic, Report};
 use thiserror::Error;
-use tokio::sync::mpsc::error::SendTimeoutError;
 
 #[derive(Diagnostic, Error, Debug)]
 pub enum CommonNetClientNetworkError {
@@ -15,5 +13,5 @@ pub enum CommonNetClientNetworkError {
 	SerializationError(Report),
 	#[error("The client tried to queue up a packet to send but failed: {0:?}")]
 	#[diagnostic(code(cat_dev::net::client::cannot_queue_send))]
-	CannotQueueSend(SendTimeoutError<RequestStreamMessage>),
+	CannotQueueSend(String),
 }

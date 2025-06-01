@@ -5,7 +5,7 @@ use crate::{
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata::{
-			proto::{SataPacketHeader, SataRemovePacketBody, SataResponse, SataResultCode},
+			proto::{SataRemovePacketBody, SataRequest, SataResponse, SataResultCode},
 			server::PCFSServerState,
 		},
 	},
@@ -30,10 +30,12 @@ const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 
 /// Handle removing a file, or directory upon request.
 pub async fn handle_removal(
-	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataRemovePacketBody>,
+	Body(request): Body<SataRequest<SataRemovePacketBody>>,
 ) -> SataResponse<SataResultCode> {
+	let request_header = request.header().clone();
+	let packet = request.body();
+
 	let Ok(final_location) = state.host_filesystem().resolve_path(packet.path()) else {
 		debug!(
 			packet.path = packet.path(),
@@ -212,8 +214,9 @@ async fn rename_dir(old_path: &PathBuf) -> Result<(), FSError> {
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use bytes::Bytes;
 
@@ -238,10 +241,10 @@ mod unit_tests {
 		)
 		.expect("Failed to create sata remove packet body!");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 		let bytes: Bytes = handle_removal(
-			mocked_header,
 			State(PCFSServerState::new(false, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()
@@ -306,11 +309,11 @@ mod unit_tests {
 		)
 		.expect("Failed to create sata remove packet body!");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		let _bytes: Bytes = handle_removal(
-			mocked_header,
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()

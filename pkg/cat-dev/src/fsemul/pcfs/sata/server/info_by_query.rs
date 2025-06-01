@@ -10,9 +10,8 @@ use crate::{
 		host_filesystem::{FilesystemLocation, ResolvedLocation},
 		pcfs::sata::{
 			proto::{
-				PCFSSataFdInfo, PCFSSataQueryResponse, PCFSSataQueryType,
-				SataGetInfoByQueryPacketBody, SataPacketHeader, SataResponse,
-				SataStatFilePacketBody,
+				SataFDInfo, SataGetInfoByQueryPacketBody, SataPacketHeader, SataQueryResponse,
+				SataQueryType, SataRequest, SataResponse, SataStatFilePacketBody,
 			},
 			server::PCFSServerState,
 		},
@@ -39,23 +38,25 @@ const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 ///
 /// This handles getting the types of information from the filesystem.
 pub async fn handle_get_info_by_query(
-	header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(info_request): Body<SataGetInfoByQueryPacketBody>,
-) -> SataResponse<PCFSSataQueryResponse> {
+	Body(request): Body<SataRequest<SataGetInfoByQueryPacketBody>>,
+) -> SataResponse<SataQueryResponse> {
+	let info_request = request.body();
+	let header = request.header().clone();
+
 	let Ok(final_location) = state.host_filesystem().resolve_path(info_request.path()) else {
 		return SataResponse::new(
 			state.pid(),
 			header,
-			PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+			SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 		);
 	};
 
 	match info_request.query_type() {
-		PCFSSataQueryType::FreeDiskSpace => handle_disk_space(state.pid(), header, final_location),
-		PCFSSataQueryType::SizeOfFolder => handle_folder_size(state.pid(), header, final_location),
-		PCFSSataQueryType::FileCount => handle_file_count(state.pid(), header, final_location),
-		PCFSSataQueryType::FileDetails => {
+		SataQueryType::FreeDiskSpace => handle_disk_space(state.pid(), header, final_location),
+		SataQueryType::SizeOfFolder => handle_folder_size(state.pid(), header, final_location),
+		SataQueryType::FileCount => handle_file_count(state.pid(), header, final_location),
+		SataQueryType::FileDetails => {
 			handle_file_info(state.pid(), header, state.host_filesystem(), final_location).await
 		}
 	}
@@ -67,10 +68,12 @@ pub async fn handle_get_info_by_query(
 ///
 /// If we cannot construct a sata response packet.
 pub async fn stat_fd(
-	header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(body): Body<SataStatFilePacketBody>,
-) -> SataResponse<PCFSSataQueryResponse> {
+	Body(request): Body<SataRequest<SataStatFilePacketBody>>,
+) -> SataResponse<SataQueryResponse> {
+	let body = request.body();
+	let header = request.header().clone();
+
 	let path = {
 		let Some(entry) = state
 			.host_filesystem()
@@ -86,7 +89,7 @@ pub async fn stat_fd(
 			return SataResponse::new(
 				state.pid(),
 				header,
-				PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+				SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 			);
 		};
 		entry.2.clone()
@@ -106,7 +109,7 @@ fn handle_disk_space(
 	pid: u32,
 	request_header: SataPacketHeader,
 	location: ResolvedLocation,
-) -> SataResponse<PCFSSataQueryResponse> {
+) -> SataResponse<SataQueryResponse> {
 	// The file needs to know which disk we're on.
 	//
 	// So the path needs to exist, or one of it's parent paths do, and it
@@ -122,7 +125,7 @@ fn handle_disk_space(
 		return SataResponse::new(
 			pid,
 			request_header,
-			PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+			SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 		);
 	};
 
@@ -166,14 +169,14 @@ fn handle_disk_space(
 		return SataResponse::new(
 			pid,
 			request_header,
-			PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+			SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 		);
 	};
 
 	SataResponse::new(
 		pid,
 		request_header,
-		PCFSSataQueryResponse::LargeSize(disk.available_space()),
+		SataQueryResponse::LargeSize(disk.available_space()),
 	)
 }
 
@@ -182,7 +185,7 @@ fn handle_folder_size(
 	pid: u32,
 	request_header: SataPacketHeader,
 	location: ResolvedLocation,
-) -> SataResponse<PCFSSataQueryResponse> {
+) -> SataResponse<SataQueryResponse> {
 	let ResolvedLocation::Filesystem(fs_location) = location else {
 		todo!("network shares not yet implemented!")
 	};
@@ -199,7 +202,7 @@ fn handle_folder_size(
 		return SataResponse::new(
 			pid,
 			request_header,
-			PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+			SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 		);
 	}
 
@@ -248,7 +251,7 @@ fn handle_folder_size(
 	SataResponse::new(
 		pid,
 		request_header,
-		PCFSSataQueryResponse::LargeSize(total_size),
+		SataQueryResponse::LargeSize(total_size),
 	)
 }
 
@@ -257,7 +260,7 @@ fn handle_file_count(
 	pid: u32,
 	request_header: SataPacketHeader,
 	location: ResolvedLocation,
-) -> SataResponse<PCFSSataQueryResponse> {
+) -> SataResponse<SataQueryResponse> {
 	let ResolvedLocation::Filesystem(fs_location) = location else {
 		todo!("network shares not yet implemented!")
 	};
@@ -273,7 +276,7 @@ fn handle_file_count(
 		return SataResponse::new(
 			pid,
 			request_header,
-			PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+			SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 		);
 	}
 
@@ -287,7 +290,7 @@ fn handle_file_count(
 		return SataResponse::new(
 			pid,
 			request_header,
-			PCFSSataQueryResponse::ErrorCode(FOLDER_REQUIRED_ERROR),
+			SataQueryResponse::ErrorCode(FOLDER_REQUIRED_ERROR),
 		);
 	}
 
@@ -301,7 +304,7 @@ fn handle_file_count(
 		return SataResponse::new(
 			pid,
 			request_header,
-			PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+			SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 		);
 	};
 
@@ -324,14 +327,14 @@ fn handle_file_count(
 			return SataResponse::new(
 				pid,
 				request_header,
-				PCFSSataQueryResponse::ErrorCode(SIZE_TOO_BIG_ERROR),
+				SataQueryResponse::ErrorCode(SIZE_TOO_BIG_ERROR),
 			);
 		}
 
 		count += 1;
 	}
 
-	SataResponse::new(pid, request_header, PCFSSataQueryResponse::SmallSize(count))
+	SataResponse::new(pid, request_header, SataQueryResponse::SmallSize(count))
 }
 
 /// Get information about a particular file on disk.
@@ -340,7 +343,7 @@ async fn handle_file_info(
 	request_header: SataPacketHeader,
 	fs: &HostFilesystem,
 	location: ResolvedLocation,
-) -> SataResponse<PCFSSataQueryResponse> {
+) -> SataResponse<SataQueryResponse> {
 	match location {
 		ResolvedLocation::Filesystem(ref filesystem) => {
 			let Ok(metadata) = filesystem.resolved_path().metadata() else {
@@ -353,10 +356,10 @@ async fn handle_file_info(
 				return SataResponse::new(
 					pid,
 					request_header,
-					PCFSSataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
+					SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 				);
 			};
-			let info = PCFSSataFdInfo::get_info(fs, &metadata, filesystem.resolved_path()).await;
+			let info = SataFDInfo::get_info(fs, &metadata, filesystem.resolved_path()).await;
 
 			debug!(
 				packet.typ = "PCFSSrvGetInfo",
@@ -365,7 +368,7 @@ async fn handle_file_info(
 				"Successfully stat'd file!",
 			);
 
-			SataResponse::new(pid, request_header, PCFSSataQueryResponse::FDInfo(info))
+			SataResponse::new(pid, request_header, SataQueryResponse::FDInfo(info))
 		}
 		ResolvedLocation::Network(ref _network) => {
 			todo!("Network shares not yet implemented!");
@@ -376,8 +379,9 @@ async fn handle_file_info(
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::SataCommandInfo,
 	};
 	use bytes::Bytes;
 
@@ -389,15 +393,15 @@ mod unit_tests {
 		let (_tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody::new(
 			"/%MLC_EMU_DIR/".to_owned(),
-			PCFSSataQueryType::FreeDiskSpace,
+			SataQueryType::FreeDiskSpace,
 		)
 		.expect("Failed to create get info by query packet body");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		let mut space: Bytes = handle_get_info_by_query(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()
@@ -428,10 +432,11 @@ mod unit_tests {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody::new(
 			"/%MLC_EMU_DIR/my-directory/".to_owned(),
-			PCFSSataQueryType::SizeOfFolder,
+			SataQueryType::SizeOfFolder,
 		)
 		.expect("Failed to create size of folder request");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		// Okay let's create some files and some sizes in there.
 		let base_dir = join_many(tempdir.path(), ["data", "mlc", "my-directory"]);
@@ -451,9 +456,8 @@ mod unit_tests {
 			.expect("Failed to write other test file!");
 
 		let mut size_of_folder: Bytes = handle_get_info_by_query(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()
@@ -503,10 +507,11 @@ mod unit_tests {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody::new(
 			"/%SLC_EMU_DIR/my-directory/".to_owned(),
-			PCFSSataQueryType::FileCount,
+			SataQueryType::FileCount,
 		)
 		.expect("Failed to create file count query");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		// Okay let's create some files and some sizes in there.
 		let base_dir = join_many(tempdir.path(), ["data", "slc", "my-directory"]);
@@ -528,9 +533,8 @@ mod unit_tests {
 			.expect("Failed to write other test file!");
 
 		let mut file_count: Bytes = handle_get_info_by_query(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()
@@ -562,10 +566,11 @@ mod unit_tests {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let request = SataGetInfoByQueryPacketBody::new(
 			"/%SLC_EMU_DIR/to-query/file.txt".to_owned(),
-			PCFSSataQueryType::FileDetails,
+			SataQueryType::FileDetails,
 		)
 		.expect("Failed to create file details packet!");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		// Okay let's create some files and some sizes in there.
 		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
@@ -577,9 +582,8 @@ mod unit_tests {
 			.expect("Failed to write test file!");
 
 		let mut file_details: Bytes = handle_get_info_by_query(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()

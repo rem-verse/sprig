@@ -92,6 +92,10 @@ impl SataPacketHeader {
 		self.packet_data_len
 	}
 
+	pub const fn set_data_len(&mut self, len: u32) {
+		self.packet_data_len = len;
+	}
+
 	#[must_use]
 	pub const fn id(&self) -> u32 {
 		self.packet_id
@@ -507,13 +511,28 @@ impl<InnerTy: Debug> SataRequest<InnerTy> {
 	}
 
 	#[must_use]
+	pub const fn header_mut(&mut self) -> &mut SataPacketHeader {
+		&mut self.header
+	}
+
+	#[must_use]
 	pub const fn command_info(&self) -> &SataCommandInfo {
 		&self.command_info
 	}
 
 	#[must_use]
+	pub const fn command_info_mut(&mut self) -> &mut SataCommandInfo {
+		&mut self.command_info
+	}
+
+	#[must_use]
 	pub const fn body(&self) -> &InnerTy {
 		&self.body
+	}
+
+	#[must_use]
+	pub const fn body_mut(&mut self) -> &mut InnerTy {
+		&mut self.body
 	}
 
 	#[must_use]
@@ -650,6 +669,62 @@ impl<InnerTy: Debug> SataResponse<InnerTy> {
 			pid,
 			body,
 		}
+	}
+
+	#[must_use]
+	pub const fn from_existing(header: SataPacketHeader, body: InnerTy) -> Self {
+		let flags = header.flags();
+		let host_pid = header.host_pid();
+
+		Self {
+			header,
+			flags,
+			pid: host_pid,
+			body,
+		}
+	}
+
+	#[must_use]
+	pub const fn header(&self) -> &SataPacketHeader {
+		&self.header
+	}
+
+	#[must_use]
+	pub const fn body(&self) -> &InnerTy {
+		&self.body
+	}
+
+	#[must_use]
+	pub fn take_body(self) -> InnerTy {
+		self.body
+	}
+
+	#[must_use]
+	pub fn to_parts(self) -> (SataPacketHeader, InnerTy) {
+		(self.header, self.body)
+	}
+
+	/// Parse a sata response with an 'opaque' body, which means unparsed.
+	///
+	/// This is useful in several situations where we don't know the type of body
+	/// yet, so we keep it opaque.
+	///
+	/// ## Errors
+	///
+	/// If the packet header cannot be parsed.
+	pub fn parse_opaque(mut body: Bytes) -> Result<SataResponse<Bytes>, NetworkParseError> {
+		if body.len() < 0x20 {
+			return Err(NetworkParseError::NotEnoughData(
+				"SataResponse",
+				0x20,
+				body.len(),
+				body,
+			));
+		}
+
+		let header = SataPacketHeader::try_from(body.split_to(0x20))?;
+
+		Ok(SataResponse::from_existing(header, body))
 	}
 }
 
@@ -1019,7 +1094,7 @@ mod unit_tests {
 			]));
 
 		assert_eq!(command_info.command(), 0x10);
-		assert_eq!(body.query_type(), PCFSSataQueryType::FileDetails);
+		assert_eq!(body.query_type(), SataQueryType::FileDetails);
 		assert_eq!(body.path(), "/%SLC_EMU_DIR/sys");
 	}
 

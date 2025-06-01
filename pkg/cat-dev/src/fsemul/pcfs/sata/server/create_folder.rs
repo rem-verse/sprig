@@ -4,7 +4,7 @@ use crate::{
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata::{
-			proto::{SataCreateFolderPacketBody, SataPacketHeader, SataResponse, SataResultCode},
+			proto::{SataCreateFolderPacketBody, SataRequest, SataResponse, SataResultCode},
 			server::PCFSServerState,
 		},
 	},
@@ -18,10 +18,12 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 
 /// Handle creating a directory upon request.
 pub async fn handle_create_folder(
-	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataCreateFolderPacketBody>,
+	Body(request): Body<SataRequest<SataCreateFolderPacketBody>>,
 ) -> SataResponse<SataResultCode> {
+	let packet = request.body();
+	let request_header = request.header().clone();
+
 	let Ok(final_location) = state.host_filesystem().resolve_path(packet.path()) else {
 		debug!(
 			packet.path = packet.path(),
@@ -95,8 +97,9 @@ pub async fn handle_create_folder(
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use bytes::Bytes;
 
@@ -115,12 +118,12 @@ mod unit_tests {
 		)
 		.expect("Failed to create sata folder packet body!");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_info = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		assert!(!base_dir.exists());
 		let _response: Bytes = handle_create_folder(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_info, request)),
 		)
 		.await
 		.try_into()

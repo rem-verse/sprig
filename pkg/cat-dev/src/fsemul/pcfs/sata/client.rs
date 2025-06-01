@@ -1,1021 +1,911 @@
 //! Client implementation for SATA over PCFS.
 
-/*
 use crate::{
 	errors::{CatBridgeError, NetworkError, NetworkParseError},
 	fsemul::pcfs::{
-		errors::PCFSApiError,
+		errors::SataProtocolError,
 		sata::proto::{
-			DirectoryItemResponse, MoveToFileLocation, PCFSSataFdInfo, PCFSSataQueryResponse,
-			PCFSSataQueryType, SataCapabilitiesFlags, SataChangeModePacketBody,
-			SataChangeOwnerPacketBody, SataCloseFilePacketBody, SataCloseFolderPacketBody,
-			SataCommandInfo, SataCreateFolderPacketBody, SataGetInfoByQueryPacketBody,
-			SataOpenFilePacketBody, SataOpenFolderPacketBody, SataPacketHeader, SataPingPacketBody,
-			SataPongBody, SataReadFilePacketBody, SataReadFolderPacketBody, SataRemovePacketBody,
-			SataRewindFolderPacketBody, SataStatFilePacketBody, SataWriteFilePacketBody,
-			construct_sata_request,
+			DirectoryItemResponse, MoveToFileLocation, SataCapabilitiesFlags,
+			SataChangeModePacketBody, SataChangeOwnerPacketBody, SataCloseFilePacketBody,
+			SataCloseFolderPacketBody, SataCommandInfo, SataCreateFolderPacketBody, SataFDInfo,
+			SataFileDescriptorResult, SataGetInfoByQueryPacketBody, SataOpenFilePacketBody,
+			SataPacketHeader, SataPingPacketBody, SataPongBody, SataQueryResponse, SataQueryType,
+			SataReadFilePacketBody, SataReadFolderPacketBody, SataRemovePacketBody, SataRequest,
+			SataResponse, SataResultCode, SataRewindFolderPacketBody, SataStatFilePacketBody,
+			SataWriteFilePacketBody,
 		},
+	},
+	net::{
+		client::TCPClient,
+		models::{Endianness, NagleGuard},
 	},
 };
 use bytes::{Buf, Bytes, BytesMut};
-use std::time::Duration;
-use tokio::{
-	io::{AsyncReadExt, AsyncWriteExt},
-	net::{TcpStream, ToSocketAddrs},
-	time::sleep,
+use std::{
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+	},
+	time::Duration,
 };
+use tokio::net::ToSocketAddrs;
+use valuable::Valuable;
 
-/// A connection to a SATA PCFS server.
-#[derive(Debug)]
-pub struct PCFSSataClient {
+/// Default PCFS-SATA Client timeout to use when we don't know where one is.
+pub const DEFAULT_CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A connection to a sata pcfs server.
+#[derive(Debug, Valuable)]
+pub struct SataClient {
 	/// If we're actively supporting "CSR", or "Combined Send/Recv".
-	supports_csr: bool,
+	supports_csr: Arc<AtomicBool>,
 	/// If we're acctively supporting "FFIO", or "Fast File I/O".
-	supports_ffio: bool,
-	/// The connection to the server.
-	underlying_stream: TcpStream,
+	supports_ffio: Arc<AtomicBool>,
+	/// The TCP Client we're warpping.
+	underlying_client: TCPClient,
 }
 
-impl PCFSSataClient {
-	/// Attmempt to connect to a real PCFS Sata Server implementation.
+impl SataClient {
+	/// Connect to a PCFS Sata server.
 	///
 	/// ## Errors
 	///
-	/// If for some reason we cannot open a connection to the PCFS Sata Server
-	/// due to some underlying network error or condition.
-	pub async fn connect_to<AddrTy: ToSocketAddrs>(
+	/// This errors when the client cannot connect to the server.
+	pub async fn connect<AddrTy: ToSocketAddrs>(
 		address: AddrTy,
 		supports_csr: bool,
 		supports_ffio: bool,
+		trace_io_during_debug: bool,
 	) -> Result<Self, CatBridgeError> {
-		let conn = TcpStream::connect(address)
-			.await
-			.map_err(NetworkError::IO)?;
-		conn.set_nodelay(true).map_err(NetworkError::IO)?;
+		let client = TCPClient::new(
+			"pcfs-sata",
+			NagleGuard::U32LengthPrefixed(Endianness::Big, None),
+			(None, None),
+			trace_io_during_debug,
+		);
+		client.connect(address).await?;
 
-		let mut this = Self {
-			supports_csr,
-			supports_ffio,
-			underlying_stream: conn,
+		let this = Self {
+			supports_csr: Arc::new(AtomicBool::new(supports_csr)),
+			supports_ffio: Arc::new(AtomicBool::new(supports_ffio)),
+			underlying_client: client,
 		};
-		// Synchronize server with our supports csr/ffio state.
-		this.ping().await?;
+		this.ping(Some(DEFAULT_CLIENT_TIMEOUT)).await?;
+
 		Ok(this)
 	}
 
-	/// Swap the current state of CSR, and FFIO support.
+	/// Attempt to update Combined Send/Recv & Fast File I/O flags.
 	///
-	/// This will require sending a PING to the server, and get a response
-	/// back. If the ping errors out at all, then the CSR/FFIO flag will not
-	/// change at all.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot successfully send a ping to the server.
-	pub async fn set_supports_csr_and_ffio(
-		&mut self,
-		supports_csr: bool,
-		supports_ffio: bool,
-	) -> Result<(), CatBridgeError> {
-		let old_csr = self.supports_csr;
-		let old_ffio = self.supports_ffio;
-
-		self.supports_csr = supports_csr;
-		self.supports_ffio = supports_ffio;
-		let result = self.ping().await;
-		// Keep us in the same state.
-		if result.is_err() {
-			self.supports_csr = old_csr;
-			self.supports_ffio = old_ffio;
-		}
-		result
-	}
-
-	/// Swap the current state of CSR support.
-	///
-	/// This will require sending a PING to the server, and get a response
-	/// back. If the ping errors out at all, then the CSR flag will not change
-	/// at all.
+	/// This may fail if setting to 'true', as both the server, and client have
+	/// to support, and agree to these flags in order for them to be supported.
 	///
 	/// ## Errors
 	///
-	/// - If we cannot successfully send a ping to the server.
-	pub async fn set_supports_csr(&mut self, supports_csr: bool) -> Result<(), CatBridgeError> {
-		let old = self.supports_csr;
-		self.supports_csr = supports_csr;
-		let result = self.ping().await;
-		// Keep us in the same state.
-		if result.is_err() {
-			self.supports_csr = old;
-		}
-		result
-	}
-
-	/// Swap the current state of FFIO support.
-	///
-	/// This will require sending a PING to the server, and get a response
-	/// back. If the ping errors out at all, then the FFIO flag will not change
-	/// at all.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot successfully send a ping to the server.
-	pub async fn set_supports_ffio(&mut self, supports_ffio: bool) -> Result<(), CatBridgeError> {
-		let old = self.supports_ffio;
-		self.supports_ffio = supports_ffio;
-		let result = self.ping().await;
-		// Keep us in the same state.
-		if result.is_err() {
-			self.supports_ffio = old;
-		}
-		result
-	}
-
-	/// Change the mode of a particular file, since this is based on Windows
-	/// files ultimately, the protocol only allows for changing the read/write
-	/// flag.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn change_mode(
-		&mut self,
-		path: String,
-		set_write_mode: bool,
-	) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataChangeModeResponse",
-			self.change_mode_raw(path, set_write_mode).await?,
-		)?)
-	}
-
-	/// Change the mode of a particular file, since this is based on Windows
-	/// files ultimately, the protocol only allows for changing the read/write
-	/// flag.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn change_mode_raw(
-		&mut self,
-		path: String,
-		set_write_mode: bool,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x13),
-				0,
-				SataChangeModePacketBody::new(path, set_write_mode)?,
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Change the owner of a particular file.
-	///
-	/// This will always fail on a compatible implementation as windows doesn't
-	/// have the same concept of file owners.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn change_owner(
-		&mut self,
-		path: String,
-		uid: u32,
-		gid: u32,
-	) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataChangeOwnerResponse",
-			self.change_owner_raw(path, uid, gid).await?,
-		)?)
-	}
-
-	/// Change the owner of a particular file.
-	///
-	/// This will always fail on a compatible implementation as windows doesn't
-	/// have the same concept of file owners.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn change_owner_raw(
-		&mut self,
-		path: String,
-		uid: u32,
-		gid: u32,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x12),
-				0,
-				SataChangeOwnerPacketBody::new(path, uid, gid)?,
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Close an existing open file handle.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn close_file(&mut self, fd: i32) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataCloseFileResponse",
-			self.close_file_raw(fd).await?,
-		)?)
-	}
-
-	/// Close an existing open file handle.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn close_file_raw(&mut self, fd: i32) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0xD),
-				0,
-				SataCloseFilePacketBody::new(fd),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Close an existing open folder handle.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn close_folder(&mut self, fd: i32) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataCloseFolderResponse",
-			self.close_folder_raw(fd).await?,
-		)?)
-	}
-
-	/// Close an existing open folder handle.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn close_folder_raw(&mut self, fd: i32) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x4),
-				0,
-				SataCloseFolderPacketBody::new(fd),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Create a Directory.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn create_directory(
-		&mut self,
-		path: String,
-		set_write_mode: bool,
-	) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataCreateDirectoryResponse",
-			self.create_directory_raw(path, set_write_mode).await?,
-		)?)
-	}
-
-	/// Create a directory.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn create_directory_raw(
-		&mut self,
-		path: String,
-		set_write_mode: bool,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x0),
-				0,
-				SataCreateFolderPacketBody::new(path, set_write_mode)?,
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Get the information related to a specific file.
-	///
-	/// There are multiple query types that can return various types of
-	/// information. This is a generic catch all, but there are more specific
-	/// methods that return specific types, these are:
-	///
-	/// - [`Self::get_info_disk_space_for_path`]
-	/// - [`Self::get_info_folder_space`]
-	/// - [`Self::get_info_file_count`]
-	/// - [`Self::get_info_stat`]
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn get_info(
-		&mut self,
-		path: String,
-		query_type: PCFSSataQueryType,
-	) -> Result<PCFSSataQueryResponse, CatBridgeError> {
-		let result = self.get_info_raw(path, query_type).await?;
-
-		match query_type {
-			PCFSSataQueryType::FreeDiskSpace => Ok(PCFSSataQueryResponse::try_from_large(result)?),
-			PCFSSataQueryType::SizeOfFolder => Ok(PCFSSataQueryResponse::try_from_large(result)?),
-			PCFSSataQueryType::FileCount => Ok(PCFSSataQueryResponse::try_from_small(result)?),
-			PCFSSataQueryType::FileDetails => Ok(PCFSSataQueryResponse::try_from_fd_info(result)?),
-		}
-	}
-
-	/// Get the amount of disk space for the disk that is storing a particular
-	/// path.
-	///
-	/// For a more generic info query type see [`Self::get_info`].
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn get_info_disk_space_for_path(
-		&mut self,
-		path: String,
-	) -> Result<u64, CatBridgeError> {
-		let result = PCFSSataQueryResponse::try_from_large(
-			self.get_info_raw(path, PCFSSataQueryType::FreeDiskSpace)
-				.await?,
-		)?;
-
-		if let PCFSSataQueryResponse::LargeSize(lorg) = result {
-			Ok(lorg)
-		} else {
-			unreachable!("`try_from_large` should always return large size")
-		}
-	}
-
-	/// Get the amount of space a folder takes up on disk.
-	///
-	/// For a more generic info query type see [`Self::get_info`].
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn get_info_folder_space(&mut self, path: String) -> Result<u64, CatBridgeError> {
-		let result = PCFSSataQueryResponse::try_from_large(
-			self.get_info_raw(path, PCFSSataQueryType::SizeOfFolder)
-				.await?,
-		)?;
-
-		if let PCFSSataQueryResponse::LargeSize(lorg) = result {
-			Ok(lorg)
-		} else {
-			unreachable!("`try_from_large` should always return large size")
-		}
-	}
-
-	/// Get the count of files within a particular directory.
-	///
-	/// For a more generic info query type see [`Self::get_info`].
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn get_info_file_count(&mut self, path: String) -> Result<u32, CatBridgeError> {
-		let result = PCFSSataQueryResponse::try_from_small(
-			self.get_info_raw(path, PCFSSataQueryType::SizeOfFolder)
-				.await?,
-		)?;
-
-		if let PCFSSataQueryResponse::SmallSize(smol) = result {
-			Ok(smol)
-		} else {
-			unreachable!("`try_from_small` should always return small size")
-		}
-	}
-
-	/// Get the information about a particular path.
-	///
-	/// For a more generic info query type see [`Self::get_info`].
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we do not get a successful response back.
-	pub async fn get_info_stat(&mut self, path: String) -> Result<PCFSSataFdInfo, CatBridgeError> {
-		let result = PCFSSataQueryResponse::try_from_fd_info(
-			self.get_info_raw(path, PCFSSataQueryType::FileDetails)
-				.await?,
-		)?;
-
-		if let PCFSSataQueryResponse::FDInfo(info) = result {
-			Ok(info)
-		} else {
-			unreachable!("`try_from_fd_info` should always return fd info")
-		}
-	}
-
-	/// Get the information about a particular path that exists on disc.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn get_info_raw(
-		&mut self,
-		path: String,
-		query_type: PCFSSataQueryType,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x10),
-				0,
-				SataGetInfoByQueryPacketBody::new(path, query_type)?,
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Open a file on the existing remote end returning a file handle.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn open_file(
-		&mut self,
-		path: String,
-		mode_string: String,
-	) -> Result<i32, CatBridgeError> {
-		Ok(Self::get_pcfs_fd_with_rc(
-			"PCFSSataOpenFileResponse",
-			self.open_file_raw(path, mode_string).await?,
-		)?)
-	}
-
-	/// Open a file on the existing remote end returning a file handle.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn open_file_raw(
-		&mut self,
-		path: String,
-		mode_string: String,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x5),
-				0,
-				SataOpenFilePacketBody::new(path, mode_string)?,
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Open a folder on the existing remote end returning a file handle.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn open_folder(&mut self, path: String) -> Result<i32, CatBridgeError> {
-		Ok(Self::get_pcfs_fd_with_rc(
-			"PCFSSataOpenFolderResponse",
-			self.open_folder_raw(path).await?,
-		)?)
-	}
-
-	/// Open a folder on the existing remote end returning a file handle.
-	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	pub async fn open_folder_raw(&mut self, path: String) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x1),
-				0,
-				SataOpenFolderPacketBody::new(path)?,
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Send a ping, and update CSR/FFIO.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn ping(&mut self) -> Result<(), CatBridgeError> {
-		let packet = self.ping_raw().await?;
-		if packet.len() < 0x20 {
-			return Err(NetworkParseError::NotEnoughData(
-				"PCFSSataPong",
-				0x20,
-				packet.len(),
-				packet,
-			)
-			.into());
-		}
-		let body = SataPongBody::try_from(packet.slice(0x20..))?;
-		if !body.ffio_enabled() {
-			self.supports_ffio = false;
-		}
-		if !body.combined_send_recv_enabled() {
-			self.supports_csr = false;
-		}
-
+	/// If we cannot negotiate with the server to update combined send/recv.
+	pub async fn try_set_csr_ffio(&self, csr: bool, ffio: bool) -> Result<(), CatBridgeError> {
+		self.supports_csr.store(csr, Ordering::Release);
+		self.supports_ffio.store(ffio, Ordering::Release);
+		self.ping(None).await?;
 		Ok(())
 	}
 
-	/// Send a ping, and update CSR/FFIO.
+	/// Attempt to update combined send/recv flag or "CSR".
 	///
-	/// This will return the raw series of bytes we tried to peek from the
-	/// network. This may not be any valid packet, or may not be what we're
-	/// expecting.
+	/// This may fail if setting to 'true', as both the server, and client have
+	/// to support, and agree to support Combined Send/Recv.
 	///
 	/// ## Errors
 	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	pub async fn ping_raw(&mut self) -> Result<Bytes, CatBridgeError> {
+	/// If we cannot negotiate with the server to update combined send/recv.
+	pub async fn try_set_csr(&self, csr: bool) -> Result<(), CatBridgeError> {
+		self.supports_csr.store(csr, Ordering::Release);
+		self.ping(None).await?;
+		Ok(())
+	}
+
+	/// Attempt to update fast-file i/o or "FFIO".
+	///
+	/// This may fail if setting to 'true', as both the server, and client have
+	/// to support, and agree to support FFIO.
+	///
+	/// ## Errors
+	///
+	/// If we cannot negotiate with the server to update combined send/recv.
+	pub async fn try_set_ffio(&self, ffio: bool) -> Result<(), CatBridgeError> {
+		self.supports_ffio.store(ffio, Ordering::Release);
+		self.ping(None).await?;
+		Ok(())
+	}
+
+	/// Perform a 'ping' on the remote host, and update our CSR/FFIO flag state.
+	///
+	/// ## Errors
+	///
+	/// If we cannot send a request to our upstream PCFS server, or if we cannot
+	/// read a response back in the timeout specified.
+	pub async fn ping(&self, timeout: Option<Duration>) -> Result<(), CatBridgeError> {
 		let mut flags = SataCapabilitiesFlags::empty();
-		if self.supports_csr {
+		if self.supports_csr.load(Ordering::Acquire) {
 			flags = flags.union(SataCapabilitiesFlags::COMBINED_SEND_RECV_SUPPORTED);
 		}
-		if self.supports_ffio {
+		if self.supports_ffio.load(Ordering::Acquire) {
 			flags = flags.union(SataCapabilitiesFlags::FAST_FILE_IO_SUPPORTED);
 		}
 
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x14),
-				flags.0,
-				SataPingPacketBody::new(),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Read the next item in a directory.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn read_directory(
-		&mut self,
-		file_descriptor: i32,
-	) -> Result<Option<(PCFSSataFdInfo, String)>, CatBridgeError> {
-		let response =
-			DirectoryItemResponse::try_from(self.read_directory_raw(file_descriptor).await?)?;
-
-		Ok(response.take_file_info())
-	}
-
-	/// Read the next item in a directory.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	pub async fn read_directory_raw(
-		&mut self,
-		file_descriptor: i32,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x2),
-				0,
-				Bytes::from(SataReadFolderPacketBody::new(file_descriptor)),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Read the next set of bytes from a file.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn read_file(
-		&mut self,
-		block_count: u32,
-		block_size: u32,
-		file_descriptor: i32,
-		move_to: Option<MoveToFileLocation>,
-	) -> Result<Bytes, CatBridgeError> {
-		let raw_buff = self
-			.read_file_raw(block_count, block_size, file_descriptor, move_to)
+		let mut req = Self::construct(0x14, SataPingPacketBody::new());
+		req.command_info_mut().set_capabilities((u32::MAX, 0));
+		req.header_mut().set_flags(flags.0);
+		let (_stream_id, _req_id, opt_response) = self
+			.underlying_client
+			.send(req, Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)))
 			.await?;
-
-		if self.supports_ffio {
-			Ok(raw_buff.slice(0x24..))
-		} else {
-			todo!("Implement Non-FFIO SUPPORT")
-		}
-	}
-
-	/// Read the next set of bytes from a file.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	pub async fn read_file_raw(
-		&mut self,
-		block_count: u32,
-		block_size: u32,
-		file_descriptor: i32,
-		move_to: Option<MoveToFileLocation>,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x6),
-				0,
-				Bytes::from(SataReadFilePacketBody::new(
-					block_count,
-					block_size,
-					file_descriptor,
-					move_to,
-				)),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Remove a path on the host filesystem.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot receive a packet back from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn remove(&mut self, path: String) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataRemoveResponse",
-			self.remove_raw(path).await?,
-		)?)
-	}
-
-	/// Remove a file or directory froom the host filesystem.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	pub async fn remove_raw(&mut self, path: String) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0xE),
-				0,
-				Bytes::from(SataRemovePacketBody::new(path)?),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Rewind a directory iterator to the beginning.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn rewind(&mut self, file_descriptor: i32) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataRemoveResponse",
-			self.rewind_raw(file_descriptor).await?,
-		)?)
-	}
-
-	/// Rewind a directory iterator to the beginning.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	pub async fn rewind_raw(&mut self, file_descriptor: i32) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x3),
-				0,
-				Bytes::from(SataRewindFolderPacketBody::new(file_descriptor)),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Stat a particular file descriptor to get the information related to a
-	/// file.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	/// - If we cannot parsee the response body.
-	pub async fn stat(&mut self, file_descriptor: i32) -> Result<PCFSSataFdInfo, CatBridgeError> {
-		let raw_resp = self.stat_raw(file_descriptor).await?;
-		Ok(PCFSSataFdInfo::try_from(raw_resp)?)
-	}
-
-	/// Stat a particular file descriptor to get the information related to a
-	/// file.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	pub async fn stat_raw(&mut self, file_descriptor: i32) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0xB),
-				0,
-				Bytes::from(SataStatFilePacketBody::new(file_descriptor)),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// Write a series of bytes to a file that is already open on the host
-	/// system.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	/// - If we cannot parse the response body.
-	pub async fn write(
-		&mut self,
-		file_descriptor: i32,
-		move_to: Option<MoveToFileLocation>,
-		buff: Bytes,
-	) -> Result<(), CatBridgeError> {
-		Ok(Self::validate_pcfs_rc(
-			"PCFSSataWriteResponseBody",
-			self.write_raw(file_descriptor, move_to, buff).await?,
-		)?)
-	}
-
-	/// Write a series of bytes to a file that is already open on the host
-	/// system.
-	///
-	/// ## Errors
-	///
-	/// - If we cannot send a request over the stream.
-	/// - If we cannot read a packet from the stream.
-	pub async fn write_raw(
-		&mut self,
-		file_descriptor: i32,
-		move_to: Option<MoveToFileLocation>,
-		buff: Bytes,
-	) -> Result<Bytes, CatBridgeError> {
-		self.underlying_stream
-			.write_all(&construct_sata_request(
-				&SataPacketHeader::new(0),
-				&SataCommandInfo::new((0, 0), (0, 0), 0x7),
-				0,
-				Bytes::from(SataWriteFilePacketBody::new(
-					1,
-					u32::try_from(buff.len())
-						.map_err(|_| PCFSApiError::PacketTooLargeForSata(buff.len()))?,
-					file_descriptor,
-					move_to,
-				)),
-			)?)
-			.await
-			.map_err(NetworkError::IO)?;
-		self.underlying_stream
-			.write_all(&buff)
-			.await
-			.map_err(NetworkError::IO)?;
-
-		self.try_recv_data()
-			.await?
-			.ok_or(NetworkError::ExpectedData.into())
-	}
-
-	/// This will attempt to try and read data off of the network until a
-	/// response hasn't been hit for 100ms.
-	///
-	/// This is mostly a very hacky method to be utilized when we don't know if
-	/// the remote side is sending us anything, but we do want to know if it sent
-	/// _something_.
-	///
-	/// This is mostly used in the "Scientist" classes which attempt to diff our
-	/// implementation with an official cafe-sdk implementation in real time,
-	/// printing out any differences in sent/received data.
-	///
-	/// ## Errors
-	///
-	/// If the underlying stream returns an error for us.
-	pub async fn try_recv_data(&mut self) -> Result<Option<Bytes>, NetworkError> {
-		let mut buff = BytesMut::new();
-		let mut inner_buff = BytesMut::zeroed(8192);
-
-		loop {
-			tokio::select! {
-			  res = self.underlying_stream.read(&mut inner_buff) => {
-					let size = res.map_err(NetworkError::IO)?;
-					buff.extend_from_slice(&inner_buff[..size]);
-			  }
-			  () = sleep(Duration::from_millis(100)) => {
-					break;
-			  }
-			}
-		}
-
-		if buff.is_empty() {
-			Ok(None)
-		} else {
-			Ok(Some(buff.freeze()))
-		}
-	}
-
-	/// Read a response body, throwing most of the data out, just validate
-	/// the first 4 bytes are 0, generally used to determine success.
-	fn validate_pcfs_rc(name: &'static str, data: Bytes) -> Result<(), NetworkParseError> {
-		if data.len() < 0x24 {
-			return Err(NetworkParseError::NotEnoughData(
-				name,
-				0x24,
-				data.len(),
-				data,
-			));
-		}
-
-		let mut body = data.slice(0x20..);
-		let rc = body.get_u32();
-		if rc != 0 {
-			return Err(NetworkParseError::ErrorCode(rc));
-		}
+		let response = opt_response.ok_or(NetworkError::ExpectedData)?;
+		let pong = SataResponse::<SataPongBody>::try_from(
+			response.take_body().ok_or(NetworkError::ExpectedData)?,
+		)?;
+		self.supports_ffio
+			.store(pong.body().ffio_enabled(), Ordering::Release);
+		self.supports_csr
+			.store(pong.body().combined_send_recv_enabled(), Ordering::Release);
 
 		Ok(())
 	}
 
-	/// Read a response body, throwing most of the data out, just validate
-	/// the first 4 bytes are 0, and getting the next 4 bytes as an i32 in
-	/// big endian.
-	fn get_pcfs_fd_with_rc(name: &'static str, data: Bytes) -> Result<i32, NetworkParseError> {
-		if data.len() < 0x28 {
-			return Err(NetworkParseError::NotEnoughData(
-				name,
-				0x28,
-				data.len(),
-				data,
+	/// Mark a file as 'read-only', or 'writable'.
+	///
+	/// In the future someday we may allow full change mode flags of unix-style
+	/// flags. Unfortunately because this is based off of windows code you have
+	/// only a read-only vs writable flag.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn change_mode(
+		&self,
+		path: String,
+		writable: bool,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x13, SataChangeModePacketBody::new(path, writable)?),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
+	}
+
+	/// Change the user owner, and group owner of a file.
+	///
+	/// NOTE(mythra): this will always error when talking with a PCFS compatible
+	/// server.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn change_owner(
+		&self,
+		path: String,
+		owner: u32,
+		group: u32,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x12, SataChangeOwnerPacketBody::new(path, owner, group)?),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
+	}
+
+	/// Create a new folder on the remote PCFS server.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn create_folder(
+		&self,
+		path: String,
+		writable: bool,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x0, SataCreateFolderPacketBody::new(path, writable)?),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
+	}
+
+	/// Query a particular path for information about it.
+	///
+	/// In general prefer more specific query types, as opposed to this
+	/// particular "grab-bag" of an interface, which will safely wrap this
+	/// function and choose the right kind of return type.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn info_by_query(
+		&self,
+		path: String,
+		query_type: SataQueryType,
+		timeout: Option<Duration>,
+	) -> Result<SataQueryResponse, CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x10, SataGetInfoByQueryPacketBody::new(path, query_type)?),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let (_header, bytes) = SataResponse::<Bytes>::parse_opaque(resp)?.to_parts();
+
+		let typed_response = match query_type {
+			SataQueryType::FileCount => SataQueryResponse::try_from_small(bytes)?,
+			SataQueryType::FileDetails => SataQueryResponse::try_from_fd_info(bytes)?,
+			SataQueryType::FreeDiskSpace => SataQueryResponse::try_from_large(bytes)?,
+			SataQueryType::SizeOfFolder => SataQueryResponse::try_from_large(bytes)?,
+		};
+		if let SataQueryResponse::ErrorCode(ec) = typed_response {
+			return Err(NetworkParseError::ErrorCode(ec).into());
+		}
+
+		Ok(typed_response)
+	}
+
+	/// Get the amount of files within a particular folder.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn file_count(
+		&self,
+		path: String,
+		timeout: Option<Duration>,
+	) -> Result<u32, CatBridgeError> {
+		let final_response = self
+			.info_by_query(path, SataQueryType::FileCount, timeout)
+			.await?;
+
+		match final_response {
+			SataQueryResponse::ErrorCode(_) => unreachable!("Checked in info_by_query"),
+			SataQueryResponse::FDInfo(_) | SataQueryResponse::LargeSize(_) => {
+				Err(SataProtocolError::WrongSataQueryResponse(final_response).into())
+			}
+			SataQueryResponse::SmallSize(smol) => Ok(smol),
+		}
+	}
+
+	/// Get the amount of free disk space left on whatever disk the path is on.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn free_disk_space(
+		&self,
+		path: String,
+		timeout: Option<Duration>,
+	) -> Result<u64, CatBridgeError> {
+		let final_response = self
+			.info_by_query(path, SataQueryType::FreeDiskSpace, timeout)
+			.await?;
+
+		match final_response {
+			SataQueryResponse::ErrorCode(_) => unreachable!("Checked in info_by_query"),
+			SataQueryResponse::FDInfo(_) | SataQueryResponse::SmallSize(_) => {
+				Err(SataProtocolError::WrongSataQueryResponse(final_response).into())
+			}
+			SataQueryResponse::LargeSize(lorg) => Ok(lorg),
+		}
+	}
+
+	/// Get the total amount of space being taken by a folder.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn folder_size(
+		&self,
+		path: String,
+		timeout: Option<Duration>,
+	) -> Result<u64, CatBridgeError> {
+		let final_response = self
+			.info_by_query(path, SataQueryType::SizeOfFolder, timeout)
+			.await?;
+
+		match final_response {
+			SataQueryResponse::ErrorCode(_) => unreachable!("Checked in info_by_query"),
+			SataQueryResponse::FDInfo(_) | SataQueryResponse::SmallSize(_) => {
+				Err(SataProtocolError::WrongSataQueryResponse(final_response).into())
+			}
+			SataQueryResponse::LargeSize(lorg) => Ok(lorg),
+		}
+	}
+
+	/// Get the information about a particular file path.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn path_info(
+		&self,
+		path: String,
+		timeout: Option<Duration>,
+	) -> Result<SataFDInfo, CatBridgeError> {
+		let final_response = self
+			.info_by_query(path, SataQueryType::FileDetails, timeout)
+			.await?;
+
+		match final_response {
+			SataQueryResponse::ErrorCode(_) => unreachable!("Checked in info_by_query"),
+			SataQueryResponse::LargeSize(_) | SataQueryResponse::SmallSize(_) => {
+				Err(SataProtocolError::WrongSataQueryResponse(final_response).into())
+			}
+			SataQueryResponse::FDInfo(info) => Ok(info),
+		}
+	}
+
+	/// Remove a file or folder on the host filesystem.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn remove(
+		&self,
+		path: String,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0xE, SataRemovePacketBody::new(path)?),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
+	}
+
+	/// Attempt to open a file on the remote host.
+	///
+	/// This will return a file handle that you can then call read, write, etc.
+	/// on. You will have to call `close()` on the file handle specifically.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If the mode setring is not formatted correctly.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn open_file(
+		&self,
+		path: String,
+		mode_string: String,
+		timeout: Option<Duration>,
+	) -> Result<SataClientFileHandle<'_>, CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x5, SataOpenFilePacketBody::new(path, mode_string)?),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+		let fd_result = SataResponse::<SataFileDescriptorResult>::try_from(resp)?;
+		let fd = match fd_result.take_body().result() {
+			Ok(fd) => fd,
+			Err(code) => {
+				return Err(NetworkParseError::ErrorCode(code).into());
+			}
+		};
+
+		Ok(SataClientFileHandle {
+			file_descriptor: fd,
+			underlying_client: self,
+		})
+	}
+
+	/// Raw API call for doing a file read.
+	///
+	/// ## Errors
+	///
+	/// - If the path name is too long to be serialized.
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	async fn do_file_read(
+		&self,
+		block_count: u32,
+		block_size: u32,
+		file_descriptor: i32,
+		move_to: Option<MoveToFileLocation>,
+		timeout: Option<Duration>,
+	) -> Result<(usize, Bytes), CatBridgeError> {
+		if self.supports_ffio.load(Ordering::Acquire) {
+			// For FFIO our normal nagle split doesn't really work well.
+			let (_stream_id, _req_id, opt_response) = self
+				.underlying_client
+				.send_with_read_amount(
+					Self::construct(
+						0x6,
+						SataReadFilePacketBody::new(
+							block_count,
+							block_size,
+							file_descriptor,
+							move_to,
+						),
+					),
+					Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+					// 0x20 emptied PCFS header, 0x4 final file length + (block_size * block_count)
+					0x20_usize
+						+ 0x4_usize + (usize::try_from(block_size).unwrap_or(usize::MAX)
+						* usize::try_from(block_count).unwrap_or(usize::MAX)),
+				)
+				.await?;
+
+			let mut full_body = opt_response
+				.ok_or(NetworkError::ExpectedData)?
+				.take_body()
+				.ok_or(NetworkError::ExpectedData)?;
+			// Remove 'blank' header.
+			full_body.advance(0x20);
+			let file_size = usize::try_from(full_body.get_u32()).unwrap_or(usize::MAX);
+			Ok((file_size, full_body))
+		} else {
+			todo!("Implement non-FFIO file support.")
+		}
+	}
+
+	async fn do_file_write(
+		&self,
+		block_count: u32,
+		block_size: u32,
+		file_descriptor: i32,
+		move_to: Option<MoveToFileLocation>,
+		raw_trusted_data: Bytes,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		if self.supports_ffio.load(Ordering::Acquire) {
+			let base_req_bytes = Bytes::from(Self::construct(
+				0x7,
+				SataWriteFilePacketBody::new(block_count, block_size, file_descriptor, move_to),
 			));
-		}
+			let mut final_req =
+				BytesMut::with_capacity(base_req_bytes.len() + raw_trusted_data.len());
+			final_req.extend(base_req_bytes);
+			final_req.extend(raw_trusted_data);
 
-		let mut body = data.slice(0x20..);
-		let rc = body.get_u32();
-		if rc != 0 {
-			return Err(NetworkParseError::ErrorCode(rc));
-		}
-		let fd = body.get_i32();
+			let resp = self
+				.underlying_client
+				.send(final_req, Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)))
+				.await?
+				.2
+				.ok_or(NetworkError::ExpectedData)?
+				.take_body()
+				.ok_or(NetworkError::ExpectedData)?;
 
-		Ok(fd)
+			let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+			if sata_resp.body().0 != 0 {
+				return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+			}
+			Ok(())
+		} else {
+			todo!("Implement non-FFIO file support.")
+		}
+	}
+
+	async fn stat_file(
+		&self,
+		file_descriptor: i32,
+		timeout: Option<Duration>,
+	) -> Result<SataFDInfo, CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0xB, SataStatFilePacketBody::new(file_descriptor)),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let (_header, bytes) = SataResponse::<Bytes>::parse_opaque(resp)?.to_parts();
+		let typed_response = SataQueryResponse::try_from_fd_info(bytes)?;
+		if let SataQueryResponse::ErrorCode(ec) = typed_response {
+			return Err(NetworkParseError::ErrorCode(ec).into());
+		}
+		match typed_response {
+			SataQueryResponse::FDInfo(info) => Ok(info),
+			_ => unreachable!("Not reachable from try_from_fd_info"),
+		}
+	}
+
+	async fn close_file(
+		&self,
+		file_descriptor: i32,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0xD, SataCloseFilePacketBody::new(file_descriptor)),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
+	}
+
+	async fn read_folder(
+		&self,
+		folder_descriptor: i32,
+		timeout: Option<Duration>,
+	) -> Result<Option<(SataFDInfo, String)>, CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x2, SataReadFolderPacketBody::new(folder_descriptor)),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<DirectoryItemResponse>::try_from(resp)?;
+		let directory_item = sata_resp.take_body();
+		if !directory_item.is_successful() {
+			return Err(NetworkParseError::ErrorCode(directory_item.return_code()).into());
+		}
+		Ok(directory_item.take_file_info())
+	}
+
+	async fn rewind_folder(
+		&self,
+		folder_descriptor: i32,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x3, SataRewindFolderPacketBody::new(folder_descriptor)),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
+	}
+
+	async fn close_folder(
+		&self,
+		folder_descriptor: i32,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(0x4, SataCloseFolderPacketBody::new(folder_descriptor)),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
+	}
+
+	/// Construct a new sata request with a series of default values.
+	#[must_use]
+	fn construct<InnerTy: Into<Bytes>>(command: u32, body: InnerTy) -> SataRequest<Bytes> {
+		let ci = SataCommandInfo::new((0, 0), (0, 0), command);
+		let body: Bytes = body.into();
+		let mut header = SataPacketHeader::new(0);
+		header.set_data_len(0x14_u32 + u32::try_from(body.len()).unwrap_or(u32::MAX));
+
+		SataRequest::new(header, ci, body)
 	}
 }
-*/
+
+/// A file that is actively open on an existing sata client.
+///
+/// This is called with [`SataClient::open_file`], and ensures that methods
+/// like "reading a file", can only ever be done on an open file handle.
+#[derive(Debug, Valuable)]
+pub struct SataClientFileHandle<'client> {
+	/// The actual open file descriptor.
+	file_descriptor: i32,
+	/// The Sata Client to use.
+	underlying_client: &'client SataClient,
+}
+
+impl SataClientFileHandle<'_> {
+	/// Close this file, and ensure it can't be used anymore.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn close(self, timeout: Option<Duration>) -> Result<(), CatBridgeError> {
+		self.underlying_client
+			.close_file(self.file_descriptor, timeout)
+			.await
+	}
+
+	/// Read N amounts of bytes from a file.
+	///
+	/// You can optionally move the file pointer around before doing the
+	/// read. This will return the total file length, along with the bytes
+	/// that you actually read.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn read_file(
+		&self,
+		amount: usize,
+		move_to: Option<MoveToFileLocation>,
+		timeout: Option<Duration>,
+	) -> Result<(usize, Bytes), CatBridgeError> {
+		let (block_size, block_len) = Self::calculate_ideal_block_size_count(amount);
+
+		self.underlying_client
+			.do_file_read(
+				block_len,
+				block_size,
+				self.file_descriptor,
+				move_to,
+				timeout,
+			)
+			.await
+	}
+
+	/// Get information about the current open file.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn stat(&self, timeout: Option<Duration>) -> Result<SataFDInfo, CatBridgeError> {
+		self.underlying_client
+			.stat_file(self.file_descriptor, timeout)
+			.await
+	}
+
+	/// Write N amounts of bytes from a file.
+	///
+	/// You can optionally move the file pointer around before doing the
+	/// write.
+	///
+	/// *note: in cases of extreme latency a file write may succeed, but reutrn
+	/// failure because we could not parse the response in the timeout.*
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn write_file(
+		&self,
+		to_write: Bytes,
+		move_to: Option<MoveToFileLocation>,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let (block_size, block_len) = Self::calculate_ideal_block_size_count(to_write.len());
+
+		self.underlying_client
+			.do_file_write(
+				block_len,
+				block_size,
+				self.file_descriptor,
+				move_to,
+				to_write,
+				timeout,
+			)
+			.await
+	}
+
+	fn calculate_ideal_block_size_count(amount: usize) -> (u32, u32) {
+		if amount < 512 {
+			(u32::try_from(amount).expect("unreachable()"), 1)
+		} else if amount % 512 == 0 {
+			(512, u32::try_from(amount / 512).unwrap_or(u32::MAX))
+		} else {
+			let mut count = 511;
+			while amount % count != 0 {
+				count -= 1;
+			}
+
+			(
+				u32::try_from(count).expect("unreachable()"),
+				u32::try_from(amount / count).unwrap_or(u32::MAX),
+			)
+		}
+	}
+}
+
+/// A folder that is actively open on an existing sata client.
+///
+/// This is called with [`SataClient::open_folder`], and ensures that methods
+/// like "reading a directory", can only ever be done on an open folder handle.
+#[derive(Debug, Valuable)]
+pub struct SataClientFolderHandle<'client> {
+	/// The folder handle and descriptor.
+	folder_descriptor: i32,
+	/// The underlying sata client to call methods on.
+	underlying_client: &'client SataClient,
+}
+
+impl SataClientFolderHandle<'_> {
+	/// Close this folder, and ensure it can't be used anymore.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn close(self, timeout: Option<Duration>) -> Result<(), CatBridgeError> {
+		self.underlying_client
+			.close_folder(self.folder_descriptor, timeout)
+			.await
+	}
+
+	/// Read the next item within a folder.
+	///
+	/// This will return the next file name/file info if there is another item in
+	/// this directory.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn next_in_folder(
+		&self,
+		timeout: Option<Duration>,
+	) -> Result<Option<(SataFDInfo, String)>, CatBridgeError> {
+		self.underlying_client
+			.read_folder(self.folder_descriptor, timeout)
+			.await
+	}
+
+	/// Rewind the directory iterator by one (so next in folder returns the
+	/// previous item it returned).
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn rewind_iterator(&self, timeout: Option<Duration>) -> Result<(), CatBridgeError> {
+		self.underlying_client
+			.rewind_folder(self.folder_descriptor, timeout)
+			.await
+	}
+}
+// Folder Open Handle (OpenFolder):
+//   - CloseFolder

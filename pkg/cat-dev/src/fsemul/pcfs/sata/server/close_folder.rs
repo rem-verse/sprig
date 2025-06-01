@@ -4,7 +4,7 @@
 
 use crate::{
 	fsemul::pcfs::sata::{
-		proto::{SataCloseFolderPacketBody, SataPacketHeader, SataResponse, SataResultCode},
+		proto::{SataCloseFolderPacketBody, SataRequest, SataResponse, SataResultCode},
 		server::PCFSServerState,
 	},
 	net::server::requestable::{Body, State},
@@ -12,22 +12,28 @@ use crate::{
 
 /// Handle closing a folder that was previously open.
 pub async fn handle_close_folder(
-	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataCloseFolderPacketBody>,
+	Body(request): Body<SataRequest<SataCloseFolderPacketBody>>,
 ) -> SataResponse<SataResultCode> {
+	let packet = request.body();
 	state
 		.host_filesystem()
 		.close_folder(packet.file_descriptor())
 		.await;
-	SataResponse::new(state.pid(), request_header, SataResultCode::success())
+
+	SataResponse::new(
+		state.pid(),
+		request.header().clone(),
+		SataResultCode::success(),
+	)
 }
 
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use bytes::Bytes;
 	use tokio::fs::OpenOptions;
@@ -44,6 +50,7 @@ mod unit_tests {
 			.await
 			.expect("Failed to write test file!");
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		let mut open_options = OpenOptions::new();
 		open_options.read(true).create(false).write(false);
@@ -54,9 +61,8 @@ mod unit_tests {
 		let close_request = SataCloseFolderPacketBody::new(fd);
 
 		let response: Bytes = handle_close_folder(
-			mocked_header.clone(),
 			State(PCFSServerState::new(true, fs, 0)),
-			Body(close_request),
+			Body(SataRequest::new(mocked_header, mocked_ci, close_request)),
 		)
 		.await
 		.try_into()

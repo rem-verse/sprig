@@ -3,7 +3,7 @@
 
 use crate::{
 	fsemul::pcfs::sata::{
-		proto::{SataPacketHeader, SataResponse, SataResultCode, SataRewindFolderPacketBody},
+		proto::{SataRequest, SataResponse, SataResultCode, SataRewindFolderPacketBody},
 		server::PCFSServerState,
 	},
 	net::server::requestable::{Body, State},
@@ -15,10 +15,12 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 
 /// Actually process by rewinding an open directory iterator.
 pub async fn handle_rewind_folder(
-	request_header: SataPacketHeader,
 	State(state): State<PCFSServerState>,
-	Body(packet): Body<SataRewindFolderPacketBody>,
+	Body(request): Body<SataRequest<SataRewindFolderPacketBody>>,
 ) -> SataResponse<SataResultCode> {
+	let request_header = request.header().clone();
+	let packet = request.body();
+
 	if state
 		.host_filesystem()
 		.reverse_folder(packet.file_descriptor())
@@ -40,8 +42,9 @@ pub async fn handle_rewind_folder(
 #[cfg(test)]
 mod unit_tests {
 	use super::*;
-	use crate::fsemul::host_filesystem::test_helpers::{
-		create_temporary_host_filesystem, join_many,
+	use crate::fsemul::{
+		host_filesystem::test_helpers::{create_temporary_host_filesystem, join_many},
+		pcfs::sata::proto::{SataCommandInfo, SataPacketHeader},
 	};
 	use bytes::Bytes;
 
@@ -49,6 +52,7 @@ mod unit_tests {
 	pub async fn can_handle_rewind_directory() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 		let mocked_header = SataPacketHeader::new(0);
+		let mocked_ci = SataCommandInfo::new((0, 0), (0, 0), 0);
 
 		let base_dir = join_many(tempdir.path(), ["data", "slc", "to-query"]);
 		tokio::fs::create_dir(&base_dir)
@@ -67,9 +71,8 @@ mod unit_tests {
 
 		// First request should return file information, and path name.
 		let actual_response: Bytes = handle_rewind_folder(
-			mocked_header,
 			State(PCFSServerState::new(true, fs.clone(), 0)),
-			Body(request),
+			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
 		.await
 		.try_into()
