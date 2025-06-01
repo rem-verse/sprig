@@ -7,11 +7,15 @@
 //! In general if you're trying to look for things relating to the bridge as a
 //! whole, you're _probably_ really actually talking to the MION.
 
+#[cfg(feature = "clients")]
 pub mod cgis;
+#[cfg(feature = "clients")]
 pub mod discovery;
 pub mod errors;
 pub mod firmware;
+#[cfg(feature = "clients")]
 pub mod parameter;
+#[cfg(feature = "clients")]
 pub mod proto;
 
 use crate::errors::FSError;
@@ -687,16 +691,22 @@ mod unit_tests {
 			Err(MIONAPIError::DeviceNameMustBeAscii),
 		);
 
-		assert!(host_env
-			.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 1))
-			.is_ok());
+		assert!(
+			host_env
+				.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 1))
+				.is_ok()
+		);
 		assert!(host_env.set_default_bridge(" with spaces ").is_ok());
-		assert!(host_env
-			.upsert_bridge("00-25-5C-BA-5A-00", Ipv4Addr::new(192, 168, 1, 2))
-			.is_ok());
-		assert!(host_env
-			.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 3))
-			.is_ok());
+		assert!(
+			host_env
+				.upsert_bridge("00-25-5C-BA-5A-00", Ipv4Addr::new(192, 168, 1, 2))
+				.is_ok()
+		);
+		assert!(
+			host_env
+				.upsert_bridge(" with spaces ", Ipv4Addr::new(192, 168, 1, 3))
+				.is_ok()
+		);
 		assert!(host_env.set_default_bridge("00-25-5C-BA-5A-00").is_ok());
 		assert!(host_env.write_to_disk().await.is_ok());
 

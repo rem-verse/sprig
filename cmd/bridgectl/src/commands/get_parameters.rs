@@ -1,8 +1,8 @@
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::get_targeted_bridge_ip,
 	exit_codes::{GET_PARAMS_FAILED_TO_GET_PARAMS, GET_PARAMS_NO_PARAMETERS_SPECIFIED},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{parameter::get_parameters, proto::parameter::DumpedMionParameters};
 use miette::miette;

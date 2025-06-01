@@ -17,7 +17,7 @@ use crate::{
 use bytes::{BufMut, Bytes, BytesMut};
 use mac_address::MacAddress;
 use std::{
-	fmt::{Display, Formatter, Result as FmtResult},
+	fmt::{Display, Formatter, Result as FmtResult, Write},
 	net::Ipv4Addr,
 };
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
@@ -105,13 +105,11 @@ impl TryFrom<Bytes> for MionIdentityAnnouncement {
 			));
 		}
 		if is_detailed && &packet[25..] != b"enumV1\0\0" {
-			return Err(
-				NetworkParseError::FieldEncodedIncorrectly(
-					"MionIdentityAnnouncement",
-					"buff",
-					"Only the static string `enumV1` followed by two NUL Terminators is allowed after `MULTI_I/O_NETWORK_BOARD`.",
-				),
-			);
+			return Err(NetworkParseError::FieldEncodedIncorrectly(
+				"MionIdentityAnnouncement",
+				"buff",
+				"Only the static string `enumV1` followed by two NUL Terminators is allowed after `MULTI_I/O_NETWORK_BOARD`.",
+			));
 		}
 
 		Ok(Self {
@@ -252,14 +250,14 @@ impl MionIdentity {
 	/// displayed in a list view.
 	#[must_use]
 	pub fn fpga_version(&self) -> String {
-		let mut fpga_version = String::new();
+		let mut fpga_version = String::with_capacity(8);
 		for byte in [
 			self.fpga_version[3],
 			self.fpga_version[2],
 			self.fpga_version[1],
 			self.fpga_version[0],
 		] {
-			fpga_version.push_str(&format!("{byte:x}"));
+			_ = write!(&mut fpga_version, "{byte:x}");
 		}
 		fpga_version
 	}
@@ -267,14 +265,14 @@ impl MionIdentity {
 	/// displayed in a detail view.
 	#[must_use]
 	pub fn detailed_fpga_version(&self) -> String {
-		let mut fpga_version = String::new();
+		let mut fpga_version = String::with_capacity(8);
 		for byte in [
 			self.fpga_version[3],
 			self.fpga_version[2],
 			self.fpga_version[1],
 			self.fpga_version[0],
 		] {
-			fpga_version.push_str(&format!("{byte:02x}"));
+			_ = write!(&mut fpga_version, "{byte:02x}");
 		}
 		fpga_version
 	}
@@ -641,15 +639,17 @@ mod unit_tests {
 			Err(MIONAPIError::DeviceNameCannotBeEmpty),
 		);
 		// Success!
-		assert!(MionIdentity::new(
-			None,
-			[0, 0, 0, 0],
-			[0, 0, 0, 0],
-			Ipv4Addr::LOCALHOST,
-			MacAddress::new([0, 0, 0, 0, 0, 0]),
-			"00-00-00-00-00-00".to_owned(),
-		)
-		.is_ok());
+		assert!(
+			MionIdentity::new(
+				None,
+				[0, 0, 0, 0],
+				[0, 0, 0, 0],
+				Ipv4Addr::LOCALHOST,
+				MacAddress::new([0, 0, 0, 0, 0, 0]),
+				"00-00-00-00-00-00".to_owned(),
+			)
+			.is_ok()
+		);
 	}
 
 	#[test]
@@ -1003,8 +1003,8 @@ mod unit_tests {
 		let on_identity =
 			MionIdentity::try_from((Ipv4Addr::LOCALHOST, Bytes::from(Vec::from(ON_ANNOUNCEMENT))))
 				.expect(
-				"Failed to parse `ON_ANNOUNCEMENT` from an actual data packet. Parser is broken.",
-			);
+					"Failed to parse `ON_ANNOUNCEMENT` from an actual data packet. Parser is broken.",
+				);
 
 		assert_eq!(
 			off_identity.detailed_sdk_version(),

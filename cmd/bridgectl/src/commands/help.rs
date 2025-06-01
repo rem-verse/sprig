@@ -5,8 +5,8 @@
 //! so we can do things like printing the output in JSON.
 
 use crate::{
-	knobs::cli::{CliArguments, Subcommands},
 	SHOULD_LOG_JSON,
+	knobs::cli::{CliArguments, Subcommands},
 };
 use clap::{Arg, Command, CommandFactory};
 use tracing::{field::valuable, info};

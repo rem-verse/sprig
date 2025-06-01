@@ -44,6 +44,7 @@
 //! but obviously the fastest will be when we don't have to do a lookup at all.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{
 		get_control_port, get_scan_timeout, lease_bridge_config, lease_bridge_config_optionally,
 	},
@@ -56,12 +57,11 @@ use crate::{
 		env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
-	discovery::{find_mion, MIONFindBy},
-	proto::control::MionIdentity,
 	BridgeHostState,
+	discovery::{MIONFindBy, find_mion},
+	proto::control::MionIdentity,
 };
 use mac_address::MacAddress;
 use miette::miette;
@@ -117,7 +117,9 @@ pub async fn target_bridge(
 				"No bridge specified in environment, and argument is missing or _may_ not be bridge name, trying to load default from configuration.",
 			);
 		} else {
-			info!("No bridge specified in environment, and argument is missing or _may_ not be a bridge name, trying to load default from configuration.");
+			info!(
+				"No bridge specified in environment, and argument is missing or _may_ not be a bridge name, trying to load default from configuration."
+			);
 		}
 
 		if !try_to_load_default().await {

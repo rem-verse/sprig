@@ -8,7 +8,7 @@
 use crate::serial::underlying::SyncSerialPort;
 use std::{
 	io::{Error as IoError, ErrorKind as IoErrorKind, IoSlice, IoSliceMut, Result as IoResult},
-	mem::{forget, ManuallyDrop},
+	mem::{ManuallyDrop, forget},
 	os::windows::io::{AsRawHandle, FromRawHandle},
 	pin::Pin,
 	task::{Context, Poll},

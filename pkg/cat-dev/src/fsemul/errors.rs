@@ -4,7 +4,7 @@ use crate::{
 	errors::{APIError, CatBridgeError, NetworkError, NetworkParseError},
 	fsemul::{
 		pcfs::errors::{PCFSApiError, SataProtocolError},
-		sdio::errors::SDIOProtocolError,
+		sdio::errors::{SDIOAPIError, SDIONetworkError, SDIOProtocolError},
 	},
 };
 use bytes::Bytes;
@@ -27,7 +27,9 @@ pub enum FSEmulAPIError {
 	#[error("DLF files must have an ending address that appears _last_, and is an empty string.")]
 	#[diagnostic(code(cat_dev::api::fsemul::dlf_must_have_ending))]
 	DlfMustHaveEnding,
-	#[error("You tried to place a disk item past the current ending, please update the ending, before updating the new item.")]
+	#[error(
+		"You tried to place a disk item past the current ending, please update the ending, before updating the new item."
+	)]
 	#[diagnostic(code(cat_dev::api::fsemul::dlf_update_ending_first))]
 	DlfUpsertEndingFirst,
 	#[error("Failed to interact with path, file must be open first: {0:?}")]
@@ -36,6 +38,9 @@ pub enum FSEmulAPIError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	PCFS(#[from] PCFSApiError),
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	SDIO(#[from] SDIOAPIError),
 }
 
 impl From<FSEmulAPIError> for CatBridgeError {
@@ -55,6 +60,17 @@ impl From<PCFSApiError> for CatBridgeError {
 	}
 }
 
+impl From<SDIOAPIError> for APIError {
+	fn from(value: SDIOAPIError) -> Self {
+		Self::FSEmul(value.into())
+	}
+}
+impl From<SDIOAPIError> for CatBridgeError {
+	fn from(value: SDIOAPIError) -> Self {
+		Self::API(value.into())
+	}
+}
+
 /// Errors dealing with the filesystem specifically related to
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
 pub enum FSEmulFSError {
@@ -65,7 +81,7 @@ pub enum FSEmulFSError {
 	#[diagnostic(code(cat_dev::fs::fsemul::cant_find_path))]
 	CantFindPath,
 	/// We cannot find the root `CAFE_SDK` path.
-	#[error("We can't find the root Cafe SDK directory, please use explicit paths instead.")]
+	#[error("We can't find the root Cafe SDK folder, please use explicit paths instead.")]
 	#[diagnostic(code(cat_dev::fs::fsemul::cant_find_cafe_sdk_path))]
 	CantFindCafeSdkPath,
 	/// The passed in Cafe SDK path did not have the appropriate directories.
@@ -73,7 +89,9 @@ pub enum FSEmulFSError {
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_cafe_sdk_path))]
 	CafeSdkPathCorrupt,
 	/// A DLF file contained a very invalid line.
-	#[error("While parsing a disk layout file we ran into a line which is not in the format of: `<hex address>,\"<path>\"`: {0}")]
+	#[error(
+		"While parsing a disk layout file we ran into a line which is not in the format of: `<hex address>,\"<path>\"`: {0}"
+	)]
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_dlf_line))]
 	DlfCorruptLine(String),
 	/// A DLF file contained a bad termination line.
@@ -81,13 +99,40 @@ pub enum FSEmulFSError {
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_dlf_final_line))]
 	DlfCorruptFinalLine(String),
 	/// A DLF file had a bad version string file.
-	#[error("While parsing a disk layout file, the first line should be a version string (e.g. `v1.00`), which this was not: {0}")]
+	#[error(
+		"While parsing a disk layout file, the first line should be a version string (e.g. `v1.00`), which this was not: {0}"
+	)]
 	#[diagnostic(code(cat_dev::fs::fsemul::corrupt_dlf_version_line))]
 	DlfCorruptVersionLine(String),
 }
 impl From<FSEmulFSError> for CatBridgeError {
 	fn from(value: FSEmulFSError) -> Self {
 		Self::FS(value.into())
+	}
+}
+
+/// Errors on the network side of dealing with FS Emulation.
+#[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
+pub enum FSEmulNetworkError {
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	SDIO(#[from] SDIONetworkError),
+}
+
+impl From<FSEmulNetworkError> for CatBridgeError {
+	fn from(value: FSEmulNetworkError) -> Self {
+		Self::Network(value.into())
+	}
+}
+
+impl From<SDIONetworkError> for NetworkError {
+	fn from(value: SDIONetworkError) -> Self {
+		Self::FSEmul(value.into())
+	}
+}
+impl From<SDIONetworkError> for CatBridgeError {
+	fn from(value: SDIONetworkError) -> Self {
+		Self::Network(value.into())
 	}
 }
 

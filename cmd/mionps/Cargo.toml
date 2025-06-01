@@ -10,6 +10,6 @@ version.workspace = true
 publish = false
 
 [dependencies]
-cat-dev = { path = "../../pkg/cat-dev" }
+cat-dev = { default-features = false, features = ["clients"], path = "../../pkg/cat-dev" }
 time.workspace = true
 tokio.workspace = true

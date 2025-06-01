@@ -7,42 +7,52 @@ license.workspace = true
 repository.workspace = true
 version.workspace = true
 
+[features]
+default = ["clients", "serial", "servers"]
+clients = ["bitflags", "form_urlencoded", "local-ip-address", "mac_address", "network-interface", "rand", "reqwest", "tower", "wide"]
+scientists = []
+serial = ["libc", "pin-project-lite", "windows"]
+servers = ["bitflags", "local-ip-address", "rand", "sysinfo", "tower", "walkdir", "wide"]
+
 [dependencies]
 aes = "^0.8.4"
-bitflags = { version = "^2.7.0", default-features = false }
+bitflags = { version = "^2.9.1", default-features = false, optional = true }
 bytes.workspace = true
 cipher = { version = "^0.4.4", features = ["alloc", "block-padding"] }
 configparser = "^3.1.0"
 ecb = "^0.1.2"
 fnv.workspace = true
+form_urlencoded = { version = "^1.2.1", optional = true }
 futures.workspace = true
-local-ip-address = "^0.6.3"
-mac_address.workspace = true
+local-ip-address = { version = "^0.6.5", optional = true }
+mac_address = { optional = true, workspace = true }
 miette.workspace = true
-network-interface.workspace = true
-pin-project-lite = "^0.2.16"
-reqwest = { version = "^0.12.12", default-features = false, features=["charset", "macos-system-configuration"] }
-scc = "^2.3.0"
-serde = "^1.0.217"
-serde_urlencoded = "^0.7.1"
-sysinfo = { version = "^0.33.1", default-features = false, features=["disk", "linux-tmpfs"] }
-thiserror = "^2.0.11"
+network-interface = { optional = true, workspace = true }
+pin-project-lite = { version = "^0.2.16", optional = true }
+reqwest = { version = "^0.12.18", default-features = false, features=["charset", "macos-system-configuration"], optional = true }
+rand = { version = "^0.9.0", optional = true }
+scc = "^2.3.4"
+sysinfo = { version = "^0.35.1", default-features = false, features=["disk", "linux-tmpfs"], optional = true }
+thiserror = "^2.0.12"
 tracing.workspace = true
 tokio.workspace = true
-tokio-util = { version = "^0.7.13", default-features = false, features = ["codec"] }
+tokio-util = { version = "^0.7.15", default-features = false, features = ["codec"] }
+tower = { version = "^0.5.2", default-features = false, features = ["util", "make"], optional = true }
 valuable.workspace = true
-walkdir = "^2.5.0"
-whoami = "^1.5.2"
+walkdir = { version = "^2.5.0", optional = true }
+wide = { version = "^0.7.32", optional = true }
+whoami = "^1.6.0"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "macos"))'.dependencies]
-libc = "^0.2"
+libc = { version = "^0.2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "^0.58.0", default-features = false, features=["Win32_Devices_Communication", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading"] }
+windows = { version = "^0.61.1", default-features = false, features=["Win32_Devices_Communication", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading", "std"], optional = true }
 
 [dev-dependencies]
-tempfile = "^3.15.0"
+tempfile = "^3.20.0"
 
 [package.metadata.docs.rs]
+features = ["clients", "scientists", "serial", "servers"]
 rustc-args = ["--cfg", "tokio_unstable", "--cfg", "tracing_unstable"]
 rustdoc-args = ["--cfg", "tokio_unstable", "--cfg", "tracing_unstable"]

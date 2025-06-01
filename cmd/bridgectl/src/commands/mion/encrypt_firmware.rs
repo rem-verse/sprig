@@ -1,15 +1,15 @@
 //! Handle encrypting a MION firmware file distributed as part of the Cafe SDK.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	exit_codes::{
 		ENCRYPT_FW_BAD_OUTPUT_PATH, ENCRYPT_FW_COULD_NOT_ENCRYPT_FW, ENCRYPT_FW_COULD_NOT_READ_FW,
 		ENCRYPT_FW_COULD_NOT_WRITE_FW,
 	},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::firmware::raw_encrypt;
-use miette::{miette, IntoDiagnostic};
+use miette::{IntoDiagnostic, miette};
 use std::path::{Path, PathBuf};
 use tracing::{error, field::valuable};
 
@@ -37,8 +37,8 @@ pub async fn handle_encrypt_firmware(
 					"\n{:?}",
 					add_context_to(
 						miette!(
-    					"Could not read the firmware file to encrypt, perhaps some filesystem error?"
-    				),
+							"Could not read the firmware file to encrypt, perhaps some filesystem error?"
+						),
 						[
 							cause,
 							miette!(format!("Was Reading File: {}", firmware_file.display())),
@@ -69,8 +69,8 @@ pub async fn handle_encrypt_firmware(
 						"\n{:?}",
 						add_context_to(
 							miette!(
-    					  "Could not encrypt the firmware file, perhaps it is corrupt in some way?"
-    				  ),
+								"Could not encrypt the firmware file, perhaps it is corrupt in some way?"
+							),
 							[
 								cause.into(),
 								miette!(format!("Was Reading File: {}", firmware_file.display())),
@@ -105,8 +105,8 @@ pub async fn handle_encrypt_firmware(
 				"\n{:?}",
 				add_context_to(
 					miette!(
-    				"Could not write the encrypted firmware file, perhaps some filesystem error?"
-    			),
+						"Could not write the encrypted firmware file, perhaps some filesystem error?"
+					),
 					[
 						cause,
 						miette!(format!("Was Writing File: {}", output_path.display())),

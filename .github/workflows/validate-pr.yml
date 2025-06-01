@@ -9,7 +9,7 @@ on:
 jobs:
   lint-bash:
     name: Lint Bash Scripts
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v4
@@ -23,7 +23,7 @@ jobs:
         run: ./.github/scripts/lint-bash.sh
   lint-pwsh:
     name: Lint Powershell Scripts
-    runs-on: windows-2022
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - name: Install PSScriptAnalyzer
@@ -37,7 +37,7 @@ jobs:
         run: ./.github/scripts/lint-pwsh.ps1
   fmt-and-clippy:
     name: Format & Clippy
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -45,45 +45,47 @@ jobs:
       - name: Run format check
         run: cargo fmt --all --check
       - name: Validate clippy
-        run: cargo clippy -- -W clippy::pedantic -D warnings
+        run: cargo clippy --no-default-features --all-features -- -W clippy::pedantic -D warnings
   build:
     name: Build
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, windows-2022, windows-2025, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup update stable
       - name: Run Build
-        run: cargo build --all
+        run: cargo build --all --all-features
   test:
     name: Run non doc tests
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, windows-2022, windows-2025, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: Install Rust
         run: rustup update stable
       - name: Run Nextest
-        run: cargo nextest run
+        run: cargo nextest run --all-features
         env:
           RUST_BACKTRACE: full
   doc-test:
     name: Run doc tests
     strategy:
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, windows-2022, windows-2025, macos-13, macos-14, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup update stable
       - name: Run Doc Tests
-        run: cargo test --doc
+        run: cargo test --doc --all-features
         env:
           RUST_BACKTRACE: full

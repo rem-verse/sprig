@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 
-use miette::{miette, Context, IntoDiagnostic, Result};
+use miette::{Context, IntoDiagnostic, Result, miette};
 use std::{
 	env::var as env_var,
 	net::SocketAddr,
@@ -9,7 +9,7 @@ use std::{
 use tracing::debug;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{
-	fmt::layer as tracing_fmt_layer, prelude::*, registry as subscriber_registry, EnvFilter,
+	EnvFilter, fmt::layer as tracing_fmt_layer, prelude::*, registry as subscriber_registry,
 };
 
 /// Check if we have actually initialized logging before.
@@ -81,7 +81,13 @@ pub fn install_logging_handlers(use_json: bool) -> Result<()> {
 
 		if use_json {
 			registry
-				.with(tracing_fmt_layer().with_target(false).json())
+				.with(
+					tracing_fmt_layer()
+						.with_target(false)
+						.json()
+						.with_current_span(false)
+						.with_span_list(true),
+				)
 				.with(ErrorLayer::default())
 				.with(
 					console_subscriber::ConsoleLayer::builder()
@@ -92,7 +98,7 @@ pub fn install_logging_handlers(use_json: bool) -> Result<()> {
 				.init();
 		} else {
 			registry
-				.with(tracing_fmt_layer().with_target(true))
+				.with(tracing_fmt_layer().with_target(true).compact())
 				.with(ErrorLayer::default())
 				.with(
 					console_subscriber::ConsoleLayer::builder()
@@ -104,12 +110,18 @@ pub fn install_logging_handlers(use_json: bool) -> Result<()> {
 		}
 	} else if use_json {
 		registry
-			.with(tracing_fmt_layer().with_target(true).json())
+			.with(
+				tracing_fmt_layer()
+					.with_target(true)
+					.json()
+					.with_current_span(false)
+					.with_span_list(true),
+			)
 			.with(ErrorLayer::default())
 			.init();
 	} else {
 		registry
-			.with(tracing_fmt_layer().with_target(true))
+			.with(tracing_fmt_layer().with_target(true).compact())
 			.with(ErrorLayer::default())
 			.init();
 	}

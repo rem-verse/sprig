@@ -16,8 +16,8 @@ use cat_dev::{
 		errors::MIONProtocolError,
 		parameter::{get_parameters, set_parameters_and_get_changed_values},
 		proto::parameter::{
-			well_known::ParameterLocationSpecification, DumpedMionParameters,
-			MIONParamProtocolError,
+			DumpedMionParameters, MIONParamProtocolError,
+			well_known::ParameterLocationSpecification,
 		},
 	},
 };

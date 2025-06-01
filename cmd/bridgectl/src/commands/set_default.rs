@@ -4,10 +4,10 @@
 //! system.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{get_targeted_bridge_name, lease_bridge_config_mut},
 	exit_codes::{SET_DEFAULT_BRIDGE_DOESNT_EXIST, SET_DEFAULT_COULD_NOT_SAVE_TO_DISK},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use miette::miette;
 use tracing::{error, info};

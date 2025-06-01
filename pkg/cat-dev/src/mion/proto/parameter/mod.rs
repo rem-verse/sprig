@@ -11,7 +11,7 @@ pub use errors::*;
 
 use crate::{
 	errors::NetworkParseError,
-	mion::proto::parameter::well_known::{index_from_parameter_name, ValuableParameterDump},
+	mion::proto::parameter::well_known::{ValuableParameterDump, index_from_parameter_name},
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use std::fmt::{Display, Formatter, Result as FmtResult};

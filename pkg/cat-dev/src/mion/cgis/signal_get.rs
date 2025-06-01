@@ -3,11 +3,13 @@
 
 use crate::{
 	errors::NetworkError,
-	mion::{cgis::do_simple_request, proto::cgis::MIONCGIErrors},
+	mion::{
+		cgis::{do_simple_request, encode_url_parameters},
+		proto::cgis::MIONCGIErrors,
+	},
 };
 use reqwest::{Client, Method};
-use serde::Serialize;
-use std::net::Ipv4Addr;
+use std::{fmt::Display, net::Ipv4Addr, ops::Deref};
 
 /// Perform a `signal_get` request for the `VDD2` signal given a host.
 ///
@@ -63,22 +65,16 @@ pub async fn get_vdd2_with_raw_client(
 ///
 /// - If we cannot make an HTTP request to the MION Request.
 /// - If we fail to encode your parameters into a request body.
-pub async fn do_raw_signal_http_request<UrlEncodableType>(
+pub async fn do_raw_signal_http_request(
 	client: &Client,
 	mion_ip: Ipv4Addr,
-	url_parameters: UrlEncodableType,
-) -> Result<String, NetworkError>
-where
-	UrlEncodableType: Serialize,
-{
+	url_parameters: &[(impl Deref<Target = str>, impl Display)],
+) -> Result<String, NetworkError> {
 	do_simple_request::<String>(
 		client,
 		Method::POST,
 		format!("http://{mion_ip}/signal_get.cgi"),
-		Some(
-			serde_urlencoded::to_string(&url_parameters)
-				.map_err(MIONCGIErrors::FormDataEncodeError)?,
-		),
+		Some(encode_url_parameters(url_parameters)),
 	)
 	.await
 }

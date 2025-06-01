@@ -1,4 +1,5 @@
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::lease_fsemul_config_optionally,
 	exit_codes::{
 		ARGV_SERIAL_CONFLICTING_ARGUMENTS, SERIAL_PORT_CONNECTION_FAILURE,
@@ -9,7 +10,6 @@ use crate::{
 		env::{BRIDGECTL_SERIAL_PORT, SESSION_DEBUG_OUT_PORT},
 	},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::serial::{AsyncSerialPort, SerialLines};
 use miette::miette;
@@ -20,7 +20,7 @@ use tokio::{
 	signal::ctrl_c as ctrl_c_signal,
 	task::{Builder as TaskBuilder, JoinHandle},
 };
-use tracing::{debug, error, error_span, field::valuable, info, warn, Instrument};
+use tracing::{Instrument, debug, error, error_span, field::valuable, info, warn};
 
 /// The amount of times we'll try reconnecting to debug out.
 const DEBUG_OUT_RETRY_COUNT: usize = 5_usize;
@@ -73,58 +73,58 @@ pub async fn coalesce_serial_ports(
 	serial_port_flags: &SharedSerialPortFlags,
 	serial_port_positional: Option<&PathBuf>,
 ) -> SerialLogger {
-	let arg_to_take = if serial_port_flags.serial_port_flag().is_some()
-		&& serial_port_positional.is_some()
-	{
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::argv::conflicting_serial_port_args",
-				flags.serial_port = valuable(&serial_port_flags),
-				args.serial_port = ?serial_port_positional,
-				suggestions = valuable(&[
-					"You only need to specify a serial port in one way, either through an argument, or a flag.",
-					"There is no such thing as multiple serial ports for the cat-dev.",
-				]),
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("Positional argument conflicts with flag arguments!"),
-					[
-						miette!("You only need to specify a serial port in one way, either through an argument, or a flag."),
-						miette!(
-							help = format!(
-								"Serial Port Flags: {serial_port_flags}",
+	let arg_to_take =
+		if serial_port_flags.serial_port_flag().is_some() && serial_port_positional.is_some() {
+			if SHOULD_LOG_JSON() {
+				error!(
+					id = "bridgectl::argv::conflicting_serial_port_args",
+					flags.serial_port = valuable(&serial_port_flags),
+					args.serial_port = ?serial_port_positional,
+					suggestions = valuable(&[
+						"You only need to specify a serial port in one way, either through an argument, or a flag.",
+						"There is no such thing as multiple serial ports for the cat-dev.",
+					]),
+				);
+			} else {
+				error!(
+					"\n{:?}",
+					add_context_to(
+						miette!("Positional argument conflicts with flag arguments!"),
+						[
+							miette!(
+								"You only need to specify a serial port in one way, either through an argument, or a flag."
 							),
-							"A CAT-DEV does not support multiple serial ports at the same time.",
-						),
-					].into_iter(),
-				),
-			);
-		}
+							miette!(
+								help = format!("Serial Port Flags: {serial_port_flags}"),
+								"A CAT-DEV does not support multiple serial ports at the same time.",
+							),
+						]
+						.into_iter(),
+					),
+				);
+			}
 
-		std::process::exit(ARGV_SERIAL_CONFLICTING_ARGUMENTS);
-	} else if let Some(flag) = serial_port_flags.serial_port_flag() {
-		flag
-	} else if let Some(pos) = serial_port_positional {
-		pos
-	} else if let Some(env) = BRIDGECTL_SERIAL_PORT.as_ref() {
-		env
-	} else {
-		let fsemul_port = lease_fsemul_config_optionally()
-			.await
-			.and_then(|config| config.get_debug_out_port());
-		// Connect to the debug out port.
-		return SerialLogger::new_from_debug_out_port(
-			mion_ip,
-			serial_port_flags
-				.debug_out_port()
-				.or(*SESSION_DEBUG_OUT_PORT)
-				.or(fsemul_port)
-				.unwrap_or(6001),
-		);
-	};
+			std::process::exit(ARGV_SERIAL_CONFLICTING_ARGUMENTS);
+		} else if let Some(flag) = serial_port_flags.serial_port_flag() {
+			flag
+		} else if let Some(pos) = serial_port_positional {
+			pos
+		} else if let Some(env) = BRIDGECTL_SERIAL_PORT.as_ref() {
+			env
+		} else {
+			let fsemul_port = lease_fsemul_config_optionally()
+				.await
+				.and_then(|config| config.get_debug_out_port());
+			// Connect to the debug out port.
+			return SerialLogger::new_from_debug_out_port(
+				mion_ip,
+				serial_port_flags
+					.debug_out_port()
+					.or(*SESSION_DEBUG_OUT_PORT)
+					.or(fsemul_port)
+					.unwrap_or(6001),
+			);
+		};
 
 	let port = match AsyncSerialPort::new(arg_to_take) {
 		Ok(port) => port,
@@ -145,7 +145,10 @@ pub async fn coalesce_serial_ports(
 						[
 							miette!("Failed to connect to specified serial device."),
 							miette!(
-								help = format!("Specified serial device is: {}", arg_to_take.display()),
+								help = format!(
+									"Specified serial device is: {}",
+									arg_to_take.display()
+								),
 								"Please file an issue if it's not clear why your OS is giving us an error.",
 							),
 						]

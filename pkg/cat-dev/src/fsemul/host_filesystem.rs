@@ -2,25 +2,30 @@
 //! client.
 
 use crate::{
+	TitleID,
 	errors::{CatBridgeError, FSError},
 	fsemul::{
 		bsf::BootSystemFile, dlf::DiskLayoutFile, errors::FSEmulFSError, pcfs::errors::PCFSApiError,
 	},
-	TitleID,
 };
 use bytes::{Bytes, BytesMut};
-use scc::{hash_map::OccupiedEntry as CMOccupiedEntry, HashMap as ConcurrentMap};
+use scc::{
+	HashMap as ConcurrentMap, HashSet as ConcurrentSet, hash_map::OccupiedEntry as CMOccupiedEntry,
+};
 use std::{
 	collections::HashMap,
 	hash::RandomState,
 	io::{Error as IOError, SeekFrom},
 	path::{Path, PathBuf},
-	sync::atomic::{AtomicI32, Ordering as AtomicOrdering},
+	sync::{
+		Arc,
+		atomic::{AtomicI32, Ordering as AtomicOrdering},
+	},
 };
 use tokio::{
 	fs::{
-		create_dir_all, read_dir, remove_file, rename, write as fs_write, File, OpenOptions,
-		ReadDir,
+		File, OpenOptions, ReadDir, create_dir_all, read_dir, remove_file, rename,
+		write as fs_write,
 	},
 	io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
@@ -28,7 +33,7 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 use whoami::username;
 
 /// Current "FD" for directories. Just a counter going up.
-static DIRECTORY_FD: AtomicI32 = AtomicI32::new(1);
+static FOLDER_FD: AtomicI32 = AtomicI32::new(1);
 
 /// A wrapper around interacting with the 'host' or PC filesystem for the
 /// various times a cat-dev will reach out to the host.
@@ -37,18 +42,32 @@ static DIRECTORY_FD: AtomicI32 = AtomicI32::new(1);
 /// methods to make getting files/generating default files/etc. easy. Most of
 /// the actual logic for turning a request from `SDIO`, `ATAPI`, etc. all come
 /// from those client/server implementations rather than the logic living here.
-#[derive(Debug)]
+#[allow(
+	// Clippy the type is _not_ that complex.
+	clippy::type_complexity,
+)]
+#[derive(Clone, Debug)]
 pub struct HostFilesystem {
 	/// The path to the base data directory to serve a filesystem out of.
 	cafe_sdk_path: PathBuf,
 	/// List of open file handles.
 	///
-	/// This contains a value of (file, file size, path).
-	open_file_handles: ConcurrentMap<i32, (File, u64, PathBuf)>,
-	/// List of open directory "handles".
+	/// This contains a value of (file, file size, path, stream owner).
+	open_file_handles: Arc<ConcurrentMap<i32, (File, u64, PathBuf, Option<u64>)>>,
+	/// List of open folder "handles".
 	///
-	/// This contains a value of (read directory, is end, path)
-	open_folder_handles: ConcurrentMap<i32, (ReadDir, bool, PathBuf)>,
+	/// This contains a value of (read directory, is end, path, stream owner)
+	open_folder_handles: Arc<ConcurrentMap<i32, (ReadDir, bool, PathBuf, Option<u64>)>>,
+	/// A set of folders that we've "marked" as read-only.
+	///
+	/// We don't actually synchronize this to the filesystem because the original
+	/// cafe-sdk was written for Windows 7 which silently ignores "Read-Only"
+	/// attributes on directories. Still allowing you to create files within
+	/// directories, modify them, etc.
+	///
+	/// This is not the case on older windows distributions, unix based distros,
+	/// or similar.
+	folders_marked_read_only: Arc<ConcurrentSet<PathBuf>>,
 }
 
 impl HostFilesystem {
@@ -66,18 +85,18 @@ impl HostFilesystem {
 	/// notice spurious errors with case-insensitivity on linux specifically. If
 	/// transferring an SDK from a Windows/Mac Case Insensitive to a Mac/Linux
 	/// case sensitive file system. It is recommended users
-	/// create their own directory using our recovery tools, rather than
+	/// create their own folder using our recovery tools, rather than
 	/// rsync'ing a path over from case-insensitive, to case-sensitive.
 	///
 	/// ## Errors
 	///
-	/// If the Cafe SDK directory is corrupt, or can't be found. A Cafe SDK
-	/// directory is considered corrupt if it is missing core files that we
+	/// If the Cafe SDK folder is corrupt, or can't be found. A Cafe SDK
+	/// folder is considered corrupt if it is missing core files that we
 	/// _need_ to be able to serve a Cafe-OS distribution. These file
 	/// requirements may change from version to version of this crate, but should
-	/// always be compatible with a clean cafe sdk directory.
+	/// always be compatible with a clean cafe sdk folder.
 	pub async fn from_cafe_dir(cafe_dir: Option<PathBuf>) -> Result<Self, FSError> {
-		let Some(cafe_sdk_path) = cafe_dir.or_else(Self::default_cafe_directory) else {
+		let Some(cafe_sdk_path) = cafe_dir.or_else(Self::default_cafe_folder) else {
 			return Err(FSEmulFSError::CantFindCafeSdkPath.into());
 		};
 
@@ -120,8 +139,9 @@ impl HostFilesystem {
 
 		Ok(Self {
 			cafe_sdk_path,
-			open_file_handles: ConcurrentMap::new(),
-			open_folder_handles: ConcurrentMap::new(),
+			folders_marked_read_only: Arc::new(ConcurrentSet::new()),
+			open_file_handles: Arc::new(ConcurrentMap::new()),
+			open_folder_handles: Arc::new(ConcurrentMap::new()),
 		})
 	}
 
@@ -144,6 +164,7 @@ impl HostFilesystem {
 		&self,
 		open_options: OpenOptions,
 		path: &PathBuf,
+		stream_owner: Option<u64>,
 	) -> Result<i32, FSError> {
 		let fd = open_options.open(path).await?;
 		let raw_fd;
@@ -161,7 +182,7 @@ impl HostFilesystem {
 		let md = fd.metadata().await?;
 
 		self.open_file_handles
-			.insert(raw_fd, (fd, md.len(), path.clone()))
+			.insert(raw_fd, (fd, md.len(), path.clone(), stream_owner))
 			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
 		Ok(raw_fd)
 	}
@@ -172,15 +193,34 @@ impl HostFilesystem {
 	pub async fn get_file(
 		&self,
 		fd: i32,
-	) -> Option<CMOccupiedEntry<i32, (File, u64, PathBuf), RandomState>> {
-		self.open_file_handles.get_async(&fd).await
+		for_stream: Option<u64>,
+	) -> Option<CMOccupiedEntry<i32, (File, u64, PathBuf, Option<u64>), RandomState>> {
+		self.open_file_handles
+			.get_async(&fd)
+			.await
+			.and_then(|entry| {
+				if Self::allow_file_access(&entry, for_stream) {
+					Some(entry)
+				} else {
+					None
+				}
+			})
 	}
 
 	/// Get the file length from a file descriptor number.
 	///
 	/// This file must already be opened (in order to get the file descriptor).
-	pub async fn file_length(&self, fd: i32) -> Option<u64> {
-		self.open_file_handles.get_async(&fd).await.map(|e| e.1)
+	pub async fn file_length(&self, fd: i32, for_stream: Option<u64>) -> Option<u64> {
+		self.open_file_handles
+			.get_async(&fd)
+			.await
+			.and_then(|entry| {
+				if Self::allow_file_access(&entry, for_stream) {
+					Some(entry.1)
+				} else {
+					None
+				}
+			})
 	}
 
 	/// Read from a file descriptor that is actively open.
@@ -197,10 +237,14 @@ impl HostFilesystem {
 		&self,
 		fd: i32,
 		total_data_to_read: usize,
+		for_stream: Option<u64>,
 	) -> Result<Option<Bytes>, FSError> {
 		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
 			return Ok(None);
 		};
+		if !Self::allow_file_access(&real_entry, for_stream) {
+			return Ok(None);
+		}
 		let file_reader = &mut real_entry.0;
 		let mut file_buff = BytesMut::zeroed(total_data_to_read);
 		let bytes_read = file_reader.read(&mut file_buff).await?;
@@ -221,10 +265,18 @@ impl HostFilesystem {
 	///
 	/// If the file descriptor is open, but we could not write to the open file
 	/// descriptor.
-	pub async fn write_file(&self, fd: i32, data_to_write: Bytes) -> Result<(), FSError> {
+	pub async fn write_file(
+		&self,
+		fd: i32,
+		data_to_write: Bytes,
+		for_stream: Option<u64>,
+	) -> Result<(), FSError> {
 		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
 			return Err(FSError::IO(IOError::other("file not open")));
 		};
+		if !Self::allow_file_access(&real_entry, for_stream) {
+			return Err(FSError::IO(IOError::other("file not open")));
+		}
 		let file_writer = &mut real_entry.0;
 		file_writer.write_all(&data_to_write).await?;
 
@@ -240,10 +292,18 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If we cannot seek to the beginning or end of the file.
-	pub async fn seek_file(&self, fd: i32, begin: bool) -> Result<(), FSError> {
+	pub async fn seek_file(
+		&self,
+		fd: i32,
+		begin: bool,
+		for_stream: Option<u64>,
+	) -> Result<(), FSError> {
 		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
 			return Ok(());
 		};
+		if !Self::allow_file_access(&real_entry, for_stream) {
+			return Ok(());
+		}
 		let file_reader = &mut real_entry.0;
 
 		if begin {
@@ -263,7 +323,14 @@ impl HostFilesystem {
 	///
 	/// If we cannot close our file handle when our ref count reaches 0, or if
 	/// the file isn't open at all.
-	pub async fn close_file(&self, fd: i32) {
+	pub async fn close_file(&self, fd: i32, for_stream: Option<u64>) {
+		if let Some(entry) = self.open_file_handles.get_async(&fd).await {
+			if !Self::allow_file_access(&entry, for_stream) {
+				// Don't allow streams to close other streams files.
+				return;
+			}
+		}
+
 		self.open_file_handles.remove_async(&fd).await;
 	}
 
@@ -274,14 +341,42 @@ impl HostFilesystem {
 	///
 	/// ## Errors
 	///
-	/// If the path doesn't exist, then we can't open the directory.
-	pub async fn open_folder(&self, path: &PathBuf) -> Result<i32, FSError> {
+	/// If the path doesn't exist, then we can't open the folder.
+	pub async fn open_folder(
+		&self,
+		path: &PathBuf,
+		for_stream: Option<u64>,
+	) -> Result<i32, FSError> {
 		let dhandle = read_dir(path).await?;
-		let fake_fd = DIRECTORY_FD.fetch_add(1, AtomicOrdering::SeqCst);
+		let fake_fd = FOLDER_FD.fetch_add(1, AtomicOrdering::SeqCst);
+
 		self.open_folder_handles
-			.insert(fake_fd, (dhandle, false, path.clone()))
+			.insert(fake_fd, (dhandle, false, path.clone(), for_stream))
 			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
 		Ok(fake_fd)
+	}
+
+	/// Mark a folder as being 'read-only' for this session.
+	///
+	/// ## Errors
+	///
+	/// If we could not actually insert the folder into the read only map.
+	pub async fn mark_folder_read_only(&self, path: PathBuf) -> Result<(), FSError> {
+		self.folders_marked_read_only
+			.insert_async(path)
+			.await
+			.map_err(|_| IOError::other("Folder could not be marked read-only?"))
+			.map_err(FSError::IO)
+	}
+
+	/// Mark a folder as being 'read-write' for this session.
+	pub async fn ensure_folder_not_read_only(&self, path: &PathBuf) {
+		self.folders_marked_read_only.remove_async(path).await;
+	}
+
+	/// Check if a folder is marked as being read only.
+	pub async fn folder_is_read_only(&self, path: &PathBuf) -> bool {
+		self.folders_marked_read_only.contains_async(path).await
 	}
 
 	/// Get the next filename/foldername available in a particular folder, and
@@ -293,10 +388,17 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If we get an IO error from the underlying filesystem.
-	pub async fn next_in_folder(&self, fd: i32) -> Result<Option<(PathBuf, usize)>, FSError> {
+	pub async fn next_in_folder(
+		&self,
+		fd: i32,
+		for_stream: Option<u64>,
+	) -> Result<Option<(PathBuf, usize)>, FSError> {
 		let Some(mut entry) = self.open_folder_handles.get_async(&fd).await else {
 			return Ok(None);
 		};
+		if !Self::allow_folder_access(&entry, for_stream) {
+			return Ok(None);
+		}
 
 		let component_count = entry.2.components().count();
 		let mut value: Option<PathBuf> = None;
@@ -328,10 +430,13 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If opening another read dir call does not work.
-	pub async fn reverse_directory(&self, fd: i32) -> Result<(), FSError> {
+	pub async fn reverse_folder(&self, fd: i32, for_stream: Option<u64>) -> Result<(), FSError> {
 		let Some(mut real_entry) = self.open_folder_handles.get_async(&fd).await else {
 			return Ok(());
 		};
+		if !Self::allow_folder_access(&real_entry, for_stream) {
+			return Ok(());
+		}
 
 		real_entry.0 = read_dir(&real_entry.2).await?;
 		real_entry.1 = false;
@@ -346,7 +451,13 @@ impl HostFilesystem {
 	///
 	/// If we cannot close our folder handle when our ref count reaches 0, or if
 	/// the folder isn't open at all.
-	pub async fn close_folder(&self, fd: i32) {
+	pub async fn close_folder(&self, fd: i32, for_stream: Option<u64>) {
+		if let Some(real_entry) = self.open_folder_handles.get_async(&fd).await {
+			if !Self::allow_folder_access(&real_entry, for_stream) {
+				return;
+			}
+		}
+
 		self.open_folder_handles.remove_async(&fd).await;
 	}
 
@@ -447,6 +558,7 @@ impl HostFilesystem {
 	}
 
 	/// Check if a path is allowed to be writable.
+	#[must_use]
 	pub fn path_allows_writes(&self, path: &Path) -> bool {
 		// TODO(mythra): check FSEmulAttributeRules
 		!path.to_string_lossy().contains("%DISC_EMU_DIR")
@@ -609,7 +721,7 @@ impl HostFilesystem {
     unreachable_code,
   )]
 	#[must_use]
-	pub fn default_cafe_directory() -> Option<PathBuf> {
+	pub fn default_cafe_folder() -> Option<PathBuf> {
 		#[cfg(target_os = "windows")]
 		{
 			return Some(PathBuf::from(r"C:\cafe_sdk"));
@@ -710,6 +822,34 @@ impl HostFilesystem {
 
 		Ok(())
 	}
+
+	fn allow_file_access(
+		entry: &CMOccupiedEntry<i32, (File, u64, PathBuf, Option<u64>), RandomState>,
+		requester: Option<u64>,
+	) -> bool {
+		let Some(requesting_stream_id) = requester else {
+			return true;
+		};
+		let Some(owned_stream_id) = entry.3 else {
+			return true;
+		};
+
+		requesting_stream_id == owned_stream_id
+	}
+
+	fn allow_folder_access(
+		entry: &CMOccupiedEntry<i32, (ReadDir, bool, PathBuf, Option<u64>), RandomState>,
+		requester: Option<u64>,
+	) -> bool {
+		let Some(requesting_stream_id) = requester else {
+			return true;
+		};
+		let Some(owned_stream_id) = entry.3 else {
+			return true;
+		};
+
+		requesting_stream_id == owned_stream_id
+	}
 }
 
 const HOST_FILESYSTEM_FIELDS: &[NamedField<'static>] = &[
@@ -755,9 +895,10 @@ impl Valuable for HostFilesystem {
 pub enum ResolvedLocation {
 	/// A location on a particular filesystem.
 	///
-	/// This contains a tuple of:
-	///
-	/// `(ResolvedPath, ClosestExistingCanonicalDirectory)`
+	/// This location _may not exist_. There is a boolean in this struct that
+	/// tells you the final resolved location, the closest resolved location for
+	/// permission checks, and if the path exists and is the same between
+	/// resolution, and what actually exists.
 	Filesystem(FilesystemLocation),
 	/// A network location to fetch.
 	///
@@ -840,10 +981,14 @@ impl Valuable for FilesystemLocation {
 #[cfg(test)]
 pub mod test_helpers {
 	use super::*;
-	use std::fs::{create_dir_all, File};
-	use tempfile::{tempdir, TempDir};
+	use std::fs::{File, create_dir_all};
+	use tempfile::{TempDir, tempdir};
 
 	/// Test helper that creates a simple host filesystem.
+	#[allow(
+		// Allow anyone to write a test for this internally on any feature set.
+		dead_code,
+	)]
 	pub async fn create_temporary_host_filesystem() -> (TempDir, HostFilesystem) {
 		let dir = tempdir().expect("Failed to create temporary directory!");
 
@@ -912,6 +1057,10 @@ pub mod test_helpers {
 	}
 
 	/// Re-export host file system join many for tests.
+	#[allow(
+		// Allow anyone to write a test for this internally on any feature set.
+		dead_code,
+	)]
 	#[must_use]
 	pub fn join_many<PathTy, IterTy>(base: &Path, parts: IterTy) -> PathBuf
 	where
@@ -938,7 +1087,7 @@ mod unit_tests {
 	#[test]
 	pub fn can_find_default_cafe_directory() {
 		assert!(
-			HostFilesystem::default_cafe_directory().is_some(),
+			HostFilesystem::default_cafe_folder().is_some(),
 			"Failed to find default cafe directory for your OS",
 		);
 	}
@@ -1004,7 +1153,9 @@ mod unit_tests {
 			fs.firmware_file_path(),
 			HostFilesystem::join_many(
 				tempdir.path(),
-				["data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img"],
+				[
+					"data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img"
+				],
 			),
 		);
 
@@ -1092,15 +1243,16 @@ mod unit_tests {
 		out_of_path.pop();
 
 		// We shouldn't be able to resolve paths outside of our directory.
-		assert!(fs
-			.resolve_path(
+		assert!(
+			fs.resolve_path(
 				&out_of_path
 					.clone()
 					.into_os_string()
 					.into_string()
 					.expect("Failed to convert pathbuf to string!")
 			)
-			.is_err());
+			.is_err()
+		);
 		assert!(fs.resolve_path("/%MLC_EMU_DIR/../../../").is_err());
 
 		#[cfg(unix)]
@@ -1110,15 +1262,16 @@ mod unit_tests {
 			let mut tempdir_symlink = PathBuf::from(tempdir.path());
 			tempdir_symlink.push("symlink");
 			symlink(out_of_path, tempdir_symlink.clone()).expect("Failed to do symlink!");
-			assert!(fs
-				.resolve_path(&format!(
+			assert!(
+				fs.resolve_path(&format!(
 					"{}/symlink",
 					tempdir_symlink
 						.into_os_string()
 						.into_string()
 						.expect("tempdir symlink wasn't utf8?"),
 				))
-				.is_err());
+				.is_err()
+			);
 		}
 
 		#[cfg(target_os = "windows")]
@@ -1128,15 +1281,16 @@ mod unit_tests {
 			let mut tempdir_symlink = PathBuf::from(tempdir.path());
 			tempdir_symlink.push("symlink");
 			symlink_dir(out_of_path, tempdir_symlink.clone()).expect("Failed to do symlink!");
-			assert!(fs
-				.resolve_path(&format!(
+			assert!(
+				fs.resolve_path(&format!(
 					"{}/symlink",
 					tempdir_symlink
 						.into_os_string()
 						.into_string()
 						.expect("tempdir symlink wasn't utf8?"),
 				))
-				.is_err());
+				.is_err()
+			);
 		}
 	}
 
@@ -1152,20 +1306,20 @@ mod unit_tests {
 		let mut oo = OpenOptions::new();
 		oo.create(false).write(true).read(true);
 		assert!(
-			fs.open_file(oo, &create_path).await.is_err(),
+			fs.open_file(oo, &create_path, None).await.is_err(),
 			"Somehow succeeding opening a file that doesn't exist with no create flag?",
 		);
 		oo = OpenOptions::new();
 		oo.create(true).write(true).truncate(true);
 		let fd = fs
-			.open_file(oo, &create_path)
+			.open_file(oo, &create_path, None)
 			.await
 			.expect("Failed opening a file that doesn't exist with a create flag?");
 		assert!(
 			fs.open_file_handles.len() == 1 && fs.open_file_handles.get(&fd).is_some(),
 			"Open file wasn't in open files list!",
 		);
-		fs.close_file(fd).await;
+		fs.close_file(fd, None).await;
 		assert!(
 			fs.open_file_handles.is_empty(),
 			"Somehow after opening/closing, open file handles was not empty?",
@@ -1183,28 +1337,28 @@ mod unit_tests {
 		let mut oo = OpenOptions::new();
 		oo.read(true).create(false).write(false);
 		let fd = fs
-			.open_file(oo, &path)
+			.open_file(oo, &path, None)
 			.await
 			.expect("Failed to open existing file!");
 
 		// Should be possible to read all bytes.
 		assert_eq!(
 			Some(BytesMut::zeroed(1307).freeze()),
-			fs.read_file(fd, 1307)
+			fs.read_file(fd, 1307, None)
 				.await
 				.expect("Failed to read from FD!"),
 		);
-		fs.seek_file(fd, true)
+		fs.seek_file(fd, true, None)
 			.await
 			.expect("Failed to sync to beginning of file!");
 		// Can read all bytes again!
 		assert_eq!(
 			Some(BytesMut::zeroed(1307).freeze()),
-			fs.read_file(fd, 1307)
+			fs.read_file(fd, 1307, None)
 				.await
 				.expect("Failed to read from FD!"),
 		);
-		fs.close_file(fd).await;
+		fs.close_file(fd, None).await;
 		assert!(
 			fs.open_file_handles.is_empty(),
 			"Somehow after opening/closing, open file handles was not empty?",
@@ -1220,14 +1374,14 @@ mod unit_tests {
 			.expect("Failed to create test directory!");
 
 		let fd = fs
-			.open_folder(&path)
+			.open_folder(&path, None)
 			.await
 			.expect("Failed to open existing folder!");
 		assert!(
 			fs.open_folder_handles.len() == 1,
 			"Expected one open folder handle",
 		);
-		fs.close_folder(fd).await;
+		fs.close_folder(fd, None).await;
 
 		assert!(
 			fs.open_folder_handles.is_empty(),
@@ -1276,52 +1430,63 @@ mod unit_tests {
 			.await
 			.expect("Failed to create file to use!");
 
-		let dfd = fs.open_folder(&path).await.expect("Failed to open file!");
-		assert!(fs
-			.next_in_folder(dfd)
+		let dfd = fs
+			.open_folder(&path, None)
 			.await
-			.expect("Failed to query for next in folder! 1.1!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.2!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.3!")
-			.is_some());
+			.expect("Failed to open file!");
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 1.1!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 1.2!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 1.3!")
+				.is_some()
+		);
 		// We should have hit the end...
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.4!")
-			.is_none());
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 1.4!")
+				.is_none()
+		);
 		// We can call as many times as we want.
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 1.5!")
-			.is_none());
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 1.5!")
+				.is_none()
+		);
 		// Rewind to get to reads again!
-		fs.reverse_directory(dfd)
+		fs.reverse_folder(dfd, None)
 			.await
 			.expect("Failed to reverse directory search!");
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 2.1!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 2.2!")
-			.is_some());
-		assert!(fs
-			.next_in_folder(dfd)
-			.await
-			.expect("Failed to query for next in folder! 2.3!")
-			.is_some());
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 2.1!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 2.2!")
+				.is_some()
+		);
+		assert!(
+			fs.next_in_folder(dfd, None)
+				.await
+				.expect("Failed to query for next in folder! 2.3!")
+				.is_some()
+		);
 	}
 }

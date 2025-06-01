@@ -113,7 +113,7 @@ impl SyncSerialPort {
 					return Err(IoError::new(
 						IoErrorKind::UnexpectedEof,
 						"Failed to fill whole buffer",
-					))
+					));
 				}
 				Ok(read) => working_buff = &mut working_buff[read..],
 				Err(cause) => {
@@ -194,7 +194,7 @@ impl SyncSerialPort {
 					return Err(IoError::new(
 						IoErrorKind::WriteZero,
 						"failed to write whole buffer",
-					))
+					));
 				}
 				Ok(n) => working_buff = &working_buff[n..],
 				Err(cause) => {
@@ -514,7 +514,7 @@ impl std::os::unix::io::FromRawFd for SyncSerialPort {
 	unsafe fn from_raw_fd(fd: std::os::unix::prelude::RawFd) -> Self {
 		Self {
 			inner: RawSyncSerialPort {
-				fd: std::fs::File::from_raw_fd(fd),
+				fd: unsafe { std::fs::File::from_raw_fd(fd) },
 				read_timeout_ms: DEFAULT_TIMEOUT_MS,
 				write_timeout_ms: DEFAULT_TIMEOUT_MS,
 			},

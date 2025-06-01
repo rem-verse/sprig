@@ -5,18 +5,34 @@
 //! specific item.
 
 use crate::{
-	fsemul::errors::{FSEmulAPIError, FSEmulFSError, FSEmulProtocolError},
+	fsemul::errors::{FSEmulAPIError, FSEmulFSError, FSEmulNetworkError, FSEmulProtocolError},
 	mion::errors::{MIONAPIError, MIONProtocolError},
 };
 use bytes::Bytes;
-use local_ip_address::Error as LocalIpAddressError;
-use miette::Diagnostic;
-use network_interface::Error as NetworkInterfaceError;
-use reqwest::Error as ReqwestError;
+use miette::{Diagnostic, Report};
 use std::{ffi::FromBytesUntilNulError, str::Utf8Error, string::FromUtf8Error, time::Duration};
 use thiserror::Error;
-use tokio::{io::Error as IoError, sync::mpsc::error::SendError, task::JoinError};
+use tokio::{io::Error as IoError, task::JoinError};
+
+#[cfg(feature = "servers")]
 use walkdir::Error as WalkdirError;
+
+#[cfg(feature = "clients")]
+use crate::net::client::errors::CommonNetClientNetworkError;
+#[cfg(feature = "clients")]
+use local_ip_address::Error as LocalIpAddressError;
+#[cfg(feature = "clients")]
+use network_interface::Error as NetworkInterfaceError;
+#[cfg(feature = "clients")]
+use reqwest::Error as ReqwestError;
+
+#[cfg(any(feature = "clients", feature = "servers"))]
+use crate::net::errors::{CommonNetAPIError, CommonNetNetworkError};
+
+#[cfg(feature = "servers")]
+use crate::net::server::models::ResponseStreamMessage;
+#[cfg(feature = "servers")]
+use tokio::sync::mpsc::error::SendError;
 
 /// The 'top-level' error type for this entire crate, all error types
 /// wrap underneath this.
@@ -36,7 +52,9 @@ pub enum CatBridgeError {
 	/// - [`tokio::sync::mpsc`]
 	///
 	/// Each of these contain more information.
-	#[error("We could not send a message locally to another part of the process. This channel must've been closed unexpectedly.")]
+	#[error(
+		"We could not send a message locally to another part of the process. This channel must've been closed unexpectedly."
+	)]
 	#[diagnostic(code(cat_dev::closed_channel))]
 	ClosedChannel,
 	/// See [`FSError`] for details.
@@ -62,7 +80,13 @@ pub enum CatBridgeError {
 	#[error("We could not spawn a task (a lightweight thread) to do work on.")]
 	#[diagnostic(code(cat_dev::spawn_failure))]
 	SpawnFailure(IoError),
-	#[error("This cat-dev API requires a 32 bit usize, and this machine does not have it, please upgrade your machine.")]
+	/// An unknown error occured.
+	#[error("An unknown error we couldn't pin down occured: {0:?}")]
+	#[diagnostic(code(cat_dev::unknown))]
+	UnknownError(Report),
+	#[error(
+		"This cat-dev API requires a 32 bit usize, and this machine does not have it, please upgrade your machine."
+	)]
 	#[diagnostic(code(cat_dev::unsupported_bits_per_core))]
 	UnsupportedBitsPerCore,
 }
@@ -73,8 +97,14 @@ pub enum CatBridgeError {
 /// All the APIs within this crate will have errors will be collapsed under
 /// this particular error type. There will be no inner separation between
 /// modules.
-#[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Error, Diagnostic, Debug)]
 pub enum APIError {
+	/// Common network related API errors.
+	#[cfg(any(feature = "clients", feature = "servers"))]
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	CommonNet(#[from] CommonNetAPIError),
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	FSEmul(#[from] FSEmulAPIError),
@@ -85,13 +115,23 @@ pub enum APIError {
 	///
 	/// This usually means we don't have a network interface we can communicate
 	/// on that has an IPv4 address assigned.
-	#[error("We could not find the local hosts ipv4 address which is needed if an ip isn't explicitly passed in.")]
+	#[error(
+		"We could not find the local hosts ipv4 address which is needed if an ip isn't explicitly passed in."
+	)]
 	#[diagnostic(code(cat_dev::api::no_host_ip_found))]
 	NoHostIpFound,
 }
 
+#[cfg(any(feature = "clients", feature = "servers"))]
+impl From<CommonNetAPIError> for CatBridgeError {
+	fn from(value: CommonNetAPIError) -> Self {
+		Self::from(APIError::CommonNet(value))
+	}
+}
+
 /// Trying to interact with the filesystem has resulted in an error.
 #[derive(Error, Diagnostic, Debug)]
+#[non_exhaustive]
 pub enum FSError {
 	/// We need a place to read/store a list of all the bridges on your host.
 	///
@@ -99,7 +139,9 @@ pub enum FSError {
 	/// that file should go. Please either contribute a path for your OS to use,
 	/// or manually provide the host bridge path (this can only be done on the
 	/// newer versions of tools).
-	#[error("We can't find the path to store a complete list of host-bridges, please use explicit paths instead.")]
+	#[error(
+		"We can't find the path to store a complete list of host-bridges, please use explicit paths instead."
+	)]
 	#[diagnostic(code(cat_dev::fs::cant_find_hostenv_path))]
 	CantFindHostEnvPath,
 	#[error(transparent)]
@@ -122,9 +164,10 @@ pub enum FSError {
 	#[error("Error writing/reading data from the filesystem: {0}")]
 	#[diagnostic(code(cat_dev::fs::io))]
 	IO(#[from] IoError),
-	#[error("Error iterating through directory: {0:?}")]
-	#[diagnostic(code(cat_dev::fs::iterating_directory_error))]
-	IteratingDirectoryError(#[from] WalkdirError),
+	#[cfg(feature = "servers")]
+	#[error("Error iterating through folder: {0:?}")]
+	#[diagnostic(code(cat_dev::fs::iterating_folder_error))]
+	IteratingFolderError(#[from] WalkdirError),
 	#[error("Expect file to have at least: {0} line(s), but it was only: {1} line(s) long.")]
 	#[diagnostic(code(cat_dev::fs::too_few_lines))]
 	TooFewLines(usize, usize),
@@ -148,6 +191,7 @@ pub enum FSError {
 /// covers errors related to interacting with the network. If you're looking
 /// for bogus data from the network errors look at [`NetworkParseError`].*
 #[derive(Error, Diagnostic, Debug)]
+#[non_exhaustive]
 pub enum NetworkError {
 	/// We failed to bind to a local address to listen for packets from the
 	/// network.
@@ -163,9 +207,22 @@ pub enum NetworkError {
 	#[error("Failed to bind to a local address to receive packets.")]
 	#[diagnostic(code(cat_dev::net::bind_failure))]
 	BindFailure,
+	#[cfg(feature = "clients")]
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	CommonClient(#[from] CommonNetClientNetworkError),
+	/// An error has occurred in our common network framework.
+	#[cfg(any(feature = "clients", feature = "servers"))]
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	CommonNet(#[from] CommonNetNetworkError),
 	#[error("Expected some sort of data from other side, but got none.")]
 	#[diagnostic(code(cat_dev::net::expected_data))]
 	ExpectedData,
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	FSEmul(#[from] FSEmulNetworkError),
+	#[cfg(feature = "clients")]
 	/// See [`reqwest::Error`] for details.
 	#[error("Underlying HTTP client error: {0}")]
 	#[diagnostic(code(cat_dev::net::http_failure))]
@@ -174,10 +231,12 @@ pub enum NetworkError {
 	#[error("Error talking to the network could not send/receive data: {0}")]
 	#[diagnostic(code(cat_dev::net::io_error))]
 	IO(#[from] IoError),
+	#[cfg(feature = "clients")]
 	/// See [`network_interface::Error::GetIfAddrsError`] for details.
 	#[error("Failed to list the network interfaces on your device: {0:?}.")]
 	#[diagnostic(code(cat_dev::net::list_interfaces_error))]
 	ListInterfacesFailure(NetworkInterfaceError),
+	#[cfg(feature = "clients")]
 	/// See [`local_ip_address::Error`] for details.
 	#[error("Failure fetching local ip address: {0}")]
 	#[diagnostic(code(cat_dev::net::local_ip_failure))]
@@ -186,20 +245,19 @@ pub enum NetworkError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	Parse(#[from] NetworkParseError),
-	/// The client requested too many bytes to actively serve.
-	#[error("The client requested too many bytes to send over a connection at once (larger than usize::MAX on your architecture): {0}")]
-	#[diagnostic(code(cat_dev::net::requested_size_too_large))]
-	RequestedSizeTooLarge(u128),
 	/// If we failed to call `setsockopt` through libc.
 	///
 	/// For example if on linux see: <https://linux.die.net/man/2/setsockopt>
-	#[error("Failed to set the socket we're bound on as a broadcast address, this is needed to discover CAT devices.")]
+	#[error(
+		"Failed to set the socket we're bound on as a broadcast address, this is needed to discover CAT devices."
+	)]
 	#[diagnostic(code(cat_dev::net::set_broadcast_failure))]
 	SetBroadcastFailure,
 	/// Error adding a packet to a queue to send.
+	#[cfg(feature = "servers")]
 	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
 	#[diagnostic(code(cat_dev::net::send_queue_failure))]
-	SendQueueFailure(#[from] SendError<Bytes>),
+	SendQueueMessageFailure(#[from] SendError<ResponseStreamMessage>),
 	/// We waited too long to send/receive data from the network.
 	///
 	/// There may be something wrong with our network connection, or the targets
@@ -211,14 +269,23 @@ pub enum NetworkError {
 	Timeout(Duration),
 }
 
-impl From<ReqwestError> for CatBridgeError {
-	fn from(value: ReqwestError) -> Self {
+#[cfg(feature = "clients")]
+impl From<CommonNetClientNetworkError> for CatBridgeError {
+	fn from(value: CommonNetClientNetworkError) -> Self {
 		Self::Network(value.into())
 	}
 }
 
-impl From<SendError<Bytes>> for CatBridgeError {
-	fn from(value: SendError<Bytes>) -> Self {
+#[cfg(any(feature = "clients", feature = "servers"))]
+impl From<CommonNetNetworkError> for CatBridgeError {
+	fn from(value: CommonNetNetworkError) -> Self {
+		Self::Network(value.into())
+	}
+}
+
+#[cfg(feature = "clients")]
+impl From<ReqwestError> for CatBridgeError {
+	fn from(value: ReqwestError) -> Self {
 		Self::Network(value.into())
 	}
 }
@@ -233,9 +300,14 @@ pub enum NetworkParseError {
 	BadCString(#[from] FromBytesUntilNulError),
 	/// We expected to read a packet containing exactly a set of bytes,
 	/// unfortunatley it did not contain those _Exact_ bytes.
-	#[error("Tried to read Packet of type ({0}) from network, must be encoded exactly as [{1:02x?}], but got [{2:02x?}]")]
+	#[error(
+		"Tried to read Packet of type ({0}) from network, must be encoded exactly as [{1:02x?}], but got [{2:02x?}]"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::doesnt_match_static_data))]
 	DoesntMatchStaticPayload(&'static str, &'static [u8], Bytes),
+	#[error("Internal Protocol responded with an error code: {0}")]
+	#[diagnostic(code(cat_dev::net::parse::error_code))]
+	ErrorCode(u32),
 	/// A field encoded within a packet was not correct (e.g. a string wasn't
 	/// UTF-8).
 	#[error("Reading Field {1} from Packet {0}, was not encoded correctly must be encoded as {2}")]
@@ -243,13 +315,11 @@ pub enum NetworkParseError {
 	FieldEncodedIncorrectly(&'static str, &'static str, &'static str),
 	/// A field encoded within a packet requires a minimum number of bytes, but
 	/// the field was not long enough.
-	#[error("Tried Reading Field {1} from Packet {0}. This Field requires at least {2} bytes, but only had {3}, bytes: {4:02x?}")]
+	#[error(
+		"Tried Reading Field {1} from Packet {0}. This Field requires at least {2} bytes, but only had {3}, bytes: {4:02x?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::field_not_long_enough))]
 	FieldNotLongEnough(&'static str, &'static str, usize, usize, Bytes),
-	/// A field encoded within a packet has a maximum length that was exceeded.
-	#[error("Tried Reading Field {1} from Packet {0}. This field is at max {2} bytes, but had {3}, bytes: {4:02x?}")]
-	#[diagnostic(code(cat_dev::net::parse::field_too_long))]
-	FieldTooLong(&'static str, &'static str, usize, usize, Bytes),
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	FSEmul(#[from] FSEmulProtocolError),
@@ -259,12 +329,16 @@ pub enum NetworkParseError {
 	MION(#[from] MIONProtocolError),
 	/// The overall size of the packet was too short, and we cannot successfully
 	/// parse it.
-	#[error("Tried to read Packet of type ({0}) from network needs at least {1} bytes, but only got {2} bytes: {3:02x?}")]
+	#[error(
+		"Tried to read Packet of type ({0}) from network needs at least {1} bytes, but only got {2} bytes: {3:02x?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::not_enough_data))]
 	NotEnoughData(&'static str, usize, usize, Bytes),
 	/// The overall size of the packet was too long, and there was unexpected
 	/// data at the end, a.k.a. the "Trailer".
-	#[error("Unexpected Trailer for Packet `{0}` received from the network (we're not sure what do with this extra data), extra bytes: {1:02x?}")]
+	#[error(
+		"Unexpected Trailer for Packet `{0}` received from the network (we're not sure what do with this extra data), extra bytes: {1:02x?}"
+	)]
 	#[diagnostic(code(cat_dev::net::parse::unexpected_trailer))]
 	UnexpectedTrailer(&'static str, Bytes),
 	/// We expected to read UTF-8 data from the network, but it wasn't UTF-8.

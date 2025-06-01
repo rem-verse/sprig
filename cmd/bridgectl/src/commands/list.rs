@@ -1,16 +1,16 @@
 //! Handling listing all the bridges on the network, or cached bridges.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{
 		get_control_port, get_padded_string, get_scan_timeout, lease_bridge_config,
 	},
 	exit_codes::LIST_COULD_NOT_SEARCH,
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{discovery::discover_bridges, proto::control::MionIdentity};
 use miette::miette;
-use terminal_size::{terminal_size, Width as TermWidth};
+use terminal_size::{Width as TermWidth, terminal_size};
 use tokio::time::sleep;
 use tracing::{error, field::valuable, info, warn};
 
@@ -28,7 +28,7 @@ pub async fn handle_list(use_cache: bool, output_as_table: bool) {
 
 /// List all of the devices that are actively on the network.
 async fn list_from_network(use_table: bool) {
-	const TABLE_HEADER: &str =      "Bridge Name                    | IP Address      | MAC Address        | FPGA image version | Firmware Version | SDK Version | Boot Mode | Power Status";
+	const TABLE_HEADER: &str = "Bridge Name                    | IP Address      | MAC Address        | FPGA image version | Firmware Version | SDK Version | Boot Mode | Power Status";
 	const TABLE_HEADER_LINE: &str = "------------------------------------------------------------------------------------------------------------------------------------------------------";
 
 	let mut recv_channel = match discover_bridges(true, Some(get_control_port().await)).await {
@@ -60,8 +60,8 @@ async fn list_from_network(use_table: bool) {
 			if characters_wide < 150 {
 				warn!(
 					id = "bridgectl::list::terminal_may_be_small",
-					width.expected=150,
-					width.was=characters_wide,
+					width.expected = 150,
+					width.was = characters_wide,
 					"!!! HEY! Your terminal width seems to be smaller than 150 characters! The table renders at ~150 characters, so we recommend making you terminal wider to see the table best !!!",
 				);
 			}
@@ -129,7 +129,9 @@ fn print_detailed_bridge(bridge: &MionIdentity, use_table: bool) {
 			12,
 		);
 
-		let full_table_line = format!("{rendered_name} | {rendered_ip} | {rendered_mac} | {rendered_fpga} | {rendered_fw} | {rendered_sdk} | {rendered_boot_mode} | {rendered_power_status}");
+		let full_table_line = format!(
+			"{rendered_name} | {rendered_ip} | {rendered_mac} | {rendered_fpga} | {rendered_fw} | {rendered_sdk} | {rendered_boot_mode} | {rendered_power_status}"
+		);
 		if SHOULD_LOG_JSON() {
 			info!(
 				id = TABLE_TRACING_ID,
@@ -182,8 +184,12 @@ fn print_no_bridge_found_warning(was_early_exit: bool, early_timeout: Option<u64
 	} else {
 		let mut suggestions = vec![
 			miette!("Please ensure the CAT-DEV is powered on, and running."),
-			miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
-			miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the two VLANs/Subnets."),
+			miette!(
+				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."
+			),
+			miette!(
+				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the two VLANs/Subnets."
+			),
 		];
 		if was_early_exit {
 			suggestions.push(miette!(format!(

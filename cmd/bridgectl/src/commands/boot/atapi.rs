@@ -5,13 +5,17 @@
 //! communications over a similar sata protocol.
 
 use crate::{
-	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
-	utils::add_context_to,
 	SHOULD_LOG_JSON,
+	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
+	knobs::env::ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS,
+	utils::add_context_to,
 };
-use cat_dev::fsemul::{
-	atapi::{AtapiServer, DEFAULT_ATAPI_PORT},
-	HostFilesystem,
+use cat_dev::{
+	fsemul::{
+		HostFilesystem,
+		atapi::server::{DEFAULT_ATAPI_PORT, create_atapi_server},
+	},
+	net::server::TCPServer,
 };
 use miette::miette;
 use std::net::Ipv4Addr;
@@ -24,11 +28,24 @@ pub async fn serve_atapi(
 	host_ip: Option<Ipv4Addr>,
 	fsemul_atapi_port: Option<u16>,
 	setup_params_atapi_port: Option<u16>,
+	disable_load_bearing_sleep: bool,
 ) -> u16 {
 	let port = fsemul_atapi_port
 		.or(setup_params_atapi_port)
 		.unwrap_or(DEFAULT_ATAPI_PORT);
-	let atapi_server = match AtapiServer::new(host_filesystem, host_ip, Some(port)).await {
+	let atapi_server = match create_atapi_server(
+		host_filesystem.clone(),
+		host_ip,
+		Some(port),
+		*ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS,
+		disable_load_bearing_sleep,
+		None,
+		false,
+		// Can be overriden with env var at the cat-dev level.
+		false,
+	)
+	.await
+	{
 		Ok(srv) => srv,
 		Err(cause) => {
 			if SHOULD_LOG_JSON() {
@@ -55,12 +72,30 @@ pub async fn serve_atapi(
 	port
 }
 
-fn spawn_atapi(atapi_emulator: AtapiServer<'static>) {
+fn spawn_atapi(atapi_emulator: TCPServer<HostFilesystem>) {
 	if let Err(cause) = TaskBuilder::new()
 		.name("bridgectl::boot::serve_atapi")
 		.spawn(async move {
 			tokio::select! {
-				() = atapi_emulator.serve_concurrently() => {}
+				res = atapi_emulator.bind() => {
+					if let Err(cause) = res {
+						if SHOULD_LOG_JSON() {
+							error!(
+								id = "bridgectl::boot::atapi_spawn_failure",
+								?cause,
+								"failed to bind server to serve data to MION"
+							);
+						} else {
+							error!(
+								"\n{:?}",
+								add_context_to(
+									miette!("Failed to bind server to serve ATAPI data to MION!"),
+									[miette!("{cause:?}")].into_iter(),
+								),
+							);
+						}
+					}
+				},
 				_ = ctrl_c_signal() => if SHOULD_LOG_JSON() {
 					info!(
 						id = "bridgectl::boot::atapi_detected_ctrlc",

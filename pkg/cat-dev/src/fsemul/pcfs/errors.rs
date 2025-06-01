@@ -3,22 +3,40 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+#[cfg(any(feature = "clients", feature = "servers"))]
+use crate::fsemul::pcfs::sata::proto::SataQueryResponse;
+
 /// Error's specific to calling a specific PCFS API.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
 pub enum PCFSApiError {
+	#[error("Mode string is expected to match '(r|w|a)b?+?', but did not! invalid mode: {0}")]
+	#[diagnostic(code(cat_dev::api::fsmeul::pcfs::bad_mode_string))]
+	BadModeString(String),
 	/// `PCFS` Sata protocol only supports [`u32::MAX`] packet sizes because they
 	/// store length of body as a [`u32`].
-	#[error("This packet body is too large to ever fit in a PCFS Sata Packet, is: 0x{0:02X?} bytes long, max is 0xFFFFFFFF!")]
+	#[error(
+		"This packet body is too large to ever fit in a PCFS Sata Packet, is: 0x{0:02X?} bytes long, max is 0xFFFFFFFF!"
+	)]
 	#[diagnostic(code(cat_dev::api::fsemul::pcfs::packet_too_large_for_sata))]
 	PacketTooLargeForSata(usize),
+	#[error("The requested path: [{0}] is too long, paths must be no more than 511 bytes.")]
+	#[diagnostic(code(cat_dev::api::fsemul::pcfs::path_too_long))]
+	PathTooLong(String),
 	/// Requested path is not inside of a mapped directory.
 	#[error("The requested path: [{0}] was not inside of a mapped directory, cannot serve.")]
 	#[diagnostic(code(cat_dev::api::fsemul::pcfs::path_not_mapped))]
 	PathNotMapped(String),
+	#[cfg(feature = "servers")]
+	#[error(
+		"The server was not configured correctly (programmer error), please report that extension: {0} did not load properly!"
+	)]
+	#[diagnostic(code(cat_dev::api::fsemul::pcfs::missing_server_extension))]
+	MissingCriticalExtension(String),
 }
 
 /// Error serializing/deserializing the PCFS Sata protocol.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SataProtocolError {
 	#[error("Mode string is expected to match '(r|w|a)b?+?', but did not! invalid mode: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::bad_mode_string))]
@@ -48,4 +66,8 @@ pub enum SataProtocolError {
 	#[error("Unknown file location to move too: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::unknown_file_location))]
 	UnknownFileLocation(u32),
+	#[cfg(any(feature = "clients", feature = "servers"))]
+	#[error("Sata query response returned the wrong type of response: {0:?}")]
+	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::wrong_query_response_type))]
+	WrongSataQueryResponse(SataQueryResponse),
 }

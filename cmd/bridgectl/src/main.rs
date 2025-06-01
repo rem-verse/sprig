@@ -5,6 +5,10 @@
 	// Where this becomes significantly more helpful to read as it's out of
 	// context.
 	clippy::module_name_repetitions,
+	// I really don't like clippy trying to control how i choose to input my
+	// markdown that gets rendered.
+	clippy::doc_lazy_continuation,
+	clippy::doc_overindented_list_items,
 )]
 
 pub mod commands;
@@ -37,12 +41,16 @@ use crate::{
 		cli::{CliArguments, MionSubcommands, Subcommands},
 		env::USE_JSON_OUTPUT,
 	},
+	utils::add_context_to,
 };
-use clap::Parser;
+use clap::{
+	Parser,
+	error::{Error as ClapError, ErrorKind as ClapErrorKind},
+};
 use log::install_logging_handlers;
-use miette::miette;
+use miette::{IntoDiagnostic, miette};
 use std::path::PathBuf;
-use tracing::error;
+use tracing::{error, info};
 
 /// Whether or not we're logging in JSON.
 static mut USE_JSON: bool = false;
@@ -89,7 +97,9 @@ async fn main() {
 		} else {
 			error!(
 				"\n{:?}",
-				miette!("internal error: Failed to specify a single command, and didn't call `help` handler?"),
+				miette!(
+					"internal error: Failed to specify a single command, and didn't call `help` handler?"
+				),
 			);
 		}
 		std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
@@ -414,6 +424,30 @@ fn bootstrap_cli() -> (CliArguments, bool) {
 	match args_opt {
 		Ok(args) => (args, use_json),
 		Err(cause) => {
+			if cause.kind() == ClapErrorKind::DisplayVersion {
+				if use_json {
+					info!(
+						id = "bridgectl::cli::print_version",
+						version = format!(
+							"{} ({})",
+							format!("{}", cause.render()).trim(),
+							option_env!("BRIDGECTL_BUILD").unwrap_or("unknown")
+						),
+					);
+				} else {
+					info!(
+						"{}",
+						format!(
+							"{} ({})",
+							format!("{}", cause.render()).trim(),
+							option_env!("BRIDGECTL_BUILD").unwrap_or("unknown")
+						),
+					);
+				}
+
+				std::process::exit(0);
+			}
+
 			if use_json {
 				error!(
 					id = "bridgectl::cli::arg_parse_failure",
@@ -425,7 +459,10 @@ fn bootstrap_cli() -> (CliArguments, bool) {
 			} else {
 				error!(
 					"\n{:?}",
-					miette!("Failed parsing CLI arguments!").wrap_err(cause),
+					add_context_to(
+						Err::<(), ClapError>(cause).into_diagnostic().unwrap_err(),
+						[miette!("Failed parsing CLI arguments!")].into_iter(),
+					),
 				);
 			}
 

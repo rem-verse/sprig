@@ -50,6 +50,7 @@ mod sdio;
 mod utils;
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::{
 		argv_helpers::{
 			coalesce_serial_ports, get_atapi_port, get_host_bind_address, get_pcfs_sata_port,
@@ -70,9 +71,12 @@ use crate::{
 	exit_codes::BOOT_CGI_FAILURE,
 	knobs::{
 		cli::{FSEmulConfigurationFlags, SharedSerialPortFlags},
-		env::PCFS_IS_SATA,
+		env::{
+			ATAPI_DISABLE_LOAD_BEARING_SLEEP, FSEMUL_DISABLE_REMOVAL, PCFS_DISABLE_CSR,
+			PCFS_DISABLE_FFIO, PCFS_DISABLE_LOAD_BEARING_SLEEP, PCFS_IS_SATA,
+			SDIO_DISABLE_LOAD_BEARING_SLEEP,
+		},
 	},
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
 	cgis::{power_on, power_on_v2},
@@ -117,6 +121,14 @@ pub async fn handle_boot(
 	// TODO(mythra): how can haz ownership?
 
 	if no_pcfs || !needs_pcfs {
+		// We are about to turn on a cat-dev without providing any "niceities" of
+		// PCFS. Including the Disc Emulator.
+		//
+		// As a result we need to ensure the state is set to "no disc in", otherwise
+		// the Wii-U components will show an error screen as they think a disc is in
+		// the tray, but they can't interact with the disc in anyway.
+		turn_down_for_disc(bridge_ip).await;
+
 		if is_modern_bridge {
 			boot_modern_without_pcfs(needs_pcfs, bridge_ip, host_ip, serial_task_handle).await;
 		} else {
@@ -125,6 +137,8 @@ pub async fn handle_boot(
 		return;
 	}
 
+	// TODO(mythra): properly serve a disc....
+	turn_down_for_disc(bridge_ip).await;
 	let file_system = lease_host_file_system().await;
 
 	let final_atapi_port = serve_atapi(
@@ -136,6 +150,7 @@ pub async fn handle_boot(
 		setup_params
 			.as_ref()
 			.map(SetupParameters::atapi_emulator_port),
+		fsemul_flags.disable_load_bearing_sleep_for_atapi() || *ATAPI_DISABLE_LOAD_BEARING_SLEEP,
 	)
 	.await;
 	serve_sdio(
@@ -144,7 +159,7 @@ pub async fn handle_boot(
 		file_system,
 		get_sdio_control_port().await,
 		get_sdio_printf_port().await,
-		fsemul_flags.disable_load_bearing_sleep_for_sdio(),
+		fsemul_flags.disable_load_bearing_sleep_for_sdio() || *SDIO_DISABLE_LOAD_BEARING_SLEEP,
 	)
 	.await;
 	let will_use_sata = get_will_use_sata(disable_sata);
@@ -158,9 +173,10 @@ pub async fn handle_boot(
 				.or(lease_fsemul_config_optionally()
 					.await
 					.and_then(|emul| emul.get_pcfs_sata_port())),
-			fsemul_flags.disable_real_removal(),
-			fsemul_flags.disable_ffio(),
-			fsemul_flags.disable_csr(),
+			fsemul_flags.disable_real_removal() || *FSEMUL_DISABLE_REMOVAL,
+			fsemul_flags.disable_ffio() || *PCFS_DISABLE_FFIO,
+			fsemul_flags.disable_csr() || *PCFS_DISABLE_CSR,
+			fsemul_flags.disable_load_bearing_sleep_for_pcfs() || *PCFS_DISABLE_LOAD_BEARING_SLEEP,
 		)
 		.await;
 		Some(p)
@@ -244,14 +260,6 @@ async fn boot_modern_without_pcfs(
 /// off emulation temporarily, or get info, or do any "smart" things. However,
 /// hey we can still turn these things on.
 async fn boot_legacy_without_pcfs(bridge_ip: Ipv4Addr, serial_handle: JoinHandle<()>) {
-	// We are about to turn on a cat-dev without providing any "niceities" of
-	// PCFS. Including the Disc Emulator.
-	//
-	// As a result we need to ensure the state is set to "no disc in", otherwise
-	// the Wii-U components will show an error screen as they think a disc is in
-	// the tray, but they can't interact with the disc in anyway.
-	turn_down_for_disc(bridge_ip).await;
-
 	match power_on(bridge_ip).await {
 		Ok(result_code) => {
 			if result_code {

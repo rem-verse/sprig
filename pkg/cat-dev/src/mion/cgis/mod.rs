@@ -37,7 +37,9 @@ use crate::{
 	mion::proto::cgis::MIONCGIErrors,
 };
 use bytes::Bytes;
+use form_urlencoded::byte_serialize;
 use reqwest::{Body, Client, Method, Response, Version};
+use std::{fmt::Display, ops::Deref};
 use tracing::{field::valuable, warn};
 
 /// Perform a request that attempts to remove all the logic for the 'simple'
@@ -77,6 +79,23 @@ where
 		assert_status_and_read_body(200, req.send().await.map_err(NetworkError::HTTP)?).await?;
 
 	Ok(String::from_utf8(response_body.into()).map_err(NetworkParseError::Utf8Expected)?)
+}
+
+fn encode_url_parameters(parameters: &[(impl Deref<Target = str>, impl Display)]) -> String {
+	let mut buff = String::new();
+	let mut first = true;
+
+	for (param_key, param_value) in parameters {
+		if !first {
+			buff.push('&');
+		}
+		first = false;
+		buff.extend(byte_serialize(param_key.as_bytes()));
+		buff.push('=');
+		buff.extend(byte_serialize(format!("{param_value}").as_bytes()));
+	}
+
+	buff
 }
 
 /// Assert that a response status code is a specific code, and get the body.

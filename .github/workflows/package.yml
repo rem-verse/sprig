@@ -9,7 +9,7 @@ on:
 jobs:
   package-win:
     name: Package Windows systems
-    runs-on: windows-2022
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -73,9 +73,9 @@ jobs:
             !target/release/deps
             !target/release/examples
             !target/release/incremental
-  package-osx-arn:
+  package-osx-arm:
     name: Package Mac OS X systems (ARM)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -106,7 +106,7 @@ jobs:
             !target/release/incremental
   package-unix:
     name: Package Unix systems
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -128,19 +128,19 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.deb
-          path: installer-scripts/unix/sprig_0.0.8_amd64.deb
+          path: installer-scripts/unix/sprig_0.0.9_amd64.deb
       - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.rpm
-          path: installer-scripts/unix/sprig-0.0.8-1.x86_64.rpm
+          path: installer-scripts/unix/sprig-0.0.9-1.x86_64.rpm
       - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.apk
-          path: installer-scripts/unix/sprig_0.0.8_x86_64.apk
+          path: installer-scripts/unix/sprig_0.0.9_x86_64.apk
       - uses: actions/upload-artifact@v4
         with:
           name: sprig_unix_amd64.pkg.tar.zst
-          path: installer-scripts/unix/sprig-0.0.8-1-x86_64.pkg.tar.zst
+          path: installer-scripts/unix/sprig-0.0.9-1-x86_64.pkg.tar.zst
       - uses: actions/upload-artifact@v4
         with:
           name: sprig-target-directory-unix

@@ -1,27 +1,27 @@
 //! Handles fetching the information for just one particular bridge.
 
 use crate::{
+	SHOULD_LOG_JSON,
 	commands::argv_helpers::{
 		get_control_port, get_padded_string, get_scan_timeout, get_targeted_bridge_ip,
 		get_targeted_bridge_name, lease_bridge_config,
 	},
 	exit_codes::{GET_FAILED_TO_FIND_SPECIFIC_DEVICE, GET_FAILED_TO_SEARCH_FOR_DEVICE},
 	utils::add_context_to,
-	SHOULD_LOG_JSON,
 };
 use cat_dev::mion::{
-	discovery::{find_mion, MIONFindBy},
+	discovery::{MIONFindBy, find_mion},
 	proto::control::MionIdentity,
 };
 use miette::miette;
 use std::net::Ipv4Addr;
-use terminal_size::{terminal_size, Width as TermWidth};
+use terminal_size::{Width as TermWidth, terminal_size};
 use tracing::{debug, error, field::valuable, info, warn};
 
 const FALLBACK_HEADER: &str = "Bridge Name                    | IP Address      | Is Default";
 const FALLBACK_HEADER_LINE: &str = "-------------------------------------------------------------";
 
-const DETAILED_HEADER: &str =      "Bridge Name                    | IP Address      | MAC Address        | FPGA image version | Firmware Version | SDK Version | Boot Mode | Power Status";
+const DETAILED_HEADER: &str = "Bridge Name                    | IP Address      | MAC Address        | FPGA image version | Firmware Version | SDK Version | Boot Mode | Power Status";
 const DETAILED_HEADER_LINE: &str = "------------------------------------------------------------------------------------------------------------------------------------------------------";
 
 /// Actual command handler for the `get` command.
@@ -162,8 +162,8 @@ fn print_detailed_bridge(use_table: bool, bridge: &MionIdentity) {
 			if characters_wide < 150 {
 				warn!(
 					id = "bridgectl::get::terminal_may_be_small",
-					width.expected=150,
-					width.was=characters_wide,
+					width.expected = 150,
+					width.was = characters_wide,
 					"!!! HEY! Your terminal width seems to be smaller than 150 characters! The table renders at ~150 characters, so we recommend making you terminal wider to see the table best !!!",
 				);
 			}
@@ -192,7 +192,9 @@ fn print_detailed_bridge(use_table: bool, bridge: &MionIdentity) {
 				.map_or("<missing>", |is_on| if is_on { "ON" } else { "OFF" }),
 			12,
 		);
-		let full_table_line = format!("{rendered_name} | {rendered_ip} | {rendered_mac} | {rendered_fpga} | {rendered_fw} | {rendered_sdk} | {rendered_boot_mode} | {rendered_power_status}");
+		let full_table_line = format!(
+			"{rendered_name} | {rendered_ip} | {rendered_mac} | {rendered_fpga} | {rendered_fw} | {rendered_sdk} | {rendered_boot_mode} | {rendered_power_status}"
+		);
 
 		if SHOULD_LOG_JSON() {
 			info!(
