@@ -8,7 +8,10 @@ use crate::{
 		},
 		server::PCFSServerState,
 	},
-	net::server::requestable::{Body, State},
+	net::{
+		additions::StreamID,
+		server::requestable::{Body, State},
+	},
 };
 use std::path::PathBuf;
 use tracing::debug;
@@ -23,6 +26,7 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 ///
 /// If the path is too long to encode into a packet.
 pub async fn handle_read_folder(
+	stream: StreamID,
 	State(state): State<PCFSServerState>,
 	Body(request): Body<SataRequest<SataReadFolderPacketBody>>,
 ) -> Result<SataResponse<DirectoryItemResponse>, CatBridgeError> {
@@ -30,7 +34,11 @@ pub async fn handle_read_folder(
 	let request_header = request.header().clone();
 
 	let fd = packet.file_descriptor();
-	let Ok(optional_next_item) = state.host_filesystem().next_in_folder(fd).await else {
+	let Ok(optional_next_item) = state
+		.host_filesystem()
+		.next_in_folder(fd, Some(stream.to_raw()))
+		.await
+	else {
 		debug!(
 			packet.fd = fd,
 			packet.typ = "PCFSSrvReadDirectory",
@@ -124,14 +132,15 @@ mod unit_tests {
 			.expect("Failed to create file to use!");
 
 		let dfd = fs
-			.open_folder(&base_dir)
+			.open_folder(&base_dir, Some(1))
 			.await
 			.expect("Failed to open existing directory!");
 		let request = SataReadFolderPacketBody::new(dfd);
 
 		// First request should return file information, and path name.
 		let actual_file_response: Bytes = handle_read_folder(
-			State(PCFSServerState::new(true, fs.clone(), 0)),
+			StreamID::from_existing(1),
+			State(PCFSServerState::new(false, fs.clone(), 0)),
 			Body(SataRequest::new(
 				mocked_header.clone(),
 				mocked_ci.clone(),
@@ -199,6 +208,7 @@ mod unit_tests {
 
 		// Second one is an empty response.
 		let new_response: Bytes = handle_read_folder(
+			StreamID::from_existing(1),
 			State(PCFSServerState::new(true, fs.clone(), 0)),
 			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
@@ -207,6 +217,6 @@ mod unit_tests {
 		.try_into()
 		.expect("Failed to serialize read folder response!");
 		assert_eq!(&new_response[0x20..0x24], &[0xFF, 0xF0, 0xFF, 0xFC]);
-		fs.close_folder(dfd).await;
+		fs.close_folder(dfd, Some(1)).await;
 	}
 }

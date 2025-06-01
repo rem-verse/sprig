@@ -6,7 +6,10 @@ use crate::{
 		proto::{SataRequest, SataResponse, SataResultCode, SataRewindFolderPacketBody},
 		server::PCFSServerState,
 	},
-	net::server::requestable::{Body, State},
+	net::{
+		additions::StreamID,
+		server::requestable::{Body, State},
+	},
 };
 use tracing::debug;
 
@@ -15,6 +18,7 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 
 /// Actually process by rewinding an open directory iterator.
 pub async fn handle_rewind_folder(
+	stream: StreamID,
 	State(state): State<PCFSServerState>,
 	Body(request): Body<SataRequest<SataRewindFolderPacketBody>>,
 ) -> SataResponse<SataResultCode> {
@@ -23,7 +27,7 @@ pub async fn handle_rewind_folder(
 
 	if state
 		.host_filesystem()
-		.reverse_folder(packet.file_descriptor())
+		.reverse_folder(packet.file_descriptor(), Some(stream.to_raw()))
 		.await
 		.is_err()
 	{
@@ -64,13 +68,14 @@ mod unit_tests {
 			.expect("Failed to create file to use!");
 
 		let dfd = fs
-			.open_folder(&base_dir)
+			.open_folder(&base_dir, Some(1))
 			.await
 			.expect("Failed to open existing directory!");
 		let request = SataRewindFolderPacketBody::new(dfd);
 
 		// First request should return file information, and path name.
 		let actual_response: Bytes = handle_rewind_folder(
+			StreamID::from_existing(1),
 			State(PCFSServerState::new(true, fs.clone(), 0)),
 			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
@@ -78,6 +83,6 @@ mod unit_tests {
 		.try_into()
 		.expect("Failed to serialize rewind folder response!");
 		assert_eq!(&actual_response[0x20..], &[0x00, 0x00, 0x00, 0x00]);
-		fs.close_folder(dfd).await;
+		fs.close_folder(dfd, Some(1)).await;
 	}
 }

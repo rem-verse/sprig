@@ -11,7 +11,10 @@ use crate::{
 			server::PCFSServerState,
 		},
 	},
-	net::server::requestable::{Body, State},
+	net::{
+		additions::StreamID,
+		server::requestable::{Body, State},
+	},
 };
 use tokio::fs::{OpenOptions, set_permissions};
 use tracing::{debug, warn};
@@ -27,6 +30,7 @@ const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 
 /// Handle opening a file upon request.
 pub async fn handle_open_file(
+	stream: StreamID,
 	State(state): State<PCFSServerState>,
 	Body(request): Body<SataRequest<SataOpenFilePacketBody>>,
 ) -> SataResponse<SataFileDescriptorResult> {
@@ -84,7 +88,7 @@ pub async fn handle_open_file(
 
 	let fd = match state
 		.host_filesystem()
-		.open_file(options, fs_location.resolved_path())
+		.open_file(options, fs_location.resolved_path(), Some(stream.to_raw()))
 		.await
 	{
 		Ok(fd) => fd,
@@ -229,6 +233,7 @@ mod unit_tests {
 			.expect("Failed to write test file!");
 
 		let mut response: Bytes = handle_open_file(
+			StreamID::from_existing(1),
 			State(PCFSServerState::new(true, fs.clone(), 0)),
 			Body(SataRequest::new(
 				mocked_header,
@@ -250,12 +255,10 @@ mod unit_tests {
 			&response[4..],
 			&[0x00, 0x00, 0x00, 0x00], // File handle.
 		);
-		fs.close_file(i32::from_be_bytes([
-			response[4],
-			response[5],
-			response[6],
-			response[7],
-		]))
+		fs.close_file(
+			i32::from_be_bytes([response[4], response[5], response[6], response[7]]),
+			Some(1),
+		)
 		.await;
 	}
 }

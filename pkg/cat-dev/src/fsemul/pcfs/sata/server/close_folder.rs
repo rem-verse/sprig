@@ -7,18 +7,22 @@ use crate::{
 		proto::{SataCloseFolderPacketBody, SataRequest, SataResponse, SataResultCode},
 		server::PCFSServerState,
 	},
-	net::server::requestable::{Body, State},
+	net::{
+		additions::StreamID,
+		server::requestable::{Body, State},
+	},
 };
 
 /// Handle closing a folder that was previously open.
 pub async fn handle_close_folder(
+	stream: StreamID,
 	State(state): State<PCFSServerState>,
 	Body(request): Body<SataRequest<SataCloseFolderPacketBody>>,
 ) -> SataResponse<SataResultCode> {
 	let packet = request.body();
 	state
 		.host_filesystem()
-		.close_folder(packet.file_descriptor())
+		.close_folder(packet.file_descriptor(), Some(stream.to_raw()))
 		.await;
 
 	SataResponse::new(
@@ -55,12 +59,13 @@ mod unit_tests {
 		let mut open_options = OpenOptions::new();
 		open_options.read(true).create(false).write(false);
 		let fd = fs
-			.open_file(open_options, &join_many(&base_dir, ["file.txt"]))
+			.open_file(open_options, &join_many(&base_dir, ["file.txt"]), Some(1))
 			.await
 			.expect("Failed to open file!");
 		let close_request = SataCloseFolderPacketBody::new(fd);
 
 		let response: Bytes = handle_close_folder(
+			StreamID::from_existing(1),
 			State(PCFSServerState::new(true, fs, 0)),
 			Body(SataRequest::new(mocked_header, mocked_ci, close_request)),
 		)

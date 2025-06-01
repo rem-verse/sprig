@@ -14,7 +14,10 @@ use crate::{
 			server::PCFSServerState,
 		},
 	},
-	net::server::requestable::{Body, State},
+	net::{
+		additions::StreamID,
+		server::requestable::{Body, State},
+	},
 };
 use tracing::debug;
 
@@ -29,6 +32,7 @@ const PATH_NOT_EXIST_ERROR: u32 = 0xFFF0_FFE9;
 
 /// Handle opening a folder upon request.
 pub async fn handle_open_folder(
+	stream: StreamID,
 	State(state): State<PCFSServerState>,
 	Body(request): Body<SataRequest<SataOpenFolderPacketBody>>,
 ) -> SataResponse<SataFileDescriptorResult> {
@@ -54,7 +58,7 @@ pub async fn handle_open_folder(
 
 	let Ok(fd) = state
 		.host_filesystem()
-		.open_folder(fs_location.resolved_path())
+		.open_folder(fs_location.resolved_path(), Some(stream.to_raw()))
 		.await
 	else {
 		debug!(
@@ -107,6 +111,7 @@ mod unit_tests {
 			.expect("Failed to create temporary directory for test!");
 
 		let mut response: Bytes = handle_open_folder(
+			StreamID::from_existing(1),
 			State(PCFSServerState::new(true, fs.clone(), 0)),
 			Body(SataRequest::new(mocked_header, mocked_ci, request)),
 		)
@@ -124,12 +129,10 @@ mod unit_tests {
 			&response[4..],
 			&[0x00, 0x00, 0x00, 0x00], // folder handle.
 		);
-		fs.close_folder(i32::from_be_bytes([
-			response[4],
-			response[5],
-			response[6],
-			response[7],
-		]))
+		fs.close_folder(
+			i32::from_be_bytes([response[4], response[5], response[6], response[7]]),
+			Some(1),
+		)
 		.await;
 	}
 }

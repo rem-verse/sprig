@@ -44,7 +44,7 @@ pub async fn handle_write_file(
 			MoveToFileLocation::Begin => {
 				if state
 					.host_filesystem()
-					.seek_file(packet.file_descriptor(), true)
+					.seek_file(packet.file_descriptor(), true, Some(req.stream_id()))
 					.await
 					.is_err()
 				{
@@ -67,7 +67,7 @@ pub async fn handle_write_file(
 			MoveToFileLocation::End => {
 				if state
 					.host_filesystem()
-					.seek_file(packet.file_descriptor(), false)
+					.seek_file(packet.file_descriptor(), false, Some(req.stream_id()))
 					.await
 					.is_err()
 				{
@@ -94,7 +94,7 @@ pub async fn handle_write_file(
 		let buff = req.unsafe_read_more_bytes_from_stream(len_needed).await?;
 		state
 			.host_filesystem
-			.write_file(packet.file_descriptor(), buff)
+			.write_file(packet.file_descriptor(), buff, Some(req.stream_id()))
 			.await?;
 
 		Ok(SataResponse::new(

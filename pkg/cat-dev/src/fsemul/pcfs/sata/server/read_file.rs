@@ -9,7 +9,10 @@ use crate::{
 			server::SataConnectionFlags,
 		},
 	},
-	net::server::requestable::{Body, State},
+	net::{
+		additions::StreamID,
+		server::requestable::{Body, State},
+	},
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use tracing::debug;
@@ -25,6 +28,7 @@ const FS_ERROR: u32 = 0xFFF0_FFE0;
 /// was somehow too large (this should ideally never happen), or if we're
 /// running on a 16 bit system.
 pub async fn handle_read_file(
+	stream: StreamID,
 	flags: SataConnectionFlags,
 	State(fs): State<HostFilesystem>,
 	Body(request): Body<SataRequest<SataReadFilePacketBody>>,
@@ -36,7 +40,11 @@ pub async fn handle_read_file(
 	if packet.should_move() {
 		match packet.move_to_pointer() {
 			MoveToFileLocation::Begin => {
-				if fs.seek_file(handle, true).await.is_err() {
+				if fs
+					.seek_file(handle, true, Some(stream.to_raw()))
+					.await
+					.is_err()
+				{
 					debug!(
 						packet.fd = handle,
 						packet.typ = "PCFSSrvReadFile",
@@ -54,7 +62,11 @@ pub async fn handle_read_file(
 				// Luckily to move to current, we don't need to move at all.
 			}
 			MoveToFileLocation::End => {
-				if fs.seek_file(handle, false).await.is_err() {
+				if fs
+					.seek_file(handle, false, Some(stream.to_raw()))
+					.await
+					.is_err()
+				{
 					debug!(
 						packet.fd = handle,
 						packet.typ = "PCFSSrvReadFile",
@@ -70,7 +82,7 @@ pub async fn handle_read_file(
 		}
 	}
 
-	let Some(file_size) = fs.file_length(handle).await else {
+	let Some(file_size) = fs.file_length(handle, Some(stream.to_raw())).await else {
 		debug!(
 			packet.fd = handle,
 			packet.typ = "PCFSSrvReadFile",
@@ -89,6 +101,7 @@ pub async fn handle_read_file(
 				.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?
 				* usize::try_from(packet.block_count())
 					.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?,
+			Some(stream.to_raw()),
 		)
 		.await
 	else {
@@ -152,13 +165,14 @@ mod unit_tests {
 		let mut open_options = OpenOptions::new();
 		open_options.read(true).create(false).write(false);
 		let fd = fs
-			.open_file(open_options, &join_many(&base_dir, ["file.txt"]))
+			.open_file(open_options, &join_many(&base_dir, ["file.txt"]), Some(1))
 			.await
 			.expect("Failed to open file!");
 
 		let read_request = SataReadFilePacketBody::new(4, 1, fd, None);
 
 		let response = handle_read_file(
+			StreamID::from_existing(1),
 			SataConnectionFlags::new_with_flags(true, true),
 			State(fs),
 			Body(SataRequest::new(

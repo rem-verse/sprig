@@ -16,7 +16,10 @@ use crate::{
 			server::PCFSServerState,
 		},
 	},
-	net::server::requestable::{Body, State},
+	net::{
+		additions::StreamID,
+		server::requestable::{Body, State},
+	},
 };
 use std::fs::read_dir;
 use sysinfo::{Disk, Disks};
@@ -68,6 +71,7 @@ pub async fn handle_get_info_by_query(
 ///
 /// If we cannot construct a sata response packet.
 pub async fn stat_fd(
+	stream: StreamID,
 	State(state): State<PCFSServerState>,
 	Body(request): Body<SataRequest<SataStatFilePacketBody>>,
 ) -> SataResponse<SataQueryResponse> {
@@ -77,7 +81,7 @@ pub async fn stat_fd(
 	let path = {
 		let Some(entry) = state
 			.host_filesystem()
-			.get_file(body.file_descriptor())
+			.get_file(body.file_descriptor(), Some(stream.to_raw()))
 			.await
 		else {
 			debug!(
