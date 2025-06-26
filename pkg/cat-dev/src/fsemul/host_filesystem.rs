@@ -1205,10 +1205,18 @@ impl HostFilesystem {
 					}
 				}
 
+				// Symlinks to directories on Windows run into
+				// edge cases, and will frequently get permission denied when
+				// attempting to remove them.
+				//
+				// They will instead be cleaned up by the final folder cleanup which
+				// will not run into any such errors.
+				let should_remove: bool;
 				#[cfg(unix)]
 				{
 					use std::os::unix::fs::symlink;
 					symlink(resolved_path, &as_new_path)?;
+					should_remove = true;
 				}
 
 				#[cfg(target_os = "windows")]
@@ -1217,12 +1225,16 @@ impl HostFilesystem {
 
 					if resolved_path.is_dir() {
 						symlink_dir(resolved_path, &as_new_path)?;
+						should_remove = false;
 					} else {
 						symlink_file(resolved_path, &as_new_path)?;
+						should_remove = true;
 					}
 				}
 				// Remove the original link, we renamed this....
-				remove_file(&rpb).await?;
+				if should_remove {
+					remove_file(&rpb).await?;
+				}
 			} else if rpb.is_file() {
 				rename(&rpb, &as_new_path).await?;
 			} else if rpb.is_dir() {

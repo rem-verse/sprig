@@ -171,34 +171,33 @@ mod unit_tests {
 	pub async fn test_fake_removal() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
-		let base_dir = join_many(tempdir.path(), ["a", "b", "c"]);
+		// Create folders.....
+		let base_dir = join_many(tempdir.path(), ["directory-to-test-in"]);
+		// Created for us by temporary host filesystem...
+		let data_dir = join_many(tempdir.path(), ["data", "slc"]);
+		let symlink_folder_path = join_many(&base_dir, ["sub-directory-with-symlink"]);
 		tokio::fs::create_dir_all(&base_dir)
 			.await
 			.expect("Failed to create temporary directory for test!");
+		tokio::fs::create_dir_all(&symlink_folder_path)
+			.await
+			.expect("Failed to create temporary directory for test!");
+
+		// Place down files....
 		let file_path = join_many(&base_dir, ["file.txt"]);
 		tokio::fs::write(&file_path, vec![0; 1307])
 			.await
 			.expect("Failed to write test file!");
 
-		let inner_path = join_many(tempdir.path(), ["a", "b", "c", "d", "e"]);
-		tokio::fs::create_dir_all(&inner_path)
-			.await
-			.expect("Failed to create temporary directory for test!");
-
-		let directory_to_symlink = join_many(tempdir.path(), ["data", "slc"]);
-		let dir_path_to_symlink = join_many(tempdir.path(), ["a", "b", "c", "d", "e", "f"]);
-
-		let file_path_to_symlink = join_many(
-			tempdir.path(),
-			["a", "b", "c", "d", "e", "symlinked-file.txt"],
-		);
+		// Place down symlinks.....
+		let dir_path_to_symlink = join_many(&symlink_folder_path, ["symlinked-folder"]);
+		let file_path_to_symlink = join_many(&symlink_folder_path, ["symlinked-file.txt"]);
 
 		#[cfg(unix)]
 		{
 			use std::os::unix::fs::symlink;
 
-			symlink(&directory_to_symlink, &dir_path_to_symlink)
-				.expect("Failed to symlink directory!");
+			symlink(&data_dir, &dir_path_to_symlink).expect("Failed to symlink directory!");
 			symlink(&file_path, &file_path_to_symlink).expect("Failed to symlink file!");
 		}
 
@@ -206,8 +205,7 @@ mod unit_tests {
 		{
 			use std::os::windows::fs::{symlink_dir, symlink_file};
 
-			symlink_dir(&directory_to_symlink, &dir_path_to_symlink)
-				.expect("Failed to symlink directory!");
+			symlink_dir(&data_dir, &dir_path_to_symlink).expect("Failed to symlink directory!");
 			symlink_file(&file_path, &file_path_to_symlink).expect("Failed to symlink file!");
 		}
 
@@ -228,7 +226,7 @@ mod unit_tests {
 		.await
 		.try_into()
 		.expect("Failed to serialize real removal response!");
-		let renamed_dir = join_many(tempdir.path(), ["a", "b", "c.rm"]);
+		let renamed_dir = join_many(tempdir.path(), ["directory-to-test-in.rm"]);
 
 		assert!(
 			!base_dir.exists(),
