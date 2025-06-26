@@ -5,7 +5,10 @@ use crate::{
 	TitleID,
 	errors::{CatBridgeError, FSError},
 	fsemul::{
-		bsf::BootSystemFile, dlf::DiskLayoutFile, errors::FSEmulFSError, pcfs::errors::PCFSApiError,
+		bsf::BootSystemFile,
+		dlf::DiskLayoutFile,
+		errors::{FSEmulAPIError, FSEmulFSError},
+		pcfs::errors::PCFSApiError,
 	},
 };
 use bytes::{Bytes, BytesMut};
@@ -14,24 +17,30 @@ use scc::{
 };
 use std::{
 	collections::HashMap,
+	ffi::OsString,
+	fs::{DirEntry, read_dir},
 	hash::RandomState,
 	io::{Error as IOError, SeekFrom},
 	path::{Path, PathBuf},
 	sync::{
 		Arc,
-		atomic::{AtomicI32, Ordering as AtomicOrdering},
+		atomic::{AtomicBool, AtomicI32, Ordering as AtomicOrdering},
 	},
 };
 use tokio::{
 	fs::{
-		File, OpenOptions, ReadDir, create_dir_all, read_dir, remove_file, rename,
-		write as fs_write,
+		File, OpenOptions, copy as copy_file, create_dir_all, read_dir as async_read_dir,
+		read_link, remove_dir_all, remove_file, rename, write as fs_write,
 	},
 	io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+	sync::Mutex,
 };
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+use walkdir::WalkDir;
 use whoami::username;
 
+/// A way to create truly unique file fd's. Just a counter going up.
+static UNIQUE_FILE_FD: AtomicI32 = AtomicI32::new(1);
 /// Current "FD" for directories. Just a counter going up.
 static FOLDER_FD: AtomicI32 = AtomicI32::new(1);
 
@@ -50,14 +59,22 @@ static FOLDER_FD: AtomicI32 = AtomicI32::new(1);
 pub struct HostFilesystem {
 	/// The path to the base data directory to serve a filesystem out of.
 	cafe_sdk_path: PathBuf,
+	/// The actively mounted "disc".
+	///
+	/// This is a tuple of (isSLC, isSystem, [`TitleID`]).
+	///
+	/// When a disc is mounted we will copy the title from SLC/MLC
+	/// directory, into `disc/` recursively.
+	disc_mounted: Arc<Mutex<Option<(bool, bool, TitleID)>>>,
 	/// List of open file handles.
 	///
 	/// This contains a value of (file, file size, path, stream owner).
 	open_file_handles: Arc<ConcurrentMap<i32, (File, u64, PathBuf, Option<u64>)>>,
 	/// List of open folder "handles".
 	///
-	/// This contains a value of (read directory, is end, path, stream owner)
-	open_folder_handles: Arc<ConcurrentMap<i32, (ReadDir, bool, PathBuf, Option<u64>)>>,
+	/// This contains a value of (directory items, index, is end, path, stream owner)
+	open_folder_handles:
+		Arc<ConcurrentMap<i32, (Vec<DirEntry>, usize, bool, PathBuf, Option<u64>)>>,
 	/// A set of folders that we've "marked" as read-only.
 	///
 	/// We don't actually synchronize this to the filesystem because the original
@@ -68,6 +85,12 @@ pub struct HostFilesystem {
 	/// This is not the case on older windows distributions, unix based distros,
 	/// or similar.
 	folders_marked_read_only: Arc<ConcurrentSet<PathBuf>>,
+	/// If we are forcing unique file fd's. This should only be changed
+	/// if we have not opened a file yet.
+	is_using_unique_fds: bool,
+	/// If we've opened a file, used to safely ensure we don't switch from
+	/// unique fdf's to not.
+	has_opened_file: Arc<AtomicBool>,
 }
 
 impl HostFilesystem {
@@ -102,46 +125,46 @@ impl HostFilesystem {
 
 		Self::patch_case_sensitive_title_ids(&cafe_sdk_path).await?;
 
-		if !Self::join_many(
-			&cafe_sdk_path,
-			[
+		for path in [
+			&[
 				"data", "mlc", "sys", "title", "00050030", "1001000a", "code", "app.xml",
-			],
-		)
-		.exists() || !Self::join_many(
-			&cafe_sdk_path,
-			[
+			] as &[&str],
+			&[
 				"data", "mlc", "sys", "title", "00050030", "1001010a", "code", "app.xml",
 			],
-		)
-		.exists() || !Self::join_many(
-			&cafe_sdk_path,
-			[
+			&[
 				"data", "mlc", "sys", "title", "00050030", "1001020a", "code", "app.xml",
 			],
-		)
-		.exists()
-		{
-			return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
-		}
-
-		// Can't generate a `fw.img` file for now :(
-		if !Self::join_many(
-			&cafe_sdk_path,
-			[
+			&[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "code",
+			],
+			&[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "content",
+			],
+			&[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "meta",
+			],
+			// Can't generate a `fw.img` for now.... :(
+			&[
 				"data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img",
 			],
-		)
-		.exists()
-		{
-			return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
+		] {
+			if !Self::join_many(&cafe_sdk_path, path).exists() {
+				return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
+			}
 		}
+
+		Self::prepare_for_serving(&cafe_sdk_path).await?;
+		let ro_folders = Self::get_default_read_only_folders(&cafe_sdk_path);
 
 		Ok(Self {
 			cafe_sdk_path,
-			folders_marked_read_only: Arc::new(ConcurrentSet::new()),
+			disc_mounted: Arc::new(Mutex::new(None)),
+			folders_marked_read_only: Arc::new(ro_folders),
 			open_file_handles: Arc::new(ConcurrentMap::new()),
 			open_folder_handles: Arc::new(ConcurrentMap::new()),
+			is_using_unique_fds: false,
+			has_opened_file: Arc::new(AtomicBool::new(false)),
 		})
 	}
 
@@ -155,6 +178,41 @@ impl HostFilesystem {
 		&self.cafe_sdk_path
 	}
 
+	/// The root path to the Cafe SDK.
+	///
+	/// *note: although we do expose this for logging, and other info... we do
+	/// not recommend manually interacting with the SDK path. There are much
+	/// better alternatives.*
+	#[must_use]
+	pub fn disc_emu_path(&self) -> PathBuf {
+		Self::join_many(&self.cafe_sdk_path, ["data", "disc"])
+	}
+
+	/// Force unique file descriptors for open files.
+	///
+	/// Certain OS's _can_ return duplicate fd's especially when opening,
+	/// and closing files. This can make deciphering logs harder because the
+	/// same FD may appear multiple times, when you're trying to just find
+	/// the logs related to one file descriptor.
+	///
+	/// When unique fd's is turned on, similar to folders we just use a global
+	/// wrapping counter so that way every file descriptor is guaranteed to be
+	/// unique.
+	///
+	/// ## Errors
+	///
+	/// This will error if any file has ever been opened. This is because once
+	/// a client has already connected, and done some stuff with file stuff it
+	/// expects one set of behaviors, we cannot change another one.
+	pub fn force_unique_fds(&mut self) -> Result<(), FSEmulAPIError> {
+		if self.has_opened_file.load(AtomicOrdering::Relaxed) {
+			Err(FSEmulAPIError::CannotSwapFdStrategy)
+		} else {
+			self.is_using_unique_fds = true;
+			Ok(())
+		}
+	}
+
 	/// Open a file, and return it's file descriptor number.
 	///
 	/// ## Errors
@@ -166,6 +224,7 @@ impl HostFilesystem {
 		path: &PathBuf,
 		stream_owner: Option<u64>,
 	) -> Result<i32, FSError> {
+		self.has_opened_file.store(true, AtomicOrdering::Relaxed);
 		let fd = open_options.open(path).await?;
 		let raw_fd;
 		#[cfg(unix)]
@@ -180,11 +239,16 @@ impl HostFilesystem {
 		}
 
 		let md = fd.metadata().await?;
+		let final_fd = if self.is_using_unique_fds {
+			UNIQUE_FILE_FD.fetch_add(1, AtomicOrdering::SeqCst)
+		} else {
+			raw_fd
+		};
 
 		self.open_file_handles
-			.insert(raw_fd, (fd, md.len(), path.clone(), stream_owner))
-			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
-		Ok(raw_fd)
+			.insert(final_fd, (fd, md.len(), path.clone(), stream_owner))
+			.map_err(|_| IOError::other("somehow got duplicate fd?"))?;
+		Ok(final_fd)
 	}
 
 	/// Get a file from a file descriptor number.
@@ -236,7 +300,7 @@ impl HostFilesystem {
 	pub async fn read_file(
 		&self,
 		fd: i32,
-		total_data_to_read: usize,
+		mut total_data_to_read: usize,
 		for_stream: Option<u64>,
 	) -> Result<Option<Bytes>, FSError> {
 		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
@@ -246,10 +310,19 @@ impl HostFilesystem {
 			return Ok(None);
 		}
 		let file_reader = &mut real_entry.0;
+
 		let mut file_buff = BytesMut::zeroed(total_data_to_read);
-		let bytes_read = file_reader.read(&mut file_buff).await?;
-		if bytes_read < total_data_to_read {
-			file_buff[bytes_read..].fill(0xCD);
+		let mut total_bytes_read = 0_usize;
+		while total_data_to_read > 0 {
+			let bytes_read = file_reader.read(&mut file_buff[total_bytes_read..]).await?;
+			if bytes_read == 0 {
+				break;
+			}
+			total_data_to_read -= bytes_read;
+			total_bytes_read += bytes_read;
+		}
+		if file_buff.len() > total_bytes_read {
+			file_buff.truncate(total_bytes_read);
 		}
 
 		Ok(Some(file_buff.freeze()))
@@ -342,16 +415,14 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If the path doesn't exist, then we can't open the folder.
-	pub async fn open_folder(
-		&self,
-		path: &PathBuf,
-		for_stream: Option<u64>,
-	) -> Result<i32, FSError> {
-		let dhandle = read_dir(path).await?;
+	pub fn open_folder(&self, path: &PathBuf, for_stream: Option<u64>) -> Result<i32, FSError> {
+		let mut dhandle = read_dir(path)?.filter_map(Result::ok).collect::<Vec<_>>();
+		dhandle.sort_by_key(DirEntry::path);
+
 		let fake_fd = FOLDER_FD.fetch_add(1, AtomicOrdering::SeqCst);
 
 		self.open_folder_handles
-			.insert(fake_fd, (dhandle, false, path.clone(), for_stream))
+			.insert(fake_fd, (dhandle, 0, false, path.clone(), for_stream))
 			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
 		Ok(fake_fd)
 	}
@@ -361,12 +432,8 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If we could not actually insert the folder into the read only map.
-	pub async fn mark_folder_read_only(&self, path: PathBuf) -> Result<(), FSError> {
-		self.folders_marked_read_only
-			.insert_async(path)
-			.await
-			.map_err(|_| IOError::other("Folder could not be marked read-only?"))
-			.map_err(FSError::IO)
+	pub async fn mark_folder_read_only(&self, path: PathBuf) {
+		_ = self.folders_marked_read_only.insert_async(path).await;
 	}
 
 	/// Mark a folder as being 'read-write' for this session.
@@ -400,21 +467,25 @@ impl HostFilesystem {
 			return Ok(None);
 		}
 
-		let component_count = entry.2.components().count();
+		let component_count = entry.3.components().count();
 		let mut value: Option<PathBuf> = None;
-		if !entry.1 {
-			let iter = &mut entry.0;
+		if !entry.2 {
 			loop {
-				value = iter.next_entry().await?.map(|de| de.path());
-				if let Some(ref_value) = value.as_ref() {
+				if entry.1 < entry.0.len() {
+					let ref_value = entry.0[entry.1].path();
+					entry.1 += 1;
+
 					if (!ref_value.is_file() && !ref_value.is_dir()) || ref_value.is_symlink() {
 						continue;
 					}
+
+					value = Some(ref_value);
 				}
+
 				break;
 			}
 			if value.is_none() {
-				entry.1 = true;
+				entry.2 = true;
 			}
 		}
 
@@ -437,9 +508,12 @@ impl HostFilesystem {
 		if !Self::allow_folder_access(&real_entry, for_stream) {
 			return Ok(());
 		}
+		if real_entry.1 == 0 {
+			return Ok(());
+		}
 
-		real_entry.0 = read_dir(&real_entry.2).await?;
-		real_entry.1 = false;
+		real_entry.1 -= 1;
+		real_entry.2 = false;
 		Ok(())
 	}
 
@@ -508,6 +582,47 @@ impl HostFilesystem {
 		}
 
 		Ok(path)
+	}
+
+	#[doc(
+		// This is not yet finished and the signature may change....
+		hidden,
+	)]
+	/// Mount a particular title as if it were a disc.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot remove any existing disc that may be present.
+	/// - If we cannot copy the title to the disc id path.
+	pub async fn mount_disk_title(
+		&mut self,
+		is_slc: bool,
+		is_sys: bool,
+		title_id: TitleID,
+	) -> Result<(), FSError> {
+		let source_path = Self::join_many(
+			&self.cafe_sdk_path,
+			[
+				"data".to_owned(),
+				if is_slc { "slc" } else { "mlc" }.to_owned(),
+				if is_sys { "sys" } else { "usr" }.to_owned(),
+				"title".to_owned(),
+				format!("{:08x}", title_id.0),
+				format!("{:08x}", title_id.1),
+			],
+		);
+		let dest_path = Self::join_many(&self.cafe_sdk_path, ["data", "disc"]);
+		if dest_path.exists() {
+			remove_dir_all(&dest_path).await.map_err(FSError::IO)?;
+		}
+
+		Self::copy_dir(&source_path, &dest_path).await?;
+		// Mount was successful!
+		{
+			let mut guard = self.disc_mounted.lock().await;
+			guard.replace((is_slc, is_sys, title_id));
+		}
+		todo!("figure out how to mount diskid.bin")
 	}
 
 	/// Get the path to the current firmware file to boot on the MION.
@@ -646,6 +761,23 @@ impl HostFilesystem {
 		)))
 	}
 
+	/// Rename a file, symlink, or directory.
+	///
+	/// This is implemented so we can rename directories, and files without
+	/// having to worry about the logic. Especially given the fact the built in
+	/// rename doesn't support directories.
+	///
+	/// ## Errors
+	///
+	/// - If we run into any filesystem error renaming a source, or directory.
+	pub async fn rename(&self, from: &Path, to: &Path) -> Result<(), FSError> {
+		if from.is_dir() {
+			Self::rename_dir(from, to).await
+		} else {
+			rename(from, to).await.map_err(FSError::IO)
+		}
+	}
+
 	/// Get a file from the SLC.
 	///
 	/// The SLC always serves "sys" files, and are relative to a title id, almost
@@ -665,6 +797,35 @@ impl HostFilesystem {
 				format!("{:08x}", title_id.1),
 			],
 		)
+	}
+
+	/// Get the current OS's default directory path.
+	///
+	/// For Windows this is: `C:\cafe_sdk`.
+	/// For Unix/BSD likes this is: `/opt/cafe_sdk`
+	#[allow(
+    // Not actually unreachable unless on unsupported OS.
+    unreachable_code,
+  )]
+	#[must_use]
+	pub fn default_cafe_folder() -> Option<PathBuf> {
+		#[cfg(target_os = "windows")]
+		{
+			return Some(PathBuf::from(r"C:\cafe_sdk"));
+		}
+
+		#[cfg(any(
+			target_os = "linux",
+			target_os = "freebsd",
+			target_os = "openbsd",
+			target_os = "netbsd",
+			target_os = "macos"
+		))]
+		{
+			return Some(PathBuf::from("/opt/cafe_sdk"));
+		}
+
+		None
 	}
 
 	/// Get the current path to the temporary directory for this Cafe SDK
@@ -712,35 +873,6 @@ impl HostFilesystem {
 		)
 	}
 
-	/// Get the current OS's default directory path.
-	///
-	/// For Windows this is: `C:\cafe_sdk`.
-	/// For Unix/BSD likes this is: `/opt/cafe_sdk`
-	#[allow(
-    // Not actually unreachable unless on unsupported OS.
-    unreachable_code,
-  )]
-	#[must_use]
-	pub fn default_cafe_folder() -> Option<PathBuf> {
-		#[cfg(target_os = "windows")]
-		{
-			return Some(PathBuf::from(r"C:\cafe_sdk"));
-		}
-
-		#[cfg(any(
-			target_os = "linux",
-			target_os = "freebsd",
-			target_os = "openbsd",
-			target_os = "netbsd",
-			target_os = "macos"
-		))]
-		{
-			return Some(PathBuf::from("/opt/cafe_sdk"));
-		}
-
-		None
-	}
-
 	async fn patch_case_sensitive_title_ids(cafe_sdk_path: &Path) -> Result<(), FSError> {
 		// First we need to check if we're even on a temporary filesystem/path.
 		if !cafe_sdk_path.exists() {
@@ -769,7 +901,7 @@ impl HostFilesystem {
 
 			// Now we need to scan, and lowercase all title ids. So those are the
 			// next two sub dirs as they're split into `title/{upper}/{lower}`.
-			let mut iter = read_dir(&directory).await?;
+			let mut iter = async_read_dir(&directory).await?;
 			let lossy_cafe_dir = cafe_sdk_path.as_os_str().to_string_lossy().to_string();
 			while let Ok(Some(entry)) = iter.next_entry().await {
 				let p = entry.path();
@@ -777,7 +909,7 @@ impl HostFilesystem {
 					continue;
 				}
 
-				let mut inner_iter = read_dir(&p).await?;
+				let mut inner_iter = async_read_dir(&p).await?;
 				while let Ok(Some(inner_entry)) = inner_iter.next_entry().await {
 					let ip = inner_entry.path();
 					if !ip.is_dir() || !ip.exists() {
@@ -837,18 +969,415 @@ impl HostFilesystem {
 		requesting_stream_id == owned_stream_id
 	}
 
+	#[allow(
+		// TODO(mythra): fix
+		clippy::type_complexity
+	)]
 	fn allow_folder_access(
-		entry: &CMOccupiedEntry<i32, (ReadDir, bool, PathBuf, Option<u64>), RandomState>,
+		entry: &CMOccupiedEntry<
+			i32,
+			(Vec<DirEntry>, usize, bool, PathBuf, Option<u64>),
+			RandomState,
+		>,
 		requester: Option<u64>,
 	) -> bool {
 		let Some(requesting_stream_id) = requester else {
 			return true;
 		};
-		let Some(owned_stream_id) = entry.3 else {
+		let Some(owned_stream_id) = entry.4 else {
 			return true;
 		};
 
 		requesting_stream_id == owned_stream_id
+	}
+
+	/// Enusre an SDK path is ready for serving this means:
+	///
+	/// - Create some configuration files that SDKs don't come with, but will
+	///   help the OS boot up.
+	/// - Mount the `DISC` directory if one is not present.
+	async fn prepare_for_serving(cafe_sdk_path: &Path) -> Result<(), FSError> {
+		if !Self::join_many(cafe_sdk_path, ["data", "slc", "sys", "config", "eco.xml"]).exists() {
+			Self::generate_eco_xml(cafe_sdk_path).await?;
+		}
+		if !Self::join_many(
+			cafe_sdk_path,
+			["data", "slc", "sys", "proc", "prefs", "wii_acct.xml"],
+		)
+		.exists()
+		{
+			Self::generate_wii_acct_xml(cafe_sdk_path).await?;
+		}
+		if !Self::join_many(
+			cafe_sdk_path,
+			["data", "slc", "sys", "proc", "prefs", "ccr.xml"],
+		)
+		.exists()
+		{
+			Self::generate_ccr_xml(cafe_sdk_path).await?;
+		}
+
+		// If we're booting in PCFS mode we'll need TMD's for these core OS titles.
+		let os_ndebug_tmd_path = Self::join_many(
+			cafe_sdk_path,
+			[
+				"data",
+				"slc",
+				"sys",
+				"title",
+				"00050010",
+				"1000400a",
+				"code",
+				"title.tmd",
+			],
+		);
+		if !os_ndebug_tmd_path.exists() {
+			let source_tmd = Self::join_many(
+				cafe_sdk_path,
+				[
+					"data",
+					"mlc",
+					"sys",
+					"update",
+					"nand",
+					"os_v10_ndebug",
+					"title.tmd",
+				],
+			);
+			copy_file(&source_tmd, os_ndebug_tmd_path).await?;
+		}
+		let os_debug_tmd_path = Self::join_many(
+			cafe_sdk_path,
+			[
+				"data",
+				"slc",
+				"sys",
+				"title",
+				"00050010",
+				"1000800a",
+				"code",
+				"title.tmd",
+			],
+		);
+		if !os_debug_tmd_path.exists() {
+			let source_tmd = Self::join_many(
+				cafe_sdk_path,
+				[
+					"data",
+					"mlc",
+					"sys",
+					"update",
+					"nand",
+					"os_v10_debug",
+					"title.tmd",
+				],
+			);
+			copy_file(&source_tmd, os_debug_tmd_path).await?;
+		}
+
+		// Unmount any leftover discs....
+		if Self::join_many(cafe_sdk_path, ["data", "disc"]).exists() {
+			remove_dir_all(Self::join_many(cafe_sdk_path, ["data", "disc"]))
+				.await
+				.map_err(FSError::IO)?;
+		}
+		// Manually mount in SysConfigTool.....
+		//
+		// This doesn't actually create a discid.bin, but the files do exist.
+		let disc_dir = Self::join_many(cafe_sdk_path, ["data", "disc"]);
+		let sctt_dir = Self::join_many(
+			cafe_sdk_path,
+			["data", "mlc", "sys", "title", "00050010", "1f700500"],
+		);
+		for subpath in ["code", "content", "meta"] {
+			Self::copy_dir(
+				&Self::join_many(&sctt_dir, [subpath]),
+				&Self::join_many(&disc_dir, [subpath]),
+			)
+			.await?;
+		}
+
+		Ok(())
+	}
+
+	async fn copy_dir(source_path: &PathBuf, dest_path: &PathBuf) -> Result<(), FSError> {
+		if !dest_path.exists() {
+			create_dir_all(dest_path).await?;
+		}
+		let new_path_as_str_bytes = dest_path.as_os_str().as_encoded_bytes();
+		let old_path_bytes = source_path.as_os_str().as_encoded_bytes();
+
+		for result in WalkDir::new(source_path)
+			.follow_links(false)
+			.follow_root_links(false)
+		{
+			let rpb = result?.into_path();
+			let os_str_for_entry = rpb.as_os_str().as_encoded_bytes();
+			let mut new_bytes = Vec::with_capacity(os_str_for_entry.len() + 3);
+			new_bytes.extend_from_slice(new_path_as_str_bytes);
+			new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+			let as_new_path =
+				PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
+
+			if rpb.is_symlink() {
+				let mut resolved_path = read_link(&rpb).await?;
+				{
+					// If this symlink is a symlink to another path within the same
+					// directory, then rewrite it as well to start under our new directory.
+					let os_str_for_resolved = resolved_path.as_os_str().as_encoded_bytes();
+					if os_str_for_resolved.starts_with(old_path_bytes) {
+						let mut new_bytes = Vec::with_capacity(os_str_for_resolved.len() + 3);
+						new_bytes.extend_from_slice(new_path_as_str_bytes);
+						new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+						resolved_path = PathBuf::from(unsafe {
+							OsString::from_encoded_bytes_unchecked(new_bytes)
+						});
+					}
+				}
+
+				#[cfg(unix)]
+				{
+					use std::os::unix::fs::symlink;
+					symlink(resolved_path, &as_new_path)?;
+				}
+
+				#[cfg(target_os = "windows")]
+				{
+					use std::os::windows::fs::{symlink_dir, symlink_file};
+
+					if resolved_path.is_dir() {
+						symlink_dir(resolved_path, &as_new_path)?;
+					} else {
+						symlink_file(resolved_path, &as_new_path)?;
+					}
+				}
+			} else if rpb.is_file() {
+				copy_file(&rpb, &as_new_path).await?;
+			} else if rpb.is_dir() {
+				create_dir_all(&as_new_path).await?;
+			}
+		}
+
+		Ok(())
+	}
+
+	/// Rename an entire directory.
+	///
+	/// We have to implement this ourselves, because [`tokio::fs::rename`], and
+	/// [`std::fs::rename`] don't support renaming a directory at all on windows,
+	/// which is one of the critical OS's that we need to support.
+	///
+	/// This 'rename' works by actually creating a new directory. Then
+	/// moving all the files over with rename. This is slow, but
+	/// works.
+	async fn rename_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
+		if !dest_path.exists() {
+			create_dir_all(dest_path).await?;
+		}
+		let new_path_as_str_bytes = dest_path.as_os_str().as_encoded_bytes();
+		let old_path_bytes = source_path.as_os_str().as_encoded_bytes();
+
+		for result in WalkDir::new(source_path)
+			.follow_links(false)
+			.follow_root_links(false)
+		{
+			let rpb = result?.into_path();
+			let os_str_for_entry = rpb.as_os_str().as_encoded_bytes();
+			let mut new_bytes = Vec::with_capacity(os_str_for_entry.len() + 3);
+			new_bytes.extend_from_slice(new_path_as_str_bytes);
+			new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+			let as_new_path =
+				PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
+
+			if rpb.is_symlink() {
+				let mut resolved_path = read_link(&rpb).await?;
+				{
+					// If this symlink is a symlink to another path within the same
+					// directory, then rewrite it as well to start under our new directory.
+					let os_str_for_resolved = resolved_path.as_os_str().as_encoded_bytes();
+					if os_str_for_resolved.starts_with(old_path_bytes) {
+						let mut new_bytes = Vec::with_capacity(os_str_for_resolved.len() + 3);
+						new_bytes.extend_from_slice(new_path_as_str_bytes);
+						new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+						resolved_path = PathBuf::from(unsafe {
+							OsString::from_encoded_bytes_unchecked(new_bytes)
+						});
+					}
+				}
+
+				#[cfg(unix)]
+				{
+					use std::os::unix::fs::symlink;
+					symlink(resolved_path, &as_new_path)?;
+				}
+
+				#[cfg(target_os = "windows")]
+				{
+					use std::os::windows::fs::{symlink_dir, symlink_file};
+
+					if resolved_path.is_dir() {
+						symlink_dir(resolved_path, &as_new_path)?;
+					} else {
+						symlink_file(resolved_path, &as_new_path)?;
+					}
+				}
+				// Remove the original link, we renamed this....
+				remove_file(&rpb).await?;
+			} else if rpb.is_file() {
+				rename(&rpb, &as_new_path).await?;
+			} else if rpb.is_dir() {
+				create_dir_all(&as_new_path).await?;
+			}
+		}
+		// Clean up after ourselves...
+		remove_dir_all(source_path).await?;
+
+		Ok(())
+	}
+
+	/// Generate an `eco.xml` if one is not present.
+	///
+	/// This is _required_ in order to provide an actual functional PCFS install,
+	/// and not actually normally created on the host filesystem with the
+	/// official tools. It just generates it in memory.
+	///
+	/// ## Errors
+	///
+	/// If we cannot create the config directory, or write the eco config
+	/// file to disk.
+	async fn generate_eco_xml(cafe_os_path: &Path) -> Result<(), FSError> {
+		let mut eco_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "config"]);
+		if !eco_path.exists() {
+			create_dir_all(&eco_path).await.map_err(FSError::IO)?;
+		}
+		eco_path.push("eco.xml");
+
+		let mut eco_file = File::create(eco_path).await.map_err(FSError::IO)?;
+		eco_file
+			.write_all(
+				br#"<?xml version="1.0" encoding="utf-8"?>
+<eco type="complex" access="777">
+  <enable type="unsignedInt" length="4">0</enable>
+  <max_on_time type="unsignedInt" length="4">3601</max_on_time>
+  <default_off_time type="unsignedInt" length="4">15</default_off_time>
+  <wd_disable type="unsignedInt" length="4">1</wd_disable>
+</eco>"#,
+			)
+			.await
+			.map_err(FSError::IO)?;
+
+		#[cfg(unix)]
+		{
+			use std::{fs::Permissions, os::unix::prelude::*};
+			eco_file
+				.set_permissions(Permissions::from_mode(0o770))
+				.await?;
+		}
+
+		Ok(())
+	}
+
+	/// Generate a `wii_acct.xml` if one is not present.
+	///
+	/// This is _required_ in order to provide an actual functional PCFS install,
+	/// and not actually normally created on the host filesystem with the
+	/// official tools. It just generates it in memory.
+	///
+	/// ## Errors
+	///
+	/// If we cannot create the config directory, or write the wii acct config
+	/// file to disk.
+	async fn generate_wii_acct_xml(cafe_os_path: &Path) -> Result<(), FSError> {
+		let mut wii_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "proc", "prefs"]);
+		if !wii_path.exists() {
+			create_dir_all(&wii_path).await.map_err(FSError::IO)?;
+		}
+		wii_path.push("wii_acct.xml");
+
+		let mut wii_file = File::create(wii_path).await.map_err(FSError::IO)?;
+		wii_file
+			.write_all(
+				br#"<?xml version="1.0" encoding="utf-8"?> 
+<wii_acct type="complex"> 
+  <profile type="complex"> 
+    <nickname type="hexBinary" length="22">00570069006900000000000000000000000000000000</nickname>
+
+    <language type="unsignedInt" length="4">0</language> 
+    <country type="unsignedInt" length="4">1</country> 
+  </profile> 
+  <pc type="complex"> 
+    <rating type="unsignedInt" length="4">18</rating> 
+    <organization type="unsignedInt" length="4">0</organization> 
+    <rst_internet_ch type="unsignedByte" length="1">0</rst_internet_ch> 
+    <rst_nw_access type="unsignedByte" length="1">0</rst_nw_access> 
+    <rst_pt_order type="unsignedByte" length="1">0</rst_pt_order> 
+  </pc> 
+</wii_acct>"#,
+			)
+			.await
+			.map_err(FSError::IO)?;
+
+		#[cfg(unix)]
+		{
+			use std::{fs::Permissions, os::unix::prelude::*};
+			wii_file
+				.set_permissions(Permissions::from_mode(0o770))
+				.await?;
+		}
+
+		Ok(())
+	}
+
+	/// Generate a `ccr.xml` if one is not present.
+	///
+	/// This isn't actually required by anything but removes an error message
+	/// from being printed which may be misinterpreted, and helps provide cleaner
+	/// errors in the case of weird boot fialures.
+	///
+	/// ## Errors
+	///
+	/// If we cannot create the config directory, or write the ccr config
+	/// file to disk.
+	async fn generate_ccr_xml(cafe_os_path: &Path) -> Result<(), FSError> {
+		let mut ccr_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "proc", "prefs"]);
+		if !ccr_path.exists() {
+			create_dir_all(&ccr_path).await.map_err(FSError::IO)?;
+		}
+		ccr_path.push("ccr.xml");
+
+		#[cfg(unix)]
+		let ccr_file = File::create(ccr_path).await.map_err(FSError::IO)?;
+		#[cfg(not(unix))]
+		let _ccr_file = File::create(ccr_path).await.map_err(FSError::IO)?;
+
+		// We don't actually need to write anything, as it'll just be removed...
+
+		#[cfg(unix)]
+		{
+			use std::{fs::Permissions, os::unix::prelude::*};
+			ccr_file
+				.set_permissions(Permissions::from_mode(0o770))
+				.await?;
+		}
+
+		Ok(())
+	}
+
+	fn get_default_read_only_folders(cafe_dir: &Path) -> ConcurrentSet<PathBuf> {
+		let set = ConcurrentSet::new();
+
+		for cafe_sub_paths in [
+			&["data", "slc", "sys", "config"] as &[&str],
+			&["data", "slc", "sys", "proc"],
+			&["data", "slc", "sys", "logs"],
+			&["data", "mlc", "usr"],
+			&["data", "mlc", "usr", "import"],
+			&["data", "mlc", "usr", "title"],
+		] {
+			_ = set.insert(Self::join_many(cafe_dir, cafe_sub_paths));
+		}
+
+		set
 	}
 }
 
@@ -876,7 +1405,7 @@ impl Valuable for HostFilesystem {
 		});
 		let mut folder_values = HashMap::with_capacity(self.open_folder_handles.len());
 		self.open_folder_handles.scan(|k, v| {
-			folder_values.insert(*k, format!("{}", v.2.display()));
+			folder_values.insert(*k, format!("{}", v.3.display()));
 		});
 
 		visitor.visit_named_fields(&NamedValues::new(
@@ -978,6 +1507,7 @@ impl Valuable for FilesystemLocation {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(test)))]
 #[cfg(test)]
 pub mod test_helpers {
 	use super::*;
@@ -1002,6 +1532,15 @@ pub mod test_helpers {
 			vec![
 				"data", "mlc", "sys", "title", "00050030", "1001000a", "code",
 			],
+			vec![
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "code",
+			],
+			vec![
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "content",
+			],
+			vec![
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "meta",
+			],
 			// Purposefully create capital so we can validate renaming works!
 			vec![
 				"data", "mlc", "sys", "title", "00050030", "1001010A", "code",
@@ -1012,10 +1551,44 @@ pub mod test_helpers {
 			vec![
 				"data", "slc", "sys", "title", "00050010", "1000400a", "code",
 			],
+			vec![
+				"data", "mlc", "sys", "update", "nand", "os_v10_ndebug",
+			],
+			vec![
+				"data", "mlc", "sys", "update", "nand", "os_v10_debug",
+			],
+			vec![
+				"data", "slc", "sys", "proc", "prefs",
+			],
+			vec![
+				"data", "slc", "sys", "title", "00050010", "1000800a", "code",
+			],
+			vec![
+				"data", "slc", "sys", "title", "00050010", "1000400a", "code",
+			],
 		] {
 			create_dir_all(HostFilesystem::join_many(dir.path(), directory_to_create))
 				.expect("Failed to create directories necessary for host filesystem to work.");
 		}
+
+		File::create(HostFilesystem::join_many(dir.path(), [
+			"data",
+			"mlc",
+			"sys",
+			"update",
+			"nand",
+			"os_v10_ndebug",
+			"title.tmd",
+		])).expect("Failed to create needed fake title.tmd");
+		File::create(HostFilesystem::join_many(dir.path(), [
+			"data",
+			"mlc",
+			"sys",
+			"update",
+			"nand",
+			"os_v10_debug",
+			"title.tmd",
+		])).expect("Failed to create needed fake title.tmd");
 
 		// Place files that need to exist, they are not real, but enough to "fool"
 		// our basic check.
@@ -1375,7 +1948,6 @@ mod unit_tests {
 
 		let fd = fs
 			.open_folder(&path, None)
-			.await
 			.expect("Failed to open existing folder!");
 		assert!(
 			fs.open_folder_handles.len() == 1,
@@ -1430,10 +2002,7 @@ mod unit_tests {
 			.await
 			.expect("Failed to create file to use!");
 
-		let dfd = fs
-			.open_folder(&path, None)
-			.await
-			.expect("Failed to open file!");
+		let dfd = fs.open_folder(&path, None).expect("Failed to open folder!");
 		assert!(
 			fs.next_in_folder(dfd, None)
 				.await
@@ -1480,13 +2049,7 @@ mod unit_tests {
 			fs.next_in_folder(dfd, None)
 				.await
 				.expect("Failed to query for next in folder! 2.2!")
-				.is_some()
-		);
-		assert!(
-			fs.next_in_folder(dfd, None)
-				.await
-				.expect("Failed to query for next in folder! 2.3!")
-				.is_some()
+				.is_none()
 		);
 	}
 }

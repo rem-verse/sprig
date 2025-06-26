@@ -120,6 +120,7 @@ fn handle_disk_space(
 	// needs to not be on the network....
 	let ResolvedLocation::Filesystem(fs_location) = location else {
 		debug!(
+			packet.location = valuable(&location),
 			packet.typ = "PCFSSrvGetInfo",
 			packet.sub_type = "handle_disk_space",
 			"Failed to resolve path!",
@@ -198,6 +199,7 @@ fn handle_folder_size(
 	// because it doesn't exist.
 	if !fs_location.canonicalized_is_exact() {
 		debug!(
+			packet.location = valuable(&fs_location),
 			packet.typ = "PCFSSrvGetInfo",
 			packet.sub_type = "handle_folder_size",
 			"Failed to resolve path!",
@@ -272,6 +274,7 @@ fn handle_file_count(
 	// because it doesn't exist.
 	if !fs_location.canonicalized_is_exact() {
 		debug!(
+			packet.location = valuable(&fs_location),
 			packet.typ = "PCFSSrvGetInfo",
 			packet.sub_type = "handle_file_count",
 			"Failed to resolve path!",
@@ -352,6 +355,7 @@ async fn handle_file_info(
 		ResolvedLocation::Filesystem(ref filesystem) => {
 			let Ok(metadata) = filesystem.resolved_path().metadata() else {
 				debug!(
+					packet.location = valuable(&location),
 					packet.typ = "PCFSSrvGetInfo",
 					packet.sub_type = "handle_file_info",
 					"Failed to resolve path!",
@@ -363,9 +367,21 @@ async fn handle_file_info(
 					SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 				);
 			};
+			if &fs.disc_emu_path() == filesystem.resolved_path() {
+				return SataResponse::new(
+					pid,
+					request_header,
+					SataQueryResponse::FDInfo(
+						// Yes, i know this claims to be an empty file, but this is
+						// legitimately how the official software responds.
+						SataFDInfo::create_fake_info(0x8000_0000, 0x666, 0, 0, 0),
+					),
+				);
+			}
 			let info = SataFDInfo::get_info(fs, &metadata, filesystem.resolved_path()).await;
 
 			debug!(
+				packet.location = valuable(&location),
 				packet.typ = "PCFSSrvGetInfo",
 				packet.sub_type = "handle_file_info",
 				packet.result = valuable(&info),

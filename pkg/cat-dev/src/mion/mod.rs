@@ -7,14 +7,18 @@
 //! In general if you're trying to look for things relating to the bridge as a
 //! whole, you're _probably_ really actually talking to the MION.
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 pub mod cgis;
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 pub mod discovery;
 pub mod errors;
 pub mod firmware;
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 pub mod parameter;
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 pub mod proto;
 

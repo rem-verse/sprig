@@ -79,6 +79,7 @@ pub async fn do_raw_status_request(
 		Method::POST,
 		format!("http://{mion_ip}/mion/status.cgi"),
 		Some(encode_url_parameters(url_parameters)),
+		None,
 	)
 	.await
 }

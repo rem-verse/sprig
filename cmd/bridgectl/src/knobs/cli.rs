@@ -1052,6 +1052,24 @@ pub struct FSEmulConfigurationFlags {
 		long_help = "If we should prefer the `fsemul.ini` file over the web configuration, this makes us act like nintendo's tools, but also means your configuration needs to be up to date."
 	)]
 	prefer_fsemul_over_network: bool,
+	#[arg(
+		long = "force-unique-fds",
+		visible_aliases = [
+			"force_unique_fds",
+			"counter-fds",
+			"counter_fds"
+		],
+		help = "Force unique file descriptors for files from HostFilesystem.",
+		long_help = "If you want an easier time debugging fds and your OS reuses them, set this flag to guarantee all files get unique fds.",
+	)]
+	force_unique_fds: bool,
+	#[arg(
+		long = "sata-wal-log",
+		alias = "sata_wal_log",
+		help = "Where we should create a SATA WAL log for all PCFS Sata requests.",
+		long_help = "Where we should create a SATA WAL log for all PCFS Sata requests, not that this does carry increased memory, and CPU time needing to be spent."
+	)]
+	sata_wal_log: Option<PathBuf>,
 }
 impl FSEmulConfigurationFlags {
 	#[must_use]
@@ -1095,15 +1113,25 @@ impl FSEmulConfigurationFlags {
 	}
 
 	#[must_use]
+	pub const fn force_unique_fds(&self) -> bool {
+		self.force_unique_fds
+	}
+
+	#[must_use]
 	pub const fn prefer_fsemul_over_network(&self) -> bool {
 		self.prefer_fsemul_over_network
+	}
+
+	#[must_use]
+	pub fn sata_wal_log(&self) -> Option<&PathBuf> {
+		self.sata_wal_log.as_ref()
 	}
 }
 impl Display for FSEmulConfigurationFlags {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		write!(
 			fmt,
-			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`, --disable-csr: `{}`, --disable-ffio: `{}`, --disable-load-bearing-sleep-for-atapi: `{}`, --disable-load-bearing-sleep-for-pcfs: `{}`, --disable-load-bearing-sleep-for-sdio: `{}`, --disable-real-removal: `{}`",
+			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`, --disable-csr: `{}`, --disable-ffio: `{}`, --disable-load-bearing-sleep-for-atapi: `{}`, --disable-load-bearing-sleep-for-pcfs: `{}`, --disable-load-bearing-sleep-for-sdio: `{}`, --disable-real-removal: `{}`, --force-unique-fds: `{}`, --sata-wal-log: `{:?}`",
 			self.fsemul_config_path,
 			self.prefer_fsemul_over_network,
 			self.cafe_dir,
@@ -1113,6 +1141,8 @@ impl Display for FSEmulConfigurationFlags {
 			self.disable_load_bearing_sleep_for_pcfs,
 			self.disable_load_bearing_sleep_for_sdio,
 			self.disable_real_removal,
+			self.force_unique_fds,
+			self.sata_wal_log,
 		)
 	}
 }
@@ -1126,6 +1156,8 @@ const FSEMUL_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("disable_load_bearing_sleep_for_pcfs"),
 	NamedField::new("disable_load_bearing_sleep_for_sdio"),
 	NamedField::new("disable_real_removal"),
+	NamedField::new("force_unique_fds"),
+	NamedField::new("sata_wal_log"),
 ];
 impl Structable for FSEmulConfigurationFlags {
 	fn definition(&self) -> StructDef<'_> {
@@ -1158,6 +1190,13 @@ impl Valuable for FSEmulConfigurationFlags {
 				Valuable::as_value(&self.disable_load_bearing_sleep_for_pcfs),
 				Valuable::as_value(&self.disable_load_bearing_sleep_for_sdio),
 				Valuable::as_value(&self.disable_real_removal),
+				Valuable::as_value(&self.force_unique_fds),
+				Valuable::as_value(
+					&self
+						.sata_wal_log
+						.as_ref()
+						.map(|pb| format!("{}", pb.display())),
+				),
 			],
 		));
 	}

@@ -14,6 +14,7 @@ use crate::net::client::models::{FromRequestStreamEvent, RequestStreamEvent};
 #[cfg(feature = "servers")]
 use crate::net::server::models::{FromResponseStreamEvent, ResponseStreamEvent};
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 /// A stream ending/(on disconnect) handler, attempts to be an incredibly
 /// thin layer between a function, and the actual ending handler.
@@ -29,6 +30,7 @@ pub trait OnRequestStreamEndHandler<ParamTy, State: Clone + Send + Sync + 'stati
 	fn call(self, event: RequestStreamEvent<State>) -> Self::Future;
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 /// Allow any async function without arguments to be a handler
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State> OnRequestStreamEndHandler<(), State>
@@ -47,6 +49,7 @@ where
 }
 
 /// Allow any async function with a single consuming argument.
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State, ArgTy> OnRequestStreamEndHandler<ArgTy, State>
 	for UnderlyingFnType
@@ -64,6 +67,7 @@ where
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 /// A stream ending/(on disconnect) handler, attempts to be an incredibly
 /// thin layer between a function, and the actual ending handler.
@@ -79,6 +83,7 @@ pub trait OnResponseStreamEndHandler<ParamTy, State: Clone + Send + Sync + 'stat
 	fn call(self, event: ResponseStreamEvent<State>) -> Self::Future;
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 /// Allow any async function without arguments to be a handler
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State> OnResponseStreamEndHandler<(), State>
@@ -97,6 +102,7 @@ where
 }
 
 /// Allow any async function with a single consuming argument.
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State, ArgTy>
 	OnResponseStreamEndHandler<ArgTy, State> for UnderlyingFnType
@@ -119,6 +125,7 @@ macro_rules! fn_to_on_disconnect_handler {
 		[$($ty:ident),*], $last:ident
 	) => {
 		#[allow(non_snake_case, unused_mut)]
+		#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 		#[cfg(feature = "clients")]
 		impl<UnderlyingFnType, FnFutureTy, OutputTy, State, $($ty,)* $last> OnRequestStreamEndHandler<($($ty,)* $last,), State> for UnderlyingFnType
 		where
@@ -144,6 +151,7 @@ macro_rules! fn_to_on_disconnect_handler {
 		}
 
 		#[allow(non_snake_case, unused_mut)]
+		#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 		#[cfg(feature = "servers")]
 		impl<UnderlyingFnType, FnFutureTy, OutputTy, State, $($ty,)* $last> OnResponseStreamEndHandler<($($ty,)* $last,), State> for UnderlyingFnType
 		where
@@ -226,6 +234,7 @@ where
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl<HandlerTy, HandlerParamsTy, State> Service<RequestStreamEvent<State>>
 	for OnStreamEndHandlerAsService<HandlerTy, HandlerParamsTy>
@@ -248,6 +257,7 @@ where
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 impl<HandlerTy, HandlerParamsTy, State> Service<ResponseStreamEvent<State>>
 	for OnStreamEndHandlerAsService<HandlerTy, HandlerParamsTy>

@@ -5,12 +5,14 @@
 //! implement the rest of things like a "TCP Server", or "TCP Client".
 
 pub mod additions;
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 pub mod client;
 pub mod errors;
 mod ext_map;
 pub mod handlers;
 pub mod models;
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 pub mod server;
 

@@ -8,5 +8,6 @@
 //! you got a search request for ATAPI, and were looking for actual real ATAPI
 //! code. Not this weird nintendo variant.
 
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 pub mod server;

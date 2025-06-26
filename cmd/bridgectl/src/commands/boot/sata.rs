@@ -18,7 +18,7 @@ use cat_dev::{
 	net::server::TCPServer,
 };
 use miette::miette;
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, path::PathBuf};
 use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};
 use tracing::{error, info};
 
@@ -26,6 +26,7 @@ use tracing::{error, info};
 #[allow(
 	// CLIPPY ILL THINK ABOUT IT.
 	clippy::fn_params_excessive_bools,
+	clippy::too_many_arguments,
 )]
 pub async fn serve_sata(
 	host_filesystem: &'static HostFilesystem,
@@ -35,6 +36,7 @@ pub async fn serve_sata(
 	disable_ffio: bool,
 	disable_csr: bool,
 	disable_load_bearing_sleep: bool,
+	wal_log_path: Option<PathBuf>,
 ) -> u16 {
 	let sata_server = match pcfs_sata_server(
 		host_filesystem.clone(),
@@ -43,6 +45,7 @@ pub async fn serve_sata(
 		disable_ffio,
 		disable_csr,
 		disable_real_removal,
+		wal_log_path,
 		*PCFS_OVERRIDE_LOAD_BEARING_SLEEP_MS,
 		disable_load_bearing_sleep,
 		None,

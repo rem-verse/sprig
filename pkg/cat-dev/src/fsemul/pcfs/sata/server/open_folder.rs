@@ -59,7 +59,6 @@ pub async fn handle_open_folder(
 	let Ok(fd) = state
 		.host_filesystem()
 		.open_folder(fs_location.resolved_path(), Some(stream.to_raw()))
-		.await
 	else {
 		debug!(
 			packet.path = packet.path(),

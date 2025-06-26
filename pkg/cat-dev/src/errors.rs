@@ -13,8 +13,6 @@ use miette::{Diagnostic, Report};
 use std::{ffi::FromBytesUntilNulError, str::Utf8Error, string::FromUtf8Error, time::Duration};
 use thiserror::Error;
 use tokio::{io::Error as IoError, task::JoinError};
-
-#[cfg(feature = "servers")]
 use walkdir::Error as WalkdirError;
 
 #[cfg(feature = "clients")]
@@ -101,6 +99,7 @@ pub enum CatBridgeError {
 #[derive(Error, Diagnostic, Debug)]
 pub enum APIError {
 	/// Common network related API errors.
+	#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[error(transparent)]
 	#[diagnostic(transparent)]
@@ -122,6 +121,7 @@ pub enum APIError {
 	NoHostIpFound,
 }
 
+#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 #[cfg(any(feature = "clients", feature = "servers"))]
 impl From<CommonNetAPIError> for CatBridgeError {
 	fn from(value: CommonNetAPIError) -> Self {
@@ -131,7 +131,6 @@ impl From<CommonNetAPIError> for CatBridgeError {
 
 /// Trying to interact with the filesystem has resulted in an error.
 #[derive(Error, Diagnostic, Debug)]
-#[non_exhaustive]
 pub enum FSError {
 	/// We need a place to read/store a list of all the bridges on your host.
 	///
@@ -164,7 +163,6 @@ pub enum FSError {
 	#[error("Error writing/reading data from the filesystem: {0}")]
 	#[diagnostic(code(cat_dev::fs::io))]
 	IO(#[from] IoError),
-	#[cfg(feature = "servers")]
 	#[error("Error iterating through folder: {0:?}")]
 	#[diagnostic(code(cat_dev::fs::iterating_folder_error))]
 	IteratingFolderError(#[from] WalkdirError),
@@ -207,11 +205,13 @@ pub enum NetworkError {
 	#[error("Failed to bind to a local address to receive packets.")]
 	#[diagnostic(code(cat_dev::net::bind_failure))]
 	BindFailure,
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	CommonClient(#[from] CommonNetClientNetworkError),
 	/// An error has occurred in our common network framework.
+	#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[error(transparent)]
 	#[diagnostic(transparent)]
@@ -222,6 +222,7 @@ pub enum NetworkError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	FSEmul(#[from] FSEmulNetworkError),
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	/// See [`reqwest::Error`] for details.
 	#[error("Underlying HTTP client error: {0}")]
@@ -231,11 +232,13 @@ pub enum NetworkError {
 	#[error("Error talking to the network could not send/receive data: {0}")]
 	#[diagnostic(code(cat_dev::net::io_error))]
 	IO(#[from] IoError),
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	/// See [`network_interface::Error::GetIfAddrsError`] for details.
 	#[error("Failed to list the network interfaces on your device: {0:?}.")]
 	#[diagnostic(code(cat_dev::net::list_interfaces_error))]
 	ListInterfacesFailure(NetworkInterfaceError),
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	/// See [`local_ip_address::Error`] for details.
 	#[error("Failure fetching local ip address: {0}")]
@@ -254,6 +257,7 @@ pub enum NetworkError {
 	#[diagnostic(code(cat_dev::net::set_broadcast_failure))]
 	SetBroadcastFailure,
 	/// Error adding a packet to a queue to send.
+	#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 	#[cfg(feature = "servers")]
 	#[error("Error queueing up packet to be sent out over a conenction: {0:?}")]
 	#[diagnostic(code(cat_dev::net::send_queue_failure))]
@@ -269,6 +273,7 @@ pub enum NetworkError {
 	Timeout(Duration),
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<CommonNetClientNetworkError> for CatBridgeError {
 	fn from(value: CommonNetClientNetworkError) -> Self {
@@ -276,6 +281,7 @@ impl From<CommonNetClientNetworkError> for CatBridgeError {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 #[cfg(any(feature = "clients", feature = "servers"))]
 impl From<CommonNetNetworkError> for CatBridgeError {
 	fn from(value: CommonNetNetworkError) -> Self {
@@ -283,6 +289,7 @@ impl From<CommonNetNetworkError> for CatBridgeError {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<ReqwestError> for CatBridgeError {
 	fn from(value: ReqwestError) -> Self {

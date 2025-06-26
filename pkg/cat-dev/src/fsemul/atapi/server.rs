@@ -184,22 +184,31 @@ async fn handle_read_dlf(
 	let dlf = DiskLayoutFile::try_from(Bytes::from(bytes_of_dlf))?;
 
 	if let Some((path, offset)) = dlf.get_path_and_offset_for_file(read_address).await {
-		let metadata = path.metadata().map_err(FSError::from)?;
-		let file_size_bytes = usize::try_from(metadata.len() - offset).unwrap_or(usize::MAX);
 		// Read the file contents...
-		let mut handle = File::open(&path).await.map_err(FSError::from)?;
-		handle
-			.seek(SeekFrom::Start(offset))
-			.await
-			.map_err(FSError::from)?;
-		let mut buff = BytesMut::zeroed(std::cmp::min(file_size_bytes, rl_as_usize));
-		handle.read_exact(&mut buff).await.map_err(FSError::from)?;
-		std::mem::drop(handle);
-		// Pad if necessary...
-		if file_size_bytes < rl_as_usize {
-			buff.reserve(rl_as_usize - file_size_bytes);
-			buff.extend(BytesMut::zeroed(rl_as_usize - file_size_bytes));
-		}
+		let buff = {
+			let mut handle = File::open(&path).await.map_err(FSError::from)?;
+			handle
+				.seek(SeekFrom::Start(offset))
+				.await
+				.map_err(FSError::from)?;
+
+			let mut file_buff = BytesMut::zeroed(rl_as_usize);
+			let mut bytes_read = 0;
+			while bytes_read < rl_as_usize {
+				let read_this_go = handle
+					.read(&mut file_buff[bytes_read..])
+					.await
+					.map_err(FSError::IO)?;
+				// EOF, rest of the buff is already 0's, so no need to pad.
+				if read_this_go == 0 {
+					break;
+				}
+				bytes_read += read_this_go;
+			}
+
+			file_buff
+		};
+
 		// Send!
 		Ok(Some(buff.freeze()))
 	} else {

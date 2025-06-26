@@ -24,6 +24,7 @@ use crate::{
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MIONAPIError {
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	#[error(transparent)]
 	#[diagnostic(transparent)]
@@ -58,18 +59,21 @@ pub enum MIONAPIError {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	Firmware(#[from] MIONFirmwareAPIError),
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	ParameterSpace(#[from] MIONParameterAPIError),
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONCGIApiError> for APIError {
 	fn from(value: MIONCGIApiError) -> Self {
 		Self::MION(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONCGIApiError> for CatBridgeError {
 	fn from(value: MIONCGIApiError) -> Self {
@@ -88,12 +92,14 @@ impl From<MIONFirmwareAPIError> for CatBridgeError {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONParameterAPIError> for APIError {
 	fn from(value: MIONParameterAPIError) -> Self {
 		Self::MION(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONParameterAPIError> for CatBridgeError {
 	fn from(value: MIONParameterAPIError) -> Self {
@@ -105,16 +111,19 @@ impl From<MIONParameterAPIError> for CatBridgeError {
 #[derive(Error, Diagnostic, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MIONProtocolError {
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	/// Errors related to CGI, and HTML pages.
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	CGI(#[from] MIONCGIErrors),
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	/// Errors related to the CONTROL protocol for MION.
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	Control(#[from] MIONControlProtocolError),
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	/// Errors related to the PARAMETER SPACE protocol for MION.
 	#[error(transparent)]
@@ -133,18 +142,21 @@ impl From<MIONProtocolError> for CatBridgeError {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONCGIErrors> for NetworkParseError {
 	fn from(value: MIONCGIErrors) -> Self {
 		Self::MION(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONCGIErrors> for NetworkError {
 	fn from(value: MIONCGIErrors) -> Self {
 		Self::Parse(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONCGIErrors> for CatBridgeError {
 	fn from(value: MIONCGIErrors) -> Self {
@@ -152,18 +164,21 @@ impl From<MIONCGIErrors> for CatBridgeError {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONParamProtocolError> for NetworkParseError {
 	fn from(value: MIONParamProtocolError) -> Self {
 		Self::MION(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONParamProtocolError> for NetworkError {
 	fn from(value: MIONParamProtocolError) -> Self {
 		Self::Parse(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONParamProtocolError> for CatBridgeError {
 	fn from(value: MIONParamProtocolError) -> Self {
@@ -171,18 +186,21 @@ impl From<MIONParamProtocolError> for CatBridgeError {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONControlProtocolError> for NetworkParseError {
 	fn from(value: MIONControlProtocolError) -> Self {
 		Self::MION(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONControlProtocolError> for NetworkError {
 	fn from(value: MIONControlProtocolError) -> Self {
 		Self::Parse(value.into())
 	}
 }
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl From<MIONControlProtocolError> for CatBridgeError {
 	fn from(value: MIONControlProtocolError) -> Self {

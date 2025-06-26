@@ -8,8 +8,10 @@
 pub mod errors;
 pub mod fsemul;
 pub mod mion;
+#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 #[cfg(any(feature = "clients", feature = "servers"))]
 pub mod net;
+#[cfg_attr(docsrs, doc(cfg(feature = "serial")))]
 #[cfg(feature = "serial")]
 #[macro_use]
 pub mod serial;

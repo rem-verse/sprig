@@ -6,7 +6,7 @@ homepage: "https://github.com/rem-verse/sprig"
 license: "MIT"
 maintainer: "Cynthia <cynthia@corp.rem-verse.email>"
 vendor: "RemVerse"
-version: "v0.0.10"
+version: "v0.0.11"
 
 arch: "amd64"
 platform: "linux"
@@ -41,6 +41,10 @@ contents:
     dst: /usr/local/bin/mionps
   - src: ../../target/release/catlog
     dst: /usr/local/bin/catlog
+  - src: ../../target/release/pcfsserver
+    dst: /usr/local/bin/pcfsserver
+  - src: ../../target/release/dbg-generate-sata-wal-from-pcap
+    dst: /usr/local/bin/dbg-generate-sata-wal-from-pcap
   - dst: /usr/share/licenses/sprig
     type: dir
   - src: ../../pkg/cat-dev/licenses/serial2-tokio-rs-apache.md

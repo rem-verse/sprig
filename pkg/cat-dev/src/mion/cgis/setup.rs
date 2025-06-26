@@ -38,6 +38,7 @@ pub async fn get_setup_parameters_with_raw_client(
 		Method::GET,
 		format!("http://{mion_ip}/setup.cgi"),
 		None,
+		None,
 	)
 	.await?;
 

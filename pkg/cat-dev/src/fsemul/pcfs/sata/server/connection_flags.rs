@@ -41,6 +41,8 @@ pub struct SataConnectionFlags {
 	fast_file_io_enabled: Arc<AtomicBool>,
 	combined_send_recv_enabled: Arc<AtomicBool>,
 	version: Arc<AtomicU32>,
+	first_read_size: Arc<AtomicU32>,
+	first_write_size: Arc<AtomicU32>,
 }
 
 impl SataConnectionFlags {
@@ -50,6 +52,8 @@ impl SataConnectionFlags {
 			fast_file_io_enabled: Arc::new(AtomicBool::new(true)),
 			combined_send_recv_enabled: Arc::new(AtomicBool::new(true)),
 			version: Arc::new(AtomicU32::new(DEFAULT_PCFS_VERSION)),
+			first_read_size: Arc::new(AtomicU32::new(196_672)),
+			first_write_size: Arc::new(AtomicU32::new(196_640)),
 		}
 	}
 
@@ -59,6 +63,8 @@ impl SataConnectionFlags {
 			fast_file_io_enabled: Arc::new(AtomicBool::new(ffio_enabled)),
 			combined_send_recv_enabled: Arc::new(AtomicBool::new(csr_enabled)),
 			version: Arc::new(AtomicU32::new(DEFAULT_PCFS_VERSION)),
+			first_read_size: Arc::new(AtomicU32::new(196_672)),
+			first_write_size: Arc::new(AtomicU32::new(196_640)),
 		}
 	}
 
@@ -81,14 +87,31 @@ impl SataConnectionFlags {
 			.store(enabled, Ordering::Release);
 	}
 
-	#[allow(unused)]
+	#[must_use]
 	pub fn version(&self) -> u32 {
 		self.version.load(Ordering::Acquire)
 	}
 
-	#[allow(unused)]
 	pub fn set_version(&self, version_num: u32) {
 		self.version.store(version_num, Ordering::Release);
+	}
+
+	#[must_use]
+	pub fn first_read_size(&self) -> u32 {
+		self.first_read_size.load(Ordering::Acquire)
+	}
+
+	pub fn set_first_read_size(&self, new_size: u32) {
+		self.first_read_size.store(new_size, Ordering::Release);
+	}
+
+	#[must_use]
+	pub fn first_write_size(&self) -> u32 {
+		self.first_write_size.load(Ordering::Acquire)
+	}
+
+	pub fn set_first_write_size(&self, new_size: u32) {
+		self.first_write_size.store(new_size, Ordering::Release);
 	}
 }
 

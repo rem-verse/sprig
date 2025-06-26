@@ -24,6 +24,8 @@ use crate::{errors::NetworkError, net::errors::CommonNetNetworkError};
 use std::sync::Arc;
 #[cfg(feature = "servers")]
 use tokio::{io::AsyncReadExt, net::TcpStream, sync::Mutex};
+#[cfg(feature = "servers")]
+use tracing::error;
 
 /// Used to do reference-to-value conversions thus not consuming the input value.
 ///
@@ -60,11 +62,17 @@ pub struct Request<State: Clone + Send + Sync + 'static> {
 	///
 	/// This will still call 'post nagle hook', 'trace io', and will still
 	/// obey NAGLE timeouts. It just overrides the _kind_ of NAGLE we do.
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	explicit_read_amount: Option<usize>,
 	/// Allow accessing the raw underlying stream while processing the request.
+	#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 	#[cfg(feature = "servers")]
-	stream_access: Option<Arc<Mutex<Option<TcpStream>>>>,
+	#[allow(
+		// TODO(mythra): refactor to type.
+		clippy::type_complexity,
+	)]
+	stream_access: Option<Arc<Mutex<Option<(Option<BytesMut>, TcpStream)>>>>,
 }
 
 impl<State: Clone + Send + Sync + 'static> Request<State>
@@ -108,6 +116,7 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 		}
 	}
 
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	#[must_use]
 	pub fn new_with_state_and_read_amount(
@@ -129,14 +138,19 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 		}
 	}
 
+	#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 	#[cfg(feature = "servers")]
+	#[allow(
+		// TODO(mythra): refactor to type.
+		clippy::type_complexity,
+	)]
 	#[must_use]
 	pub fn new_with_state_and_stream(
 		body: Bytes,
 		source_address: SocketAddr,
 		state: State,
 		stream_id: Option<u64>,
-		stream: Arc<Mutex<Option<TcpStream>>>,
+		stream_and_nagle_cache: Arc<Mutex<Option<(Option<BytesMut>, TcpStream)>>>,
 	) -> Self {
 		Self {
 			body,
@@ -146,7 +160,7 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 			stream_id,
 			#[cfg(feature = "clients")]
 			explicit_read_amount: None,
-			stream_access: Some(stream),
+			stream_access: Some(stream_and_nagle_cache),
 		}
 	}
 
@@ -181,7 +195,8 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 	///
 	/// This is a utility only available when we are a client, and are receiving
 	/// a packet that changes what our nagle split is for it's specific response
-	/// while keeping the nalge the same otherwise.
+	/// while keeping the nagle the same otherwise.
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	#[must_use]
 	pub const fn explicit_read_amount(&self) -> Option<usize> {
@@ -190,6 +205,7 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 
 	/// Override the current NAGLE algorithm being used by this client for this
 	/// single request/response pair. Do a single non-nagle'd receive.
+	#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 	#[cfg(feature = "clients")]
 	pub const fn set_explicit_read_amount(&mut self, new_read_amount: usize) {
 		self.explicit_read_amount = Some(new_read_amount);
@@ -208,6 +224,7 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 	///
 	/// If the request has been moved outside of it's original processing place,
 	/// and it is no longer possible to read from the stream.
+	#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 	#[cfg(feature = "servers")]
 	pub async fn unsafe_read_more_bytes_from_stream(
 		&self,
@@ -216,18 +233,30 @@ impl<State: Clone + Send + Sync + 'static> Request<State> {
 		if let Some(strm) = self.stream_access.as_ref() {
 			let mut guard = strm.lock().await;
 
-			if let Some(stream) = guard.as_mut() {
+			if let Some((opt_cache, stream)) = guard.as_mut() {
 				let mut buff = BytesMut::with_capacity(to_read);
-				stream.readable().await.map_err(NetworkError::IO)?;
-				let mut needed = to_read;
-				while needed > 0 {
-					let read = stream.read_buf(&mut buff).await.map_err(NetworkError::IO)?;
-					needed -= read;
+
+				if let Some(cache) = opt_cache.as_mut() {
+					if cache.len() <= to_read {
+						buff = cache.split();
+					} else {
+						buff = cache.split_to(to_read);
+					}
+				}
+
+				if buff.len() < to_read {
+					stream.readable().await.map_err(NetworkError::IO)?;
+					let mut needed = to_read - buff.len();
+					while needed > 0 {
+						let read = stream.read_buf(&mut buff).await.map_err(NetworkError::IO)?;
+						needed -= read;
+					}
 				}
 				return Ok::<Bytes, CatBridgeError>(buff.freeze());
 			}
 		}
 
+		error!("called unsafe_read_more_bytes on a stream that is not processing!");
 		Err(CommonNetNetworkError::StreamNoLongerProcessing.into())
 	}
 
