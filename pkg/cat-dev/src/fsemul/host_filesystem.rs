@@ -1551,15 +1551,9 @@ pub mod test_helpers {
 			vec![
 				"data", "slc", "sys", "title", "00050010", "1000400a", "code",
 			],
-			vec![
-				"data", "mlc", "sys", "update", "nand", "os_v10_ndebug",
-			],
-			vec![
-				"data", "mlc", "sys", "update", "nand", "os_v10_debug",
-			],
-			vec![
-				"data", "slc", "sys", "proc", "prefs",
-			],
+			vec!["data", "mlc", "sys", "update", "nand", "os_v10_ndebug"],
+			vec!["data", "mlc", "sys", "update", "nand", "os_v10_debug"],
+			vec!["data", "slc", "sys", "proc", "prefs"],
 			vec![
 				"data", "slc", "sys", "title", "00050010", "1000800a", "code",
 			],
@@ -1571,24 +1565,32 @@ pub mod test_helpers {
 				.expect("Failed to create directories necessary for host filesystem to work.");
 		}
 
-		File::create(HostFilesystem::join_many(dir.path(), [
-			"data",
-			"mlc",
-			"sys",
-			"update",
-			"nand",
-			"os_v10_ndebug",
-			"title.tmd",
-		])).expect("Failed to create needed fake title.tmd");
-		File::create(HostFilesystem::join_many(dir.path(), [
-			"data",
-			"mlc",
-			"sys",
-			"update",
-			"nand",
-			"os_v10_debug",
-			"title.tmd",
-		])).expect("Failed to create needed fake title.tmd");
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data",
+				"mlc",
+				"sys",
+				"update",
+				"nand",
+				"os_v10_ndebug",
+				"title.tmd",
+			],
+		))
+		.expect("Failed to create needed fake title.tmd");
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data",
+				"mlc",
+				"sys",
+				"update",
+				"nand",
+				"os_v10_debug",
+				"title.tmd",
+			],
+		))
+		.expect("Failed to create needed fake title.tmd");
 
 		// Place files that need to exist, they are not real, but enough to "fool"
 		// our basic check.
