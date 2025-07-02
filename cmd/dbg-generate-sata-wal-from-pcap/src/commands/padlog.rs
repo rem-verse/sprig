@@ -1,14 +1,15 @@
 //! Generate a "PADLOG".
 //!
-//! A PADLOG is a way to identify how read-files are handled when sending to
-//! a real cat-dev. It is a hacky-ish script that will error out if not given
-//! a PCAP that talks like a real cat-dev talks.
+//! A PADLOG is built to identify read-file paddings when dealing with a single
+//! stream of inputs, like talking to a real cat-dev. For multiple sessions you
+//! would need to use something like `SessionManager` to have multiple cat-dev's
+//! on multiple unique ports.
 
 use crate::{
 	SHOULD_LOG_JSON,
+	commands::utils::{PacketOnPort, PacketsWithDataOnPort, validate_pcap_path_constraints},
 	exit_codes::{
-		GENERATE_CANT_OPEN_PCAP, GENERATE_CANT_SPAWN_TSHARK, GENERATE_NAGLE_FAILURE,
-		GENERATE_PCAP_DOES_NOT_EXIST,
+		PADLOG_CANT_CREATE_LOG, PADLOG_FLUSH_FAILURE, PADLOG_NAGLE_FAILURE, PADLOG_WRITE_FAILURE,
 	},
 	utils::add_context_to,
 };
@@ -25,65 +26,38 @@ use cat_dev::{
 };
 use fnv::FnvHashMap;
 use miette::miette;
-use rtshark::{RTShark, RTSharkBuilder};
 use std::{
+	cmp::Ordering as CompareOrdering,
 	collections::{VecDeque, hash_map::Entry},
 	path::Path,
 };
-use tracing::{debug, error, info};
-
-// TODO(mythra): this is all pretty ugly and hacky, let's find a way to make this better?
+use tokio::{
+	fs::File,
+	io::{AsyncWriteExt, BufWriter, Error as AsyncIOError},
+};
+use tracing::{Instrument, error, error_span, info};
 
 /// Handle generating a WAL Log from a particular pcap.
-pub fn handle_padlog(pcap_path: &Path, sata_port: u32) {
-	let final_path = validate_exists(pcap_path);
+pub async fn handle_padlog(pcap_path: &Path, log_path: &Path, sata_port: u16) {
+	let final_path = validate_pcap_path_constraints(pcap_path);
+	let writer = get_log_writer(log_path).await;
+	let iterator = PacketsWithDataOnPort::new(&final_path, sata_port);
 
-	let stream = match RTSharkBuilder::builder()
-		.input_path(&final_path)
-		.disable_protocol("ALL")
-		.enable_protocol("eth")
-		.enable_protocol("ip")
-		.enable_protocol("tcp")
-		.display_filter(&format!("tcp.port == {sata_port} && data.len > 0"))
-		.spawn()
-	{
-		Ok(stream) => stream,
-		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					?cause,
-					id = "padlog::generate::cannot_spawn_tshark",
-					pcap.path = %pcap_path.display(),
-					"cannot spawn tshark",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Failed to spawn TSHARK cli"),
-						[
-							miette!("{cause:?}"),
-							miette!("PCAP Path: {}", pcap_path.display()),
-						]
-						.into_iter(),
-					),
-				);
-			}
-
-			std::process::exit(GENERATE_CANT_SPAWN_TSHARK);
-		}
-	};
-
-	process_packets(sata_port, stream);
+	process_packets(iterator, writer)
+		.instrument(error_span!(
+			"dgswfp::command::padlog::process_packets",
+			pcap.path = final_path,
+			sata.port = sata_port,
+		))
+		.await;
 }
 
 #[allow(
-	// TODO(mythra): fix this later.
-	clippy::type_complexity,
+	// TODO(mythra): fix
 	clippy::too_many_lines,
-	clippy::comparison_chain,
+	clippy::type_complexity,
 )]
-fn process_packets(sata_port: u32, mut packet_stream: RTShark) {
+async fn process_packets(packet_stream: PacketsWithDataOnPort, mut writer: BufWriter<File>) {
 	let mut stream_buffers: FnvHashMap<
 		u64,
 		(
@@ -94,48 +68,8 @@ fn process_packets(sata_port: u32, mut packet_stream: RTShark) {
 	> = FnvHashMap::default();
 	let mut fd_map: FnvHashMap<i32, String> = FnvHashMap::default();
 
-	while let Ok(Some(pkt)) = packet_stream.read() {
-		let Some(tcp_layer) = pkt.layer_name("tcp") else {
-			debug!("packet is missing TCP layer! skipping...");
-			continue;
-		};
-
-		let Some(srcport) = tcp_layer
-			.metadata("tcp.srcport")
-			.and_then(|val| val.value().parse::<u32>().ok())
-		else {
-			debug!("packet is missing `tcp.srcport`");
-			continue;
-		};
-		let Some(dstport) = tcp_layer
-			.metadata("tcp.dstport")
-			.and_then(|val| val.value().parse::<u32>().ok())
-		else {
-			debug!("packet is missing `tcp.dstport`");
-			continue;
-		};
-		if srcport != sata_port && dstport != sata_port {
-			debug!("packet is not for sata port??");
-			continue;
-		}
-		let is_request = dstport == sata_port;
-
-		let Some(sid) = tcp_layer
-			.metadata("tcp.stream")
-			.and_then(|val| val.value().parse::<u64>().ok())
-		else {
-			debug!("packet is missing `tcp.stream`");
-			continue;
-		};
-		let Some(payload) = tcp_layer
-			.metadata("tcp.payload")
-			.map(|val| Bytes::from(string_to_hex_bytes(val.raw_value())))
-		else {
-			debug!("packet is missing `tcp.payload`");
-			continue;
-		};
-
-		if let Entry::Vacant(entry) = stream_buffers.entry(sid) {
+	for pkt in packet_stream {
+		if let Entry::Vacant(entry) = stream_buffers.entry(pkt.stream_id()) {
 			entry.insert((
 				// Start as (false, false) as it's the only ping we can't
 				// really auto detect.
@@ -148,19 +82,19 @@ fn process_packets(sata_port: u32, mut packet_stream: RTShark) {
 			));
 		}
 
-		//SataConnectionFlags, BytesMut, Option<BytesMut>
 		let (cflags, cache, (cached_file_name, response_buff)) = stream_buffers
-			.get_mut(&sid)
+			.get_mut(&pkt.stream_id())
 			.expect("impossible: always created");
 		do_packet_processing(
-			is_request,
+			pkt,
 			&mut fd_map,
 			cflags,
 			cache,
 			cached_file_name,
 			response_buff,
-			payload,
-		);
+			&mut writer,
+		)
+		.await;
 	}
 
 	for (_sid, (_cflags, _cache, (_cached_file_name, mut response_cache))) in stream_buffers {
@@ -170,82 +104,123 @@ fn process_packets(sata_port: u32, mut packet_stream: RTShark) {
 			// 4 bytes file len
 			let read_file_header = final_rf.split_to(36);
 
-			if final_rf.len() > expected_size {
-				eprintln!(
-					"OVER({}): {} [{}]",
-					flags_size < expected_size,
-					final_rf.len() - expected_size,
-					fd_map.get(&fd).cloned().unwrap_or_default(),
-				);
-			} else if final_rf.len() < expected_size {
-				eprintln!(
-					"UNDR({}): {} | {} [{}]",
-					flags_size < expected_size,
-					expected_size - final_rf.len(),
-					if final_rf.len() > flags_size {
-						format!("+{}", final_rf.len() - flags_size)
-					} else {
-						format!("-{}", flags_size - final_rf.len())
-					},
-					fd_map.get(&fd).cloned().unwrap_or_default(),
-				);
-			} else {
-				let mut padded_bytes = 0_usize;
-				for byte in final_rf.iter().rev() {
-					if *byte == 0xCD {
-						padded_bytes += 1;
-					} else {
-						break;
-					}
+			match final_rf.len().cmp(&expected_size) {
+				CompareOrdering::Greater => {
+					check_write(
+						writer
+							.write_all(
+								format!(
+									"OVER({}): {} [{}]",
+									flags_size < expected_size,
+									final_rf.len() - expected_size,
+									fd_map.get(&fd).cloned().unwrap_or_default(),
+								)
+								.as_bytes(),
+							)
+							.await,
+					);
 				}
+				CompareOrdering::Less => {
+					check_write(
+						writer
+							.write_all(
+								format!(
+									"UNDR({}): {} | {} [{}]",
+									flags_size < expected_size,
+									expected_size - final_rf.len(),
+									if final_rf.len() > flags_size {
+										format!("+{}", final_rf.len() - flags_size)
+									} else {
+										format!("-{}", flags_size - final_rf.len())
+									},
+									fd_map.get(&fd).cloned().unwrap_or_default(),
+								)
+								.as_bytes(),
+							)
+							.await,
+					);
+				}
+				CompareOrdering::Equal => {
+					let mut padded_bytes = 0_usize;
+					for byte in final_rf.iter().rev() {
+						if *byte == 0xCD {
+							padded_bytes += 1;
+						} else {
+							break;
+						}
+					}
 
-				if padded_bytes == 0 {
-					eprintln!(
-						"UPAD({}): {} [{}]",
-						flags_size < expected_size,
-						final_rf.len(),
-						fd_map.get(&fd).cloned().unwrap_or_default(),
-					);
-				} else {
-					eprintln!(
-						"PADD({}): {}/{} [{}]",
-						flags_size < expected_size,
-						final_rf.len() - padded_bytes,
-						padded_bytes,
-						fd_map.get(&fd).cloned().unwrap_or_default(),
-					);
+					if padded_bytes == 0 {
+						check_write(
+							writer
+								.write_all(
+									format!(
+										"UPAD({}): {} [{}]",
+										flags_size < expected_size,
+										final_rf.len(),
+										fd_map.get(&fd).cloned().unwrap_or_default(),
+									)
+									.as_bytes(),
+								)
+								.await,
+						);
+					} else {
+						check_write(
+							writer
+								.write_all(
+									format!(
+										"PADD({}): {}/{} [{}]",
+										flags_size < expected_size,
+										final_rf.len() - padded_bytes,
+										padded_bytes,
+										fd_map.get(&fd).cloned().unwrap_or_default(),
+									)
+									.as_bytes(),
+								)
+								.await,
+						);
+					}
 				}
 			}
 
 			if read_file_header.starts_with(&[0xC4, 0x00, 0x24, 0x02, 0xE8, 0xEF, 0x24, 0x02]) {
-				eprintln!("  -> header type: C4....");
+				check_write(writer.write_all(b"  -> C4 Known Header").await);
+			} else if read_file_header.starts_with(&[0; 8]) {
+				check_write(writer.write_all(b"  -> 00 Known Header").await);
 			} else {
-				eprintln!("  -> header type: {}", read_file_header[0]);
+				check_write(
+					writer
+						.write_all(b"  -> ?? Unknown Header: {read_file_header:02x?}")
+						.await,
+				);
 			}
 		}
 	}
+
+	do_flush(&mut writer).await;
 }
 
 #[allow(
-	// TODO(mythra): fix this later... 
-	clippy::too_many_arguments,
-	clippy::comparison_chain,
+	// TODO(mythra): fix
+	clippy::too_many_lines,
+	clippy::type_complexity,
 )]
-fn do_packet_processing(
-	is_request: bool,
+async fn do_packet_processing(
+	pkt: PacketOnPort,
 	fd_map: &mut FnvHashMap<i32, String>,
 	cflags: &SataConnectionFlags,
 	req_nagle_cache: &mut (BytesMut, usize),
 	cached_file_names: &mut VecDeque<String>,
 	response_cache: &mut Option<(i32, BytesMut, usize, usize)>,
-	packet: Bytes,
+	writer: &mut BufWriter<File>,
 ) {
-	if !is_request {
+	if !pkt.is_request() {
 		if let Some(to_extend) = response_cache.as_mut() {
 			// Part of a read file response.
-			to_extend.1.extend(packet);
+			to_extend.1.extend(pkt.data());
 		} else if let Some(file_name) = cached_file_names.pop_front() {
-			let Ok(response) = SataResponse::<SataFileDescriptorResult>::try_from(packet.clone())
+			let Ok(response) =
+				SataResponse::<SataFileDescriptorResult>::try_from(pkt.data().clone())
 			else {
 				return;
 			};
@@ -258,64 +233,102 @@ fn do_packet_processing(
 		return;
 	}
 
-	req_nagle_cache.0.extend(packet);
+	req_nagle_cache.0.extend(pkt.data());
 	if let Some((fd, cached_read_file, expected_size, flags_size)) = response_cache.take() {
 		let mut final_rf = cached_read_file.freeze();
 		// 32 bytes read file header
 		// 4 bytes file len
 		let read_file_header = final_rf.split_to(36);
 
-		if final_rf.len() > expected_size {
-			eprintln!(
-				"OVER({}): {} [{}]",
-				flags_size < expected_size,
-				final_rf.len() - expected_size,
-				fd_map.get(&fd).cloned().unwrap_or_default(),
-			);
-		} else if final_rf.len() < expected_size {
-			eprintln!(
-				"UNDR({}): {} | {} [{}]",
-				flags_size < expected_size,
-				expected_size - final_rf.len(),
-				if final_rf.len() > flags_size {
-					format!("+{}", final_rf.len() - flags_size)
-				} else {
-					format!("-{}", flags_size - final_rf.len())
-				},
-				fd_map.get(&fd).cloned().unwrap_or_default(),
-			);
-		} else {
-			let mut padded_bytes = 0_usize;
-			for byte in final_rf.iter().rev() {
-				if *byte == 0xCD {
-					padded_bytes += 1;
-				} else {
-					break;
-				}
+		match final_rf.len().cmp(&expected_size) {
+			CompareOrdering::Greater => {
+				check_write(
+					writer
+						.write_all(
+							format!(
+								"OVER({}): {} [{}]",
+								flags_size < expected_size,
+								final_rf.len() - expected_size,
+								fd_map.get(&fd).cloned().unwrap_or_default(),
+							)
+							.as_bytes(),
+						)
+						.await,
+				);
 			}
+			CompareOrdering::Less => {
+				check_write(
+					writer
+						.write_all(
+							format!(
+								"UNDR({}): {} | {} [{}]",
+								flags_size < expected_size,
+								expected_size - final_rf.len(),
+								if final_rf.len() > flags_size {
+									format!("+{}", final_rf.len() - flags_size)
+								} else {
+									format!("-{}", flags_size - final_rf.len())
+								},
+								fd_map.get(&fd).cloned().unwrap_or_default(),
+							)
+							.as_bytes(),
+						)
+						.await,
+				);
+			}
+			CompareOrdering::Equal => {
+				let mut padded_bytes = 0_usize;
+				for byte in final_rf.iter().rev() {
+					if *byte == 0xCD {
+						padded_bytes += 1;
+					} else {
+						break;
+					}
+				}
 
-			if padded_bytes == 0 {
-				eprintln!(
-					"UPAD({}): {} [{}]",
-					flags_size < expected_size,
-					final_rf.len(),
-					fd_map.get(&fd).cloned().unwrap_or_default(),
-				);
-			} else {
-				eprintln!(
-					"PADD({}): {}/{} [{}]",
-					flags_size < expected_size,
-					final_rf.len() - padded_bytes,
-					padded_bytes,
-					fd_map.get(&fd).cloned().unwrap_or_default(),
-				);
+				if padded_bytes == 0 {
+					check_write(
+						writer
+							.write_all(
+								format!(
+									"UPAD({}): {} [{}]",
+									flags_size < expected_size,
+									final_rf.len(),
+									fd_map.get(&fd).cloned().unwrap_or_default(),
+								)
+								.as_bytes(),
+							)
+							.await,
+					);
+				} else {
+					check_write(
+						writer
+							.write_all(
+								format!(
+									"PADD({}): {}/{} [{}]",
+									flags_size < expected_size,
+									final_rf.len() - padded_bytes,
+									padded_bytes,
+									fd_map.get(&fd).cloned().unwrap_or_default(),
+								)
+								.as_bytes(),
+							)
+							.await,
+					);
+				}
 			}
 		}
 
 		if read_file_header.starts_with(&[0xC4, 0x00, 0x24, 0x02, 0xE8, 0xEF, 0x24, 0x02]) {
-			eprintln!("  -> header type: C4....");
+			check_write(writer.write_all(b"  -> C4 Known Header").await);
+		} else if read_file_header.starts_with(&[0; 8]) {
+			check_write(writer.write_all(b"  -> 00 Known Header").await);
 		} else {
-			eprintln!("  -> header type: {}", read_file_header[0]);
+			check_write(
+				writer
+					.write_all(b"  -> ?? Unknown Header: {read_file_header:02x?}")
+					.await,
+			);
 		}
 	}
 
@@ -388,7 +401,7 @@ fn process_request(
 					);
 				}
 
-				std::process::exit(GENERATE_NAGLE_FAILURE);
+				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
 		};
 
@@ -421,7 +434,7 @@ fn process_request(
 					);
 				}
 
-				std::process::exit(GENERATE_NAGLE_FAILURE);
+				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
 		};
 
@@ -458,7 +471,7 @@ fn process_request(
 					);
 				}
 
-				std::process::exit(GENERATE_NAGLE_FAILURE);
+				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
 		};
 
@@ -490,7 +503,7 @@ fn process_request(
 					);
 				}
 
-				std::process::exit(GENERATE_NAGLE_FAILURE);
+				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
 		};
 
@@ -506,64 +519,82 @@ fn process_request(
 	None
 }
 
-fn string_to_hex_bytes(data: &str) -> Vec<u8> {
-	let mut result = Vec::with_capacity(data.len() / 2);
-	for chunk in data.chars().collect::<Vec<_>>().chunks(2) {
-		let new_byte =
-			u8::from_str_radix(&format!("{}{}", chunk[0], chunk[1]), 16).expect("bad byte!");
-		result.push(new_byte);
-	}
-	result
+/// Create a buffered writer to a particular log file.
+async fn get_log_writer(log_path: &Path) -> BufWriter<File> {
+	let file = match File::create_new(log_path).await {
+		Ok(fd) => fd,
+		Err(cause) => {
+			if SHOULD_LOG_JSON() {
+				error!(
+					?cause,
+					id = "dgswfp::padlog::cannot_open_log",
+					log.path = %log_path.display(),
+					"Could not create destination log file!",
+				);
+			} else {
+				error!(
+					"\n{:?}",
+					add_context_to(
+						miette!("could not create destination log file"),
+						[
+							miette!("{cause:?}"),
+							miette!(
+								"Please ensure the LOG location you specified is correct, and does not exist: {}",
+								log_path.display(),
+							),
+						]
+						.into_iter(),
+					),
+				);
+			}
+
+			std::process::exit(PADLOG_CANT_CREATE_LOG);
+		}
+	};
+
+	BufWriter::new(file)
 }
 
-/// Validate that the PCAP file exists, before continuing.
-fn validate_exists(pcap_path: &Path) -> String {
-	if !pcap_path.exists() || !pcap_path.is_file() {
+async fn do_flush(writer: &mut BufWriter<File>) {
+	if let Err(cause) = writer.flush().await {
 		if SHOULD_LOG_JSON() {
 			error!(
-				id = "dgswfp::padlog::no_source_pcap",
-				pcap.path = %pcap_path.display(),
-				"Source PCAP is not an existing file, cannot parse!",
+				?cause,
+				id = "dgswfp::padlog::cannot_flush_log_file",
+				"Could not write all data to our log file, may be corrupt!",
 			);
 		} else {
 			error!(
 				"\n{:?}",
 				add_context_to(
-					miette!("cannot parse a PCAP that is not an existing file"),
-					[miette!(
-						"Please ensure the PCAP location you specified is correct: {}",
-						pcap_path.display(),
-					)]
-					.into_iter(),
+					miette!("could not write all data to log file, may be corrupt"),
+					[miette!("{cause:?}"),].into_iter(),
 				),
 			);
 		}
 
-		std::process::exit(GENERATE_PCAP_DOES_NOT_EXIST);
+		std::process::exit(PADLOG_FLUSH_FAILURE);
 	}
+}
 
-	let Some(pth) = pcap_path.to_str() else {
+fn check_write(result: Result<(), AsyncIOError>) {
+	if let Err(cause) = result {
 		if SHOULD_LOG_JSON() {
 			error!(
-				id = "dgswfp::padlog::path_not_utf8",
-				pcap.path = %pcap_path.display(),
-				"Source PCAP path must be representable as a UTF-8 string!",
+				?cause,
+				id = "dgswfp::padlog::cannot_write_to_buffer",
+				"Could not write data to our in memory buffer to later flush to a file, OOM?",
 			);
 		} else {
 			error!(
 				"\n{:?}",
 				add_context_to(
-					miette!("cannot parse PCAP whose path is not fully UTF-8!"),
-					[miette!(
-						"Please move the PCAP file into a UTF-8 compatible path: {}",
-						pcap_path.display(),
-					)]
-					.into_iter(),
+					miette!("We couldn't write data to our buffered writer, to then flush? OOM?"),
+					[miette!("{cause:?}"),].into_iter(),
 				),
 			);
 		}
 
-		std::process::exit(GENERATE_CANT_OPEN_PCAP);
-	};
-	pth.to_owned()
+		std::process::exit(PADLOG_WRITE_FAILURE);
+	}
 }

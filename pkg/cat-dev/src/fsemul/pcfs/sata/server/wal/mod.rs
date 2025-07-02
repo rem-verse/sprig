@@ -210,8 +210,6 @@ async fn process_wal(mut stream: BoundedReceiver<WriteAheadLogMessage>, path: Pa
 			}
 			WriteAheadLogMessage::WriteFileRead(stream_id, file_desc, size) => {
 				if let Some(req_waiting) = waiting_requests.get_mut(&stream_id) {
-					let mut should_pop = false;
-
 					// TODO(mythra): god this is messy, clean this shit up.
 					if let Some(front) = req_waiting.front() {
 						match &front {
@@ -227,7 +225,6 @@ async fn process_wal(mut stream: BoundedReceiver<WriteAheadLogMessage>, path: Pa
 								};
 
 								if path == &final_path {
-									should_pop = true;
 									if let Err(cause) =
 										fd.write_all(format!("  ->{size}\n").as_bytes()).await
 									{
@@ -261,10 +258,6 @@ async fn process_wal(mut stream: BoundedReceiver<WriteAheadLogMessage>, path: Pa
 							size,
 							"Got WriteFileRead when not waiting a request???"
 						);
-					}
-
-					if should_pop {
-						_ = req_waiting.pop_front();
 					}
 				} else {
 					error!(

@@ -1,8 +1,7 @@
 //! Defines the command line interface a.k.a. all the arguments & flags.
 
-use std::path::PathBuf;
-
 use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[clap(disable_help_flag = true, disable_help_subcommand = true)]
@@ -37,16 +36,63 @@ pub struct CliArguments {
 #[derive(Parser, Debug)]
 #[clap(disable_help_flag = true, disable_help_subcommand = true)]
 pub enum Subcommands {
-	/// Generate a SATA WAL Log.
-	#[command(name = "generate", visible_alias = "g")]
-	Generate {
+	/// Generate a SATA Pad Log.
+	#[command(
+		name = "generate-sata-padlog",
+		visible_aliases = [
+			"generate_sata_padlog",
+			"generate-sata-pad",
+			"generate_sata_pad",
+			"gen-sata-pad",
+			"gen_sata_pad",
+			"sata-pad",
+			"sata_pad",
+			"gsp",
+			"sp",
+		],
+	)]
+	GenerateSataPadlog {
 		#[arg(
 			short = 'p',
 			long = "sata-port",
 			visible_alias = "sata_port",
 			default_value_t = 7500
 		)]
-		sata_port: u32,
+		sata_port: u16,
+		#[arg(
+			index = 1,
+			help = "The PCAPNG file to read.",
+			long_help = "The PCAPNG to generate a SATA WAL log from."
+		)]
+		pcap: PathBuf,
+		#[arg(
+			index = 2,
+			help = "The Padlog file to write.",
+			long_help = "The Padlog file to write too."
+		)]
+		padlog: PathBuf,
+	},
+	/// Generate a SATA WAL (Write-Ahead Log).
+	#[command(
+		name = "generate-sata-wal",
+		visible_aliases = [
+			"generate_sata_wal",
+			"gen-sata-wal",
+			"gen_sata_wal",
+			"sata-wal",
+			"sata_wal",
+			"gsw",
+			"sw",
+		],
+	)]
+	GenerateSataWAL {
+		#[arg(
+			short = 'p',
+			long = "sata-port",
+			visible_alias = "sata_port",
+			default_value_t = 7500
+		)]
+		sata_port: u16,
 		#[arg(
 			index = 1,
 			help = "The PCAPNG file to read.",
@@ -63,23 +109,6 @@ pub enum Subcommands {
 	/// An alternative to `-h`, or `--help` to show the help for the top level CLI.
 	#[command(name = "help")]
 	Help {},
-	/// Generate a PADLOG.
-	#[command(name = "padlog")]
-	Padlog {
-		#[arg(
-			short = 'p',
-			long = "sata-port",
-			visible_alias = "sata_port",
-			default_value_t = 7500
-		)]
-		sata_port: u32,
-		#[arg(
-			index = 1,
-			help = "The PCAPNG file to read.",
-			long_help = "The PCAPNG to generate a SATA WAL log from."
-		)]
-		pcap: PathBuf,
-	},
 }
 impl Subcommands {
 	/// If this subcommand matches a particular name.
@@ -87,13 +116,39 @@ impl Subcommands {
 	#[must_use]
 	pub fn name_matches(&self, name: &str) -> bool {
 		match self {
-			Self::Generate {
+			Self::GenerateSataPadlog {
+				sata_port,
+				pcap,
+				padlog,
+			} => [
+				"generate-sata-padlog",
+				"generate_sata_padlog",
+				"generate-sata-pad",
+				"generate_sata_pad",
+				"gen-sata-pad",
+				"gen_sata_pad",
+				"sata-pad",
+				"sata_pad",
+				"gsp",
+				"sp",
+			]
+			.contains(&name),
+			Self::GenerateSataWAL {
 				sata_port,
 				pcap,
 				wal,
-			} => name == "generate" || name == "g",
+			} => [
+				"generate-sata-wal",
+				"generate_sata_wal",
+				"gen-sata-wal",
+				"gen_sata_wal",
+				"sata-wal",
+				"sata_wal",
+				"gsw",
+				"sw",
+			]
+			.contains(&name),
 			Self::Help {} => name == "help",
-			Self::Padlog { sata_port, pcap } => name == "padlog",
 		}
 	}
 }

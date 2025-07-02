@@ -70,7 +70,7 @@ async fn main() {
 	};
 
 	match sub_command {
-		Subcommands::Generate {
+		Subcommands::GenerateSataWAL {
 			sata_port,
 			pcap,
 			wal,
@@ -79,8 +79,12 @@ async fn main() {
 		}
 		// Help is handled above.
 		Subcommands::Help {} => unreachable!(),
-		Subcommands::Padlog { sata_port, pcap } => {
-			handle_padlog(&pcap, sata_port);
+		Subcommands::GenerateSataPadlog {
+			sata_port,
+			pcap,
+			padlog,
+		} => {
+			handle_padlog(&pcap, &padlog, sata_port).await;
 		}
 	}
 }

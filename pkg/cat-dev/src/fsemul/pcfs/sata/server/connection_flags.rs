@@ -43,6 +43,7 @@ pub struct SataConnectionFlags {
 	version: Arc<AtomicU32>,
 	first_read_size: Arc<AtomicU32>,
 	first_write_size: Arc<AtomicU32>,
+	ffio_buffer_should_have_grown: Arc<AtomicBool>,
 }
 
 impl SataConnectionFlags {
@@ -54,6 +55,7 @@ impl SataConnectionFlags {
 			version: Arc::new(AtomicU32::new(DEFAULT_PCFS_VERSION)),
 			first_read_size: Arc::new(AtomicU32::new(196_672)),
 			first_write_size: Arc::new(AtomicU32::new(196_640)),
+			ffio_buffer_should_have_grown: Arc::new(AtomicBool::new(false)),
 		}
 	}
 
@@ -65,6 +67,7 @@ impl SataConnectionFlags {
 			version: Arc::new(AtomicU32::new(DEFAULT_PCFS_VERSION)),
 			first_read_size: Arc::new(AtomicU32::new(196_672)),
 			first_write_size: Arc::new(AtomicU32::new(196_640)),
+			ffio_buffer_should_have_grown: Arc::new(AtomicBool::new(false)),
 		}
 	}
 
@@ -112,6 +115,16 @@ impl SataConnectionFlags {
 
 	pub fn set_first_write_size(&self, new_size: u32) {
 		self.first_write_size.store(new_size, Ordering::Release);
+	}
+
+	#[must_use]
+	pub fn ffio_buffer_should_have_grown(&self) -> bool {
+		self.ffio_buffer_should_have_grown.load(Ordering::Acquire)
+	}
+
+	pub fn set_ffio_buffer_should_have_grown(&self, did_grow: bool) {
+		self.ffio_buffer_should_have_grown
+			.store(did_grow, Ordering::Release);
 	}
 }
 

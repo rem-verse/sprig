@@ -29,8 +29,9 @@ use std::{
 };
 use tokio::{
 	fs::{
-		File, OpenOptions, copy as copy_file, create_dir_all, read_dir as async_read_dir,
-		read_link, remove_dir_all, remove_file, rename, write as fs_write,
+		File, OpenOptions, copy as copy_file, create_dir_all, read as fs_read,
+		read_dir as async_read_dir, read_link, remove_dir_all, remove_file, rename,
+		write as fs_write,
 	},
 	io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 	sync::Mutex,
@@ -676,8 +677,21 @@ impl HostFilesystem {
 	#[must_use]
 	pub fn path_allows_writes(&self, path: &Path) -> bool {
 		// TODO(mythra): check FSEmulAttributeRules
-		!path.to_string_lossy().contains("%DISC_EMU_DIR")
-			&& !path.starts_with(Self::join_many(&self.cafe_sdk_path, ["data", "disc"]))
+		let lossy_path = path.to_string_lossy();
+		let trimmed_lossy_path = lossy_path
+			.trim_start_matches("/vol/pc")
+			.trim_start_matches('/');
+		if trimmed_lossy_path.starts_with("%DISC_EMU_DIR") {
+			return trimmed_lossy_path.starts_with("%DISC_EMU_DIR/save");
+		}
+		if path.starts_with(Self::join_many(&self.cafe_sdk_path, ["data", "disc"])) {
+			return path.starts_with(Self::join_many(
+				&self.cafe_sdk_path,
+				["data", "disc", "save"],
+			));
+		}
+
+		true
 	}
 
 	/// Given a UTF-8 string path, get a pathbuf reference.
@@ -759,6 +773,15 @@ impl HostFilesystem {
 			closest_canonical_directory,
 			!changed_at_all,
 		)))
+	}
+
+	/// Create a directory within a particular path.
+	///
+	/// ## Errors
+	///
+	/// If we cannot end up creating this directory due to a filesystem error.
+	pub async fn create_directory(&self, at: &Path) -> Result<(), FSError> {
+		create_dir_all(at).await.map_err(FSError::IO)
 	}
 
 	/// Rename a file, symlink, or directory.
@@ -1008,72 +1031,6 @@ impl HostFilesystem {
 		{
 			Self::generate_wii_acct_xml(cafe_sdk_path).await?;
 		}
-		if !Self::join_many(
-			cafe_sdk_path,
-			["data", "slc", "sys", "proc", "prefs", "ccr.xml"],
-		)
-		.exists()
-		{
-			Self::generate_ccr_xml(cafe_sdk_path).await?;
-		}
-
-		// If we're booting in PCFS mode we'll need TMD's for these core OS titles.
-		let os_ndebug_tmd_path = Self::join_many(
-			cafe_sdk_path,
-			[
-				"data",
-				"slc",
-				"sys",
-				"title",
-				"00050010",
-				"1000400a",
-				"code",
-				"title.tmd",
-			],
-		);
-		if !os_ndebug_tmd_path.exists() {
-			let source_tmd = Self::join_many(
-				cafe_sdk_path,
-				[
-					"data",
-					"mlc",
-					"sys",
-					"update",
-					"nand",
-					"os_v10_ndebug",
-					"title.tmd",
-				],
-			);
-			copy_file(&source_tmd, os_ndebug_tmd_path).await?;
-		}
-		let os_debug_tmd_path = Self::join_many(
-			cafe_sdk_path,
-			[
-				"data",
-				"slc",
-				"sys",
-				"title",
-				"00050010",
-				"1000800a",
-				"code",
-				"title.tmd",
-			],
-		);
-		if !os_debug_tmd_path.exists() {
-			let source_tmd = Self::join_many(
-				cafe_sdk_path,
-				[
-					"data",
-					"mlc",
-					"sys",
-					"update",
-					"nand",
-					"os_v10_debug",
-					"title.tmd",
-				],
-			);
-			copy_file(&source_tmd, os_debug_tmd_path).await?;
-		}
 
 		// Unmount any leftover discs....
 		if Self::join_many(cafe_sdk_path, ["data", "disc"]).exists() {
@@ -1096,6 +1053,14 @@ impl HostFilesystem {
 			)
 			.await?;
 		}
+		// Manually capitilize the title id in app.xml, the normal PCFS
+		// tooling does this, even though it is case-insensitive, but for matching.
+		let app_xml_path = Self::join_many(cafe_sdk_path, ["data", "disc", "code", "app.xml"]);
+		// app.xml must be utf-8 to be read by the OS completely, so if we end up
+		// writing a corrupt app.xml, would be the exact same as the OS
+		// interpreting that.
+		let base_app_xml = String::from_utf8_lossy(&fs_read(&app_xml_path).await?).to_string();
+		fs_write(&app_xml_path, Self::capitilize_title_id(base_app_xml)).await?;
 
 		Ok(())
 	}
@@ -1340,39 +1305,29 @@ impl HostFilesystem {
 		Ok(())
 	}
 
-	/// Generate a `ccr.xml` if one is not present.
-	///
-	/// This isn't actually required by anything but removes an error message
-	/// from being printed which may be misinterpreted, and helps provide cleaner
-	/// errors in the case of weird boot fialures.
-	///
-	/// ## Errors
-	///
-	/// If we cannot create the config directory, or write the ccr config
-	/// file to disk.
-	async fn generate_ccr_xml(cafe_os_path: &Path) -> Result<(), FSError> {
-		let mut ccr_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "proc", "prefs"]);
-		if !ccr_path.exists() {
-			create_dir_all(&ccr_path).await.map_err(FSError::IO)?;
-		}
-		ccr_path.push("ccr.xml");
+	/// Take an app.xml, and capitilize the title id. Used for byte-matching
+	/// perfectly with the official SDK.
+	#[must_use]
+	fn capitilize_title_id(app_xml: String) -> String {
+		let Some(title_id_xml_tag_start) = app_xml.find("<title_id") else {
+			return app_xml;
+		};
+		let Some(title_id_tag_end) = app_xml[title_id_xml_tag_start..].find('>') else {
+			return app_xml;
+		};
 
-		#[cfg(unix)]
-		let ccr_file = File::create(ccr_path).await.map_err(FSError::IO)?;
-		#[cfg(not(unix))]
-		let _ccr_file = File::create(ccr_path).await.map_err(FSError::IO)?;
+		let tid_start = title_id_xml_tag_start + title_id_tag_end;
+		let Some(title_slash_location) = app_xml[tid_start..].find("</title_id>") else {
+			return app_xml;
+		};
+		let tid_end = tid_start + title_slash_location;
+		let title_id = &app_xml[tid_start..tid_end];
+		let mut final_xml = String::with_capacity(app_xml.len());
+		final_xml += &app_xml[..tid_start];
+		final_xml += &title_id.to_uppercase();
+		final_xml += &app_xml[tid_end..];
 
-		// We don't actually need to write anything, as it'll just be removed...
-
-		#[cfg(unix)]
-		{
-			use std::{fs::Permissions, os::unix::prelude::*};
-			ccr_file
-				.set_permissions(Permissions::from_mode(0o770))
-				.await?;
-		}
-
-		Ok(())
+		final_xml
 	}
 
 	fn get_default_read_only_folders(cafe_dir: &Path) -> ConcurrentSet<PathBuf> {
@@ -1577,33 +1532,6 @@ pub mod test_helpers {
 				.expect("Failed to create directories necessary for host filesystem to work.");
 		}
 
-		File::create(HostFilesystem::join_many(
-			dir.path(),
-			[
-				"data",
-				"mlc",
-				"sys",
-				"update",
-				"nand",
-				"os_v10_ndebug",
-				"title.tmd",
-			],
-		))
-		.expect("Failed to create needed fake title.tmd");
-		File::create(HostFilesystem::join_many(
-			dir.path(),
-			[
-				"data",
-				"mlc",
-				"sys",
-				"update",
-				"nand",
-				"os_v10_debug",
-				"title.tmd",
-			],
-		))
-		.expect("Failed to create needed fake title.tmd");
-
 		// Place files that need to exist, they are not real, but enough to "fool"
 		// our basic check.
 		File::create(HostFilesystem::join_many(
@@ -1635,6 +1563,13 @@ pub mod test_helpers {
 			],
 		))
 		.expect("Failed to create needed fw.img!");
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "code", "app.xml",
+			],
+		))
+		.expect("Failed to create needed app.xml for disc!");
 
 		let fs = HostFilesystem::from_cafe_dir(Some(PathBuf::from(dir.path())))
 			.await
@@ -2064,6 +1999,123 @@ mod unit_tests {
 				.await
 				.expect("Failed to query for next in folder! 2.2!")
 				.is_none()
+		);
+	}
+
+	#[test]
+	pub fn can_capitilize_ids() {
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(
+				r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101f700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+					.to_owned()
+			),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101F700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+				.to_owned(),
+		);
+
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(
+				r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101F700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+					.to_owned()
+			),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101F700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+				.to_owned(),
+		);
+
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(
+				r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+					.to_owned()
+			),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+				.to_owned(),
+		);
+
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version><title_id type="hexBinary" length="8">000500101f700500</title_id><title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#.to_owned()),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version><title_id type="hexBinary" length="8">000500101F700500</title_id><title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#.to_owned(),
 		);
 	}
 }

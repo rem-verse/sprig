@@ -36,6 +36,7 @@ pub async fn handle_read_file(
 	let packet = request.body();
 	let handle = packet.file_descriptor();
 	let ffio_enabled = flags.ffio_enabled();
+	let mut buffer_grew = flags.ffio_buffer_should_have_grown();
 
 	if packet.should_move() {
 		if let Err(cause) = packet
@@ -96,8 +97,13 @@ pub async fn handle_read_file(
 	if ffio_enabled {
 		let mut buff = BytesMut::with_capacity(0x24 + read_file.len());
 
-		if read_file.len() < total_read_amount && read_file.len() > first_read_size {
-			buff.extend_from_slice(&[0; 32]);
+		if !buffer_grew && read_file.len() > first_read_size {
+			flags.set_ffio_buffer_should_have_grown(true);
+			buffer_grew = true;
+		}
+		if (read_file.len() < total_read_amount && read_file.len() > first_read_size) || buffer_grew
+		{
+			buff.extend_from_slice(&[0; 0x20]);
 			buff.put_u32(u32::try_from(read_file.len()).unwrap_or(u32::MAX));
 		} else {
 			buff.extend_from_slice(&[0xC4, 0x00, 0x24, 0x02, 0xE8, 0xEF, 0x24, 0x02]);
@@ -122,7 +128,7 @@ pub async fn handle_read_file(
 fn construct_ffio_error(error_code: u32) -> Bytes {
 	let mut buff = BytesMut::with_capacity(36);
 	buff.extend(&[0xC4, 0x00, 0xFE, 0x00, 0x20, 0xEF, 0xFE, 0x00]);
-	buff.extend([0; 24]);
+	buff.extend([0; 0x18]);
 	buff.put_u32(error_code);
 	buff.freeze()
 }

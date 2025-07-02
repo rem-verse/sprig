@@ -47,20 +47,38 @@ pub async fn handle_get_info_by_query(
 	let info_request = request.body();
 	let header = request.header().clone();
 
-	let Ok(final_location) = state.host_filesystem().resolve_path(info_request.path()) else {
+	let fs = state.host_filesystem();
+	let Ok(final_location) = fs.resolve_path(info_request.path()) else {
 		return SataResponse::new(
 			state.pid(),
 			header,
 			SataQueryResponse::ErrorCode(PATH_NOT_EXIST_ERROR),
 		);
 	};
+	if request.command_info().user().0 == 0x1000_00FC
+		&& request.command_info().user().1 == 0x1000_00FF
+	{
+		let cloned_location = final_location.clone();
+		let ResolvedLocation::Filesystem(fs_location) = cloned_location else {
+			todo!("network shares not yet implemented!")
+		};
+		let resolved_path = fs_location.resolved_path();
+
+		if fs.path_allows_writes(resolved_path)
+			&& resolved_path.extension().is_none()
+			&& !resolved_path.exists()
+		{
+			// Ignore any errors, file details or otherwise will properly error out.
+			_ = fs.create_directory(resolved_path).await;
+		}
+	}
 
 	match info_request.query_type() {
 		SataQueryType::FreeDiskSpace => handle_disk_space(state.pid(), header, final_location),
 		SataQueryType::SizeOfFolder => handle_folder_size(state.pid(), header, final_location),
 		SataQueryType::FileCount => handle_file_count(state.pid(), header, final_location),
 		SataQueryType::FileDetails => {
-			handle_file_info(state.pid(), header, state.host_filesystem(), final_location).await
+			handle_file_info(state.pid(), header, fs, final_location).await
 		}
 	}
 }
