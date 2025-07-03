@@ -1052,6 +1052,24 @@ pub struct FSEmulConfigurationFlags {
 		long_help = "If we should prefer the `fsemul.ini` file over the web configuration, this makes us act like nintendo's tools, but also means your configuration needs to be up to date."
 	)]
 	prefer_fsemul_over_network: bool,
+	#[arg(
+		long = "force-unique-fds",
+		visible_aliases = [
+			"force_unique_fds",
+			"counter-fds",
+			"counter_fds"
+		],
+		help = "Force unique file descriptors for files from HostFilesystem.",
+		long_help = "If you want an easier time debugging fds and your OS reuses them, set this flag to guarantee all files get unique fds.",
+	)]
+	force_unique_fds: bool,
+	#[arg(
+		long = "sata-wal-log",
+		alias = "sata_wal_log",
+		help = "Where we should create a SATA WAL log for all PCFS Sata requests.",
+		long_help = "Where we should create a SATA WAL log for all PCFS Sata requests, not that this does carry increased memory, and CPU time needing to be spent."
+	)]
+	sata_wal_log: Option<PathBuf>,
 }
 impl FSEmulConfigurationFlags {
 	#[must_use]
@@ -1095,15 +1113,25 @@ impl FSEmulConfigurationFlags {
 	}
 
 	#[must_use]
+	pub const fn force_unique_fds(&self) -> bool {
+		self.force_unique_fds
+	}
+
+	#[must_use]
 	pub const fn prefer_fsemul_over_network(&self) -> bool {
 		self.prefer_fsemul_over_network
+	}
+
+	#[must_use]
+	pub fn sata_wal_log(&self) -> Option<&PathBuf> {
+		self.sata_wal_log.as_ref()
 	}
 }
 impl Display for FSEmulConfigurationFlags {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		write!(
 			fmt,
-			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`, --disable-csr: `{}`, --disable-ffio: `{}`, --disable-load-bearing-sleep-for-atapi: `{}`, --disable-load-bearing-sleep-for-pcfs: `{}`, --disable-load-bearing-sleep-for-sdio: `{}`, --disable-real-removal: `{}`",
+			"FS Emulation Config Location Override Flag --fsemul-config-path: `{:?}`, --prefer-fsemul-over-network: `{}`, --cafe-dir: `{:?}`, --disable-csr: `{}`, --disable-ffio: `{}`, --disable-load-bearing-sleep-for-atapi: `{}`, --disable-load-bearing-sleep-for-pcfs: `{}`, --disable-load-bearing-sleep-for-sdio: `{}`, --disable-real-removal: `{}`, --force-unique-fds: `{}`, --sata-wal-log: `{:?}`",
 			self.fsemul_config_path,
 			self.prefer_fsemul_over_network,
 			self.cafe_dir,
@@ -1113,6 +1141,8 @@ impl Display for FSEmulConfigurationFlags {
 			self.disable_load_bearing_sleep_for_pcfs,
 			self.disable_load_bearing_sleep_for_sdio,
 			self.disable_real_removal,
+			self.force_unique_fds,
+			self.sata_wal_log,
 		)
 	}
 }
@@ -1126,6 +1156,8 @@ const FSEMUL_CONFIGURATION_FLAG_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("disable_load_bearing_sleep_for_pcfs"),
 	NamedField::new("disable_load_bearing_sleep_for_sdio"),
 	NamedField::new("disable_real_removal"),
+	NamedField::new("force_unique_fds"),
+	NamedField::new("sata_wal_log"),
 ];
 impl Structable for FSEmulConfigurationFlags {
 	fn definition(&self) -> StructDef<'_> {
@@ -1158,6 +1190,13 @@ impl Valuable for FSEmulConfigurationFlags {
 				Valuable::as_value(&self.disable_load_bearing_sleep_for_pcfs),
 				Valuable::as_value(&self.disable_load_bearing_sleep_for_sdio),
 				Valuable::as_value(&self.disable_real_removal),
+				Valuable::as_value(&self.force_unique_fds),
+				Valuable::as_value(
+					&self
+						.sata_wal_log
+						.as_ref()
+						.map(|pb| format!("{}", pb.display())),
+				),
 			],
 		));
 	}
@@ -1291,38 +1330,24 @@ pub struct SharedSerialPortFlags {
 		long_help = "The path to the serial port to use, on Windows you should use something like 'COM1', 'COM2', etc., on Linux this should be the full path to the device (conflicts with the positional argument)."
 	)]
 	serial_port_flag: Option<PathBuf>,
-	#[arg(
-		long = "debug-out-port",
-		alias = "debug_out_port",
-		help = "A port override to determine where we should connect for `DEBUG_OUT` logs.",
-		long_help = "A port override to determine where we should connect for `DBEUG_OUT` logs, the default port is 6001."
-	)]
-	debug_out_port: Option<u16>,
 }
 impl SharedSerialPortFlags {
 	#[must_use]
 	pub fn serial_port_flag(&self) -> Option<&PathBuf> {
 		self.serial_port_flag.as_ref()
 	}
-
-	#[must_use]
-	pub fn debug_out_port(&self) -> Option<u16> {
-		self.debug_out_port
-	}
 }
 impl Display for SharedSerialPortFlags {
 	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
 		write!(
 			fmt,
-			"Shared Serial Port Flags --serial-port-path: `{:?}`, --debug-out-port: `{:?}`",
-			self.serial_port_flag, self.debug_out_port,
+			"Shared Serial Port Flags --serial-port-path: `{:?}`",
+			self.serial_port_flag,
 		)
 	}
 }
-const SHARED_SERIAL_PORT_FLAG_FIELDS: &[NamedField<'static>] = &[
-	NamedField::new("serial_port_flag"),
-	NamedField::new("debug_out_port"),
-];
+const SHARED_SERIAL_PORT_FLAG_FIELDS: &[NamedField<'static>] =
+	&[NamedField::new("serial_port_flag")];
 impl Structable for SharedSerialPortFlags {
 	fn definition(&self) -> StructDef<'_> {
 		StructDef::new_static(
@@ -1339,15 +1364,12 @@ impl Valuable for SharedSerialPortFlags {
 	fn visit(&self, visitor: &mut dyn Visit) {
 		visitor.visit_named_fields(&NamedValues::new(
 			SHARED_SERIAL_PORT_FLAG_FIELDS,
-			&[
-				Valuable::as_value(
-					&self
-						.serial_port_flag
-						.as_ref()
-						.map(|p| format!("{}", p.display())),
-				),
-				Valuable::as_value(&self.debug_out_port),
-			],
+			&[Valuable::as_value(
+				&self
+					.serial_port_flag
+					.as_ref()
+					.map(|p| format!("{}", p.display())),
+			)],
 		));
 	}
 }

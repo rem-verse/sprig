@@ -75,6 +75,7 @@ pub async fn do_raw_signal_http_request(
 		Method::POST,
 		format!("http://{mion_ip}/signal_get.cgi"),
 		Some(encode_url_parameters(url_parameters)),
+		None,
 	)
 	.await
 }

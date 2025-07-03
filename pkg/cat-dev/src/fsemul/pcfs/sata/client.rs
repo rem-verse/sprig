@@ -11,8 +11,8 @@ use crate::{
 			SataFileDescriptorResult, SataGetInfoByQueryPacketBody, SataOpenFilePacketBody,
 			SataPacketHeader, SataPingPacketBody, SataPongBody, SataQueryResponse, SataQueryType,
 			SataReadFilePacketBody, SataReadFolderPacketBody, SataRemovePacketBody, SataRequest,
-			SataResponse, SataResultCode, SataRewindFolderPacketBody, SataStatFilePacketBody,
-			SataWriteFilePacketBody,
+			SataResponse, SataResultCode, SataRewindFolderPacketBody,
+			SataSetFilePositionPacketBody, SataStatFilePacketBody, SataWriteFilePacketBody,
 		},
 	},
 	net::{
@@ -24,7 +24,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use std::{
 	sync::{
 		Arc,
-		atomic::{AtomicBool, Ordering},
+		atomic::{AtomicBool, AtomicU32, Ordering},
 	},
 	time::Duration,
 };
@@ -41,6 +41,12 @@ pub struct SataClient {
 	supports_csr: Arc<AtomicBool>,
 	/// If we're acctively supporting "FFIO", or "Fast File I/O".
 	supports_ffio: Arc<AtomicBool>,
+	/// Means something different to the official server, but for us means
+	/// when padding stops being added.
+	first_read_size: Arc<AtomicU32>,
+	/// Means something different to the official server, but for us means
+	/// when padding stops being added.
+	first_write_size: Arc<AtomicU32>,
 	/// The TCP Client we're warpping.
 	underlying_client: TCPClient,
 }
@@ -55,6 +61,8 @@ impl SataClient {
 		address: AddrTy,
 		supports_csr: bool,
 		supports_ffio: bool,
+		first_read_size: u32,
+		first_write_size: u32,
 		trace_io_during_debug: bool,
 	) -> Result<Self, CatBridgeError> {
 		let client = TCPClient::new(
@@ -69,6 +77,8 @@ impl SataClient {
 			supports_csr: Arc::new(AtomicBool::new(supports_csr)),
 			supports_ffio: Arc::new(AtomicBool::new(supports_ffio)),
 			underlying_client: client,
+			first_read_size: Arc::new(AtomicU32::new(first_read_size)),
+			first_write_size: Arc::new(AtomicU32::new(first_write_size)),
 		};
 		this.ping(Some(DEFAULT_CLIENT_TIMEOUT)).await?;
 
@@ -134,6 +144,10 @@ impl SataClient {
 		}
 
 		let mut req = Self::construct(0x14, SataPingPacketBody::new());
+		req.command_info_mut().set_user((
+			self.first_read_size.load(Ordering::Acquire),
+			self.first_write_size.load(Ordering::Acquire),
+		));
 		req.command_info_mut().set_capabilities((u32::MAX, 0));
 		req.header_mut().set_flags(flags.0);
 		let (_stream_id, _req_id, opt_response) = self
@@ -502,6 +516,7 @@ impl SataClient {
 	/// - If we cannot receive a response from the PCFS Sata server.
 	/// - If we cannot parse the response from the PCFS Sata server.
 	/// - If the return code of the response was not successful.
+	/// - If you're requesting to read too much at once.
 	async fn do_file_read(
 		&self,
 		block_count: u32,
@@ -511,35 +526,55 @@ impl SataClient {
 		timeout: Option<Duration>,
 	) -> Result<(usize, Bytes), CatBridgeError> {
 		if self.supports_ffio.load(Ordering::Acquire) {
-			// For FFIO our normal nagle split doesn't really work well.
-			let (_stream_id, _req_id, opt_response) = self
-				.underlying_client
-				.send_with_read_amount(
-					Self::construct(
-						0x6,
-						SataReadFilePacketBody::new(
-							block_count,
-							block_size,
-							file_descriptor,
-							move_to,
-						),
-					),
-					Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
-					// 0x20 emptied PCFS header, 0x4 final file length + (block_size * block_count)
-					0x20_usize
-						+ 0x4_usize + (usize::try_from(block_size).unwrap_or(usize::MAX)
-						* usize::try_from(block_count).unwrap_or(usize::MAX)),
-				)
-				.await?;
+			let mut left_to_read = block_size * block_count;
 
-			let mut full_body = opt_response
-				.ok_or(NetworkError::ExpectedData)?
-				.take_body()
-				.ok_or(NetworkError::ExpectedData)?;
-			// Remove 'blank' header.
-			full_body.advance(0x20);
-			let file_size = usize::try_from(full_body.get_u32()).unwrap_or(usize::MAX);
-			Ok((file_size, full_body))
+			let mut file_size = 0_usize;
+			let mut final_body = BytesMut::with_capacity(
+				usize::try_from(left_to_read)
+					.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?,
+			);
+			while left_to_read > 0 {
+				// This keeps us within 'padding' range, which is easier to parse
+				// responses out of.
+				let read_in_this_go = std::cmp::min(
+					left_to_read,
+					self.first_read_size.load(Ordering::Acquire) - 0x25,
+				);
+				let read_in_this_go_size = usize::try_from(read_in_this_go)
+					.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
+				// For FFIO our normal nagle split doesn't really work well.
+				let (_stream_id, _req_id, opt_response) = self
+					.underlying_client
+					.send_with_read_amount(
+						Self::construct(
+							0x6,
+							SataReadFilePacketBody::new(
+								1,
+								read_in_this_go,
+								file_descriptor,
+								move_to,
+							),
+						),
+						Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+						// 0x20 emptied PCFS header, 0x4 final file length + (block_size * block_count)
+						0x20_usize + 0x4_usize + read_in_this_go_size,
+					)
+					.await?;
+
+				let mut full_body = opt_response
+					.ok_or(NetworkError::ExpectedData)?
+					.take_body()
+					.ok_or(NetworkError::ExpectedData)?;
+				// Remove 'blank' header.
+				full_body.advance(0x20);
+				if file_size == 0 {
+					file_size = usize::try_from(full_body.get_u32()).unwrap_or(usize::MAX);
+				}
+				final_body.extend(full_body);
+				left_to_read -= read_in_this_go;
+			}
+
+			Ok((file_size, final_body.freeze()))
 		} else {
 			todo!("Implement non-FFIO file support.")
 		}
@@ -609,6 +644,34 @@ impl SataClient {
 			SataQueryResponse::FDInfo(info) => Ok(info),
 			_ => unreachable!("Not reachable from try_from_fd_info"),
 		}
+	}
+
+	async fn do_file_move(
+		&self,
+		file_descriptor: i32,
+		move_to: MoveToFileLocation,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		let resp = self
+			.underlying_client
+			.send(
+				Self::construct(
+					0x9,
+					SataSetFilePositionPacketBody::new(file_descriptor, move_to),
+				),
+				Some(timeout.unwrap_or(DEFAULT_CLIENT_TIMEOUT)),
+			)
+			.await?
+			.2
+			.ok_or(NetworkError::ExpectedData)?
+			.take_body()
+			.ok_or(NetworkError::ExpectedData)?;
+
+		let sata_resp = SataResponse::<SataResultCode>::try_from(resp)?;
+		if sata_resp.body().0 != 0 {
+			return Err(NetworkParseError::ErrorCode(sata_resp.body().0).into());
+		}
+		Ok(())
 	}
 
 	async fn close_file(
@@ -789,6 +852,24 @@ impl SataClientFileHandle<'_> {
 	pub async fn stat(&self, timeout: Option<Duration>) -> Result<SataFDInfo, CatBridgeError> {
 		self.underlying_client
 			.stat_file(self.file_descriptor, timeout)
+			.await
+	}
+
+	/// Move to a new location within this file.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot send the request to the PCFS Sata server.
+	/// - If we cannot receive a response from the PCFS Sata server.
+	/// - If we cannot parse the response from the PCFS Sata server.
+	/// - If the return code of the response was not successful.
+	pub async fn move_to(
+		&self,
+		move_to: MoveToFileLocation,
+		timeout: Option<Duration>,
+	) -> Result<(), CatBridgeError> {
+		self.underlying_client
+			.do_file_move(self.file_descriptor, move_to, timeout)
 			.await
 	}
 

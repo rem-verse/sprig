@@ -27,6 +27,20 @@
 //! as NAGLE's algorithim is usually to blame for weird behaviors here. Where
 //! a device will combine multiple small packets together.
 //!
+//! ## Notes about Concurrency
+//!
+//! This TCP Server unfortunately has to make the sacrifice and process one
+//! packet per stream at a time. While you can have as many TCP streams as you
+//! want, and we should be able to handle many at the same time! Unfortunately
+//! the ordered nature of TCP, along with some protocol designs implemented by
+//! nintendo means this server must also force that we process one packet per
+//! tcp stream at a time.
+//!
+//! Most notably this comes from the fact that our file servers will
+//! consistently break their normal "NAGLE" protection, and we have to do just
+//! raw reads of N bytes from the stream (in both ways), _BEFORE_ processing
+//! another request.
+//!
 //! ## SLOW-loris
 //!
 //! As mentioned TCP is built ontop of a stream, there is a chance that someone
@@ -138,7 +152,7 @@ use scc::HashMap as ConcurrentMap;
 use std::{
 	convert::Infallible,
 	fmt::{Debug, Formatter, Result as FmtResult},
-	net::SocketAddr,
+	net::{IpAddr, SocketAddr},
 	sync::{Arc, LazyLock, atomic::Ordering},
 	time::{Duration, SystemTime},
 };
@@ -377,6 +391,12 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 			#[cfg(debug_assertions)]
 			trace_during_debug: trace_io_during_debug || *SPRIG_TRACE_IO,
 		})
+	}
+
+	/// The IP address we should connect to bind too.
+	#[must_use]
+	pub const fn ip(&self) -> IpAddr {
+		self.address_to_bind_or_connect_to.ip()
 	}
 
 	/// Get the port that we're either binding too, or connecting too.
@@ -1087,13 +1107,13 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 			buff = existing_buff;
 		}
 
-		let lockable_stream = Arc::new(Mutex::new(Some(stream)));
 		while let Some((start_of_packet, end_of_packet)) = nagle_guard.split(&buff)? {
 			let remaining_buff = buff.split_off(end_of_packet);
 			let _start_of_buff = buff.split_to(start_of_packet);
 			let req_body = buff.freeze();
 			buff = remaining_buff;
 
+			let lockable_stream = Arc::new(Mutex::new(Some((Some(buff), stream))));
 			let mut request_object = Request::new_with_state_and_stream(
 				req_body,
 				client_address,
@@ -1118,13 +1138,19 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 					"internal queue failure will not send disconnect/response."
 				);
 			}
-		}
-		{
-			let mut done_lock = lockable_stream.lock().await;
-			if let Some(strm) = done_lock.take() {
-				stream = strm;
-			} else {
-				return Err(CommonNetNetworkError::StreamNoLongerProcessing.into());
+
+			{
+				let mut done_lock = lockable_stream.lock().await;
+				if let Some((newer_buff, strm)) = done_lock.take() {
+					if let Some(newest_buff) = newer_buff {
+						buff = newest_buff;
+					} else {
+						return Err(CommonNetNetworkError::StreamNoLongerProcessing.into());
+					}
+					stream = strm;
+				} else {
+					return Err(CommonNetNetworkError::StreamNoLongerProcessing.into());
+				}
 			}
 		}
 

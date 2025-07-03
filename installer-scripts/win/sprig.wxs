@@ -6,7 +6,7 @@
   <Package Manufacturer="RemVerse"
     Name="Sprig"
     Language="1033"
-    Version="0.0.10"
+    Version="0.0.11"
     UpgradeCode="f25b6ffc-5890-42f2-a1c1-0f7dd4a9ee11">
 
     <ui:WixUI Id="WixUI_Minimal" InstallDirectory="INSTALLFOLDER" />
@@ -56,6 +56,11 @@
             <File Id="catlog" Name="catlog.exe" Source="target/release/catlog.exe" KeyPath="yes" />
           </Component>
           <Component>
+            <File Id="pcfsserver" Name="PCFSServer.exe" Source="target/release/pcfsserver.exe" KeyPath="yes" />
+          </Component>
+          <Component>
+            <File Id="dbg-generate-sata-wal-from-pcap" Name="dbg-generate-sata-wal-from-pcap.exe" Source="target/release/dbg-generate-sata-wal-from-pcap.exe" KeyPath="yes" />
+          <Component>
             <File Id="license" Name="LICENSE" Source="LICENSE" KeyPath="yes" />
           </Component>
           <Component>
@@ -81,6 +86,8 @@
       <ComponentRef Id="mionps" />
       <ComponentRef Id="mionparamspace" />
       <ComponentRef Id="catlog" />
+      <ComponentRef Id="pcfsserver" />
+      <ComponentRef Id="dbg-generate-sata-wal-from-pcap" />
       <ComponentRef Id="license" />
       <ComponentRef Id="serial2_apache_license" />
       <ComponentRef Id="serial2_bsd_license" />

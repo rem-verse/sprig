@@ -16,13 +16,18 @@ mod ping;
 mod read_file;
 mod read_folder;
 mod remove;
+mod rename;
 mod rewind_folder;
+mod set_file_position;
 mod stat_file;
 mod write_file;
 
 use crate::{
-	errors::{CatBridgeError, NetworkError, NetworkParseError},
-	fsemul::pcfs::errors::{PCFSApiError, SataProtocolError},
+	errors::{CatBridgeError, FSError, NetworkError, NetworkParseError},
+	fsemul::{
+		HostFilesystem,
+		pcfs::errors::{PCFSApiError, SataProtocolError},
+	},
 	net::models::{IntoResponse, Response},
 };
 use bytes::{BufMut, Bytes, BytesMut};
@@ -35,7 +40,7 @@ use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable,
 pub use crate::fsemul::pcfs::sata::proto::{
 	change_mode::*, change_owner::*, close_file::*, close_folder::*, create_folder::*,
 	get_info_by_query::*, open_file::*, open_folder::*, ping::*, read_file::*, read_folder::*,
-	remove::*, rewind_folder::*, stat_file::*, write_file::*,
+	remove::*, rename::*, rewind_folder::*, set_file_position::*, stat_file::*, write_file::*,
 };
 
 /// The Default PCFS Version we claim to be.
@@ -439,6 +444,35 @@ pub enum MoveToFileLocation {
 	End,
 }
 
+impl MoveToFileLocation {
+	/// Actually seek around a particular file descriptor on a host filesystem.
+	///
+	/// ## Errors
+	///
+	/// If we do end up calling seek file, and the host filesystem seek files
+	/// throws an error.
+	pub async fn do_move(
+		&self,
+		host_fs: &HostFilesystem,
+		handle: i32,
+		stream_id: Option<u64>,
+	) -> Result<(), FSError> {
+		match *self {
+			MoveToFileLocation::Begin => {
+				host_fs.seek_file(handle, true, stream_id).await?;
+			}
+			MoveToFileLocation::Current => {
+				// Luckily to move to current, we don't need to move at all.
+			}
+			MoveToFileLocation::End => {
+				host_fs.seek_file(handle, false, stream_id).await?;
+			}
+		}
+
+		Ok(())
+	}
+}
+
 impl From<&MoveToFileLocation> for u32 {
 	fn from(value: &MoveToFileLocation) -> u32 {
 		match *value {
@@ -464,6 +498,16 @@ impl TryFrom<u32> for MoveToFileLocation {
 			1 => Ok(Self::Current),
 			2 => Ok(Self::End),
 			val => Err(SataProtocolError::UnknownFileLocation(val)),
+		}
+	}
+}
+
+impl Display for MoveToFileLocation {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		match self {
+			Self::Begin => write!(fmt, "Begin"),
+			Self::Current => write!(fmt, "Nowhere"),
+			Self::End => write!(fmt, "End"),
 		}
 	}
 }
@@ -640,6 +684,8 @@ pub struct SataResponse<InnerTy: Debug> {
 	flags: u32,
 	/// The process id to report.
 	pid: u32,
+	/// Whether or not to force a '0' as our version.
+	force_zero_version: bool,
 	/// The body of the rsponse.
 	body: InnerTy,
 }
@@ -653,6 +699,18 @@ impl<InnerTy: Debug> SataResponse<InnerTy> {
 			flags: 0,
 			pid,
 			body,
+			force_zero_version: false,
+		}
+	}
+
+	#[must_use]
+	pub const fn new_force_zero_version(pid: u32, header: SataPacketHeader, body: InnerTy) -> Self {
+		Self {
+			header,
+			flags: 0,
+			pid,
+			body,
+			force_zero_version: true,
 		}
 	}
 
@@ -668,6 +726,7 @@ impl<InnerTy: Debug> SataResponse<InnerTy> {
 			flags,
 			pid,
 			body,
+			force_zero_version: false,
 		}
 	}
 
@@ -681,6 +740,7 @@ impl<InnerTy: Debug> SataResponse<InnerTy> {
 			flags,
 			pid: host_pid,
 			body,
+			force_zero_version: false,
 		}
 	}
 
@@ -752,6 +812,7 @@ where
 			flags,
 			pid,
 			body,
+			force_zero_version: false,
 		})
 	}
 }
@@ -772,11 +833,15 @@ where
 		);
 		new_buff.put_u32(value.header.id());
 		new_buff.put_u32(value.flags);
-		new_buff.put_u32(if value.header.version() != 0 {
-			value.header.version()
+		if value.force_zero_version {
+			new_buff.put_u32(0);
 		} else {
-			DEFAULT_PCFS_VERSION
-		});
+			new_buff.put_u32(if value.header.version() != 0 {
+				value.header.version()
+			} else {
+				DEFAULT_PCFS_VERSION
+			});
+		}
 		// Calculate epoch, and wrap around...
 		new_buff.put_u32(
 			u32::try_from(
@@ -896,6 +961,16 @@ impl TryFrom<Bytes> for SataResultCode {
 	}
 }
 
+impl Display for SataResultCode {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		if self.0 == 0 {
+			write!(fmt, "Success")
+		} else {
+			write!(fmt, "Failure ({:02x})", self.0)
+		}
+	}
+}
+
 /// A file descriptor from a sata endpoint that optionally includes a single
 /// result code in back.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Valuable)]
@@ -986,6 +1061,15 @@ impl TryFrom<Bytes> for SataFileDescriptorResult {
 			Ok(Self::success(fd))
 		} else {
 			Ok(Self::error(rc))
+		}
+	}
+}
+
+impl Display for SataFileDescriptorResult {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+		match self.file_descriptor {
+			Ok(fd) => write!(fmt, "Success ({fd})"),
+			Err(rc) => write!(fmt, "Failure ({rc:02x})"),
 		}
 	}
 }

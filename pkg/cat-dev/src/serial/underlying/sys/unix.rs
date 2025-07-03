@@ -564,7 +564,7 @@ impl RawSyncSerialPort {
 			revents: 0,
 		};
 		unsafe {
-			Self::check(libc::poll(&mut poll_fd, 1, timeout_ms as i32))?;
+			Self::check(libc::poll(&raw mut poll_fd, 1, timeout_ms as i32))?;
 		}
 		Ok(poll_fd.revents != 0)
 	}

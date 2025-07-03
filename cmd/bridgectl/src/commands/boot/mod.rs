@@ -73,7 +73,7 @@ use crate::{
 		cli::{FSEmulConfigurationFlags, SharedSerialPortFlags},
 		env::{
 			ATAPI_DISABLE_LOAD_BEARING_SLEEP, FSEMUL_DISABLE_REMOVAL, PCFS_DISABLE_CSR,
-			PCFS_DISABLE_FFIO, PCFS_DISABLE_LOAD_BEARING_SLEEP, PCFS_IS_SATA,
+			PCFS_DISABLE_FFIO, PCFS_DISABLE_LOAD_BEARING_SLEEP, PCFS_IS_SATA, SATA_WAL_LOG,
 			SDIO_DISABLE_LOAD_BEARING_SLEEP,
 		},
 	},
@@ -103,10 +103,9 @@ pub async fn handle_boot(
 	let host_ip = get_host_bind_address().await;
 
 	let is_modern_bridge = is_modern_bridge(bridge_ip).await;
-	let serial_task_handle =
-		coalesce_serial_ports(bridge_ip, &serial_port_args.0, serial_port_args.1)
-			.await
-			.spawn_log_task();
+	let serial_task_handle = coalesce_serial_ports(&serial_port_args.0, serial_port_args.1)
+		.await
+		.spawn_log_task();
 
 	let (_info_request, setup_params, needs_pcfs) = validate_bridge_ready_for_booting(
 		is_modern_bridge,
@@ -137,8 +136,6 @@ pub async fn handle_boot(
 		return;
 	}
 
-	// TODO(mythra): properly serve a disc....
-	turn_down_for_disc(bridge_ip).await;
 	let file_system = lease_host_file_system().await;
 
 	let final_atapi_port = serve_atapi(
@@ -153,17 +150,8 @@ pub async fn handle_boot(
 		fsemul_flags.disable_load_bearing_sleep_for_atapi() || *ATAPI_DISABLE_LOAD_BEARING_SLEEP,
 	)
 	.await;
-	serve_sdio(
-		bridge_ip,
-		setup_params.as_ref(),
-		file_system,
-		get_sdio_control_port().await,
-		get_sdio_printf_port().await,
-		fsemul_flags.disable_load_bearing_sleep_for_sdio() || *SDIO_DISABLE_LOAD_BEARING_SLEEP,
-	)
-	.await;
-	let will_use_sata = get_will_use_sata(disable_sata);
 
+	let will_use_sata = get_will_use_sata(disable_sata);
 	let sata_port = if will_use_sata {
 		let p = serve_sata(
 			file_system,
@@ -177,12 +165,27 @@ pub async fn handle_boot(
 			fsemul_flags.disable_ffio() || *PCFS_DISABLE_FFIO,
 			fsemul_flags.disable_csr() || *PCFS_DISABLE_CSR,
 			fsemul_flags.disable_load_bearing_sleep_for_pcfs() || *PCFS_DISABLE_LOAD_BEARING_SLEEP,
+			fsemul_flags
+				.sata_wal_log()
+				.or(SATA_WAL_LOG.as_ref())
+				.cloned(),
 		)
 		.await;
+
 		Some(p)
 	} else {
 		None
 	};
+
+	serve_sdio(
+		bridge_ip,
+		setup_params.as_ref(),
+		file_system,
+		get_sdio_control_port().await,
+		get_sdio_printf_port().await,
+		fsemul_flags.disable_load_bearing_sleep_for_sdio() || *SDIO_DISABLE_LOAD_BEARING_SLEEP,
+	)
+	.await;
 
 	wrap_power_on(
 		is_modern_bridge,

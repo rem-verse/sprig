@@ -564,7 +564,7 @@ impl std::os::windows::io::FromRawHandle for SyncSerialPort {
 	unsafe fn from_raw_handle(handle: std::os::windows::io::RawHandle) -> Self {
 		Self {
 			inner: RawSyncSerialPort {
-				fd: std::fs::File::from_raw_handle(handle),
+				fd: unsafe { std::fs::File::from_raw_handle(handle) },
 			},
 		}
 	}

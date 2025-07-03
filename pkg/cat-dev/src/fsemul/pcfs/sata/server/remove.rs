@@ -1,7 +1,6 @@
 //! Handle remove packets which can remove files or folders.
 
 use crate::{
-	errors::FSError,
 	fsemul::{
 		host_filesystem::ResolvedLocation,
 		pcfs::sata::{
@@ -11,13 +10,9 @@ use crate::{
 	},
 	net::server::requestable::{Body, State},
 };
-use std::{
-	ffi::{OsStr, OsString},
-	path::PathBuf,
-};
-use tokio::fs::{create_dir_all, read_link, remove_dir_all, remove_file, rename};
+use std::ffi::OsStr;
+use tokio::fs::{remove_dir_all, remove_file};
 use tracing::{debug, error};
-use walkdir::WalkDir;
 
 /// A filesystem error occured.
 const FS_ERROR: u32 = 0xFFF0_FFE0;
@@ -53,47 +48,16 @@ pub async fn handle_removal(
 		todo!("network shares not yet implemented!")
 	};
 
-	if fs_location.resolved_path().exists() {
-		if !state.disable_real_removal() {
-			if fs_location.resolved_path().is_file() {
-				if let Err(cause) = remove_file(fs_location.resolved_path()).await {
-					error!(
-					  ?cause,
-					  path = %fs_location.resolved_path().display(),
-					  "Failed to remove file as requested by PCFS.",
-					);
+	if !fs_location.resolved_path().exists() {
+		return SataResponse::new(
+			state.pid(),
+			request_header,
+			SataResultCode::error(PATH_NOT_EXIST_ERROR),
+		);
+	}
 
-					return SataResponse::new(
-						state.pid(),
-						request_header,
-						SataResultCode::error(FS_ERROR),
-					);
-				}
-			} else if fs_location.resolved_path().is_dir() {
-				if let Err(cause) = remove_dir_all(fs_location.resolved_path()).await {
-					error!(
-					  ?cause,
-					  path = %fs_location.resolved_path().display(),
-					  "Failed to remove directory as requested by PCFS."
-					);
-
-					return SataResponse::new(
-						state.pid(),
-						request_header,
-						SataResultCode::error(FS_ERROR),
-					);
-				}
-			} else {
-				return SataResponse::new(
-					state.pid(),
-					request_header,
-					SataResultCode::error(FS_ERROR),
-				);
-			}
-		} else if fs_location.resolved_path().is_file() {
-			// This should always be fine to do as mount pounts are at most
-			// specific to a directory, so moving a file within the same directory
-			// doesn't violate the "can't move across mount points" on windows.
+	if state.disable_real_removal() {
+		let new_path = if fs_location.resolved_path().is_file() {
 			let mut new_filename = fs_location
 				.resolved_path()
 				.file_name()
@@ -103,112 +67,57 @@ pub async fn handle_removal(
 			let mut new_path = fs_location.resolved_path().clone();
 			new_path.pop();
 			new_path.push(new_filename);
-
-			if let Err(cause) = rename(fs_location.resolved_path(), new_path).await {
-				error!(
-				  ?cause,
-				  path = %fs_location.resolved_path().display(),
-				  "Failed to rename file (as opposed to remove) as requested by PCFS."
-				);
-
-				return SataResponse::new(
-					state.pid(),
-					request_header,
-					SataResultCode::error(FS_ERROR),
-				);
-			}
-		} else if fs_location.resolved_path().is_dir() {
-			if let Err(cause) = rename_dir(fs_location.resolved_path()).await {
-				error!(
-				  ?cause,
-				  path = %fs_location.resolved_path().display(),
-				  "Failed to rename folder (as opposed to remove) as requested by PCFS."
-				);
-
-				return SataResponse::new(
-					state.pid(),
-					request_header,
-					SataResultCode::error(FS_ERROR),
-				);
-			}
+			new_path
 		} else {
+			let mut new_path = fs_location.resolved_path().clone();
+			let mut dir_name = new_path
+				.components()
+				.next_back()
+				.map(|c| c.as_os_str().to_os_string())
+				.unwrap_or_default();
+			dir_name.push(".rm");
+			new_path.pop();
+			new_path.push(dir_name);
+			new_path
+		};
+
+		if let Err(cause) = state
+			.host_filesystem()
+			.rename(fs_location.resolved_path(), &new_path)
+		{
+			error!(
+			  ?cause,
+			  path = %fs_location.resolved_path().display(),
+			  "Failed to remove/rename directory as requested by PCFS."
+			);
+
 			return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
 		}
+	} else if fs_location.resolved_path().is_file() {
+		if let Err(cause) = remove_file(fs_location.resolved_path()).await {
+			error!(
+			  ?cause,
+			  path = %fs_location.resolved_path().display(),
+			  "Failed to remove file as requested by PCFS.",
+			);
+
+			return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
+		}
+	} else if fs_location.resolved_path().is_dir() {
+		if let Err(cause) = remove_dir_all(fs_location.resolved_path()).await {
+			error!(
+			  ?cause,
+			  path = %fs_location.resolved_path().display(),
+			  "Failed to remove directory as requested by PCFS."
+			);
+
+			return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
+		}
+	} else {
+		return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
 	}
 
 	SataResponse::new(state.pid(), request_header, SataResultCode::success())
-}
-
-/// Rename an entire directory.
-///
-/// We have to implement this ourselves, because [`tokio::fs::rename`], and
-/// [`std::fs::rename`] don't support renaming a directory at all on windows,
-/// which is one of the critical OS's that we need to support.
-///
-/// This 'rename' works by actually creating a new directory with the ".rm"
-/// added. Then moving all the files over with rename. This is slow, but
-/// works.
-async fn rename_dir(old_path: &PathBuf) -> Result<(), FSError> {
-	let mut new_filename = old_path.file_name().unwrap_or_default().to_owned();
-	new_filename.push(OsStr::new(".rm"));
-	let mut new_path = old_path.clone();
-	new_path.pop();
-	new_path.push(new_filename);
-	let old_path_bytes = old_path.as_os_str().as_encoded_bytes();
-	let new_path_as_str_bytes = new_path.as_os_str().as_encoded_bytes();
-
-	create_dir_all(&new_path).await?;
-	for result in WalkDir::new(old_path)
-		.follow_links(false)
-		.follow_root_links(false)
-	{
-		let rpb = result?.into_path();
-		let os_str_for_entry = rpb.as_os_str().as_encoded_bytes();
-		let mut new_bytes = Vec::with_capacity(os_str_for_entry.len() + 3);
-		new_bytes.extend_from_slice(new_path_as_str_bytes);
-		new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
-		let as_new_path =
-			PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
-
-		if rpb.is_symlink() {
-			let mut resolved_path = read_link(&rpb).await?;
-			{
-				// Rewrite paths within the directory we're removing.
-				let os_str_for_resolved = resolved_path.as_os_str().as_encoded_bytes();
-				if os_str_for_resolved.starts_with(old_path_bytes) {
-					let mut new_bytes = Vec::with_capacity(os_str_for_resolved.len() + 3);
-					new_bytes.extend_from_slice(new_path_as_str_bytes);
-					new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
-					resolved_path =
-						PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
-				}
-			}
-
-			#[cfg(unix)]
-			{
-				use std::os::unix::fs::symlink;
-				symlink(resolved_path, &as_new_path)?;
-			}
-
-			#[cfg(target_os = "windows")]
-			{
-				use std::os::windows::fs::{symlink_dir, symlink_file};
-
-				if resolved_path.is_dir() {
-					symlink_dir(resolved_path, &as_new_path)?;
-				} else {
-					symlink_file(resolved_path, &as_new_path)?;
-				}
-			}
-		} else if rpb.is_file() {
-			rename(&rpb, &as_new_path).await?;
-		} else if rpb.is_dir() {
-			create_dir_all(as_new_path).await?;
-		}
-	}
-
-	remove_dir_all(old_path).await?;
-	Ok(())
 }
 
 #[cfg(test)]
@@ -261,34 +170,33 @@ mod unit_tests {
 	pub async fn test_fake_removal() {
 		let (tempdir, fs) = create_temporary_host_filesystem().await;
 
-		let base_dir = join_many(tempdir.path(), ["a", "b", "c"]);
+		// Create folders.....
+		let base_dir = join_many(tempdir.path(), ["directory-to-test-in"]);
+		// Created for us by temporary host filesystem...
+		let data_dir = join_many(tempdir.path(), ["data", "slc"]);
+		let symlink_folder_path = join_many(&base_dir, ["sub-directory-with-symlink"]);
 		tokio::fs::create_dir_all(&base_dir)
 			.await
 			.expect("Failed to create temporary directory for test!");
+		tokio::fs::create_dir_all(&symlink_folder_path)
+			.await
+			.expect("Failed to create temporary directory for test!");
+
+		// Place down files....
 		let file_path = join_many(&base_dir, ["file.txt"]);
 		tokio::fs::write(&file_path, vec![0; 1307])
 			.await
 			.expect("Failed to write test file!");
 
-		let inner_path = join_many(tempdir.path(), ["a", "b", "c", "d", "e"]);
-		tokio::fs::create_dir_all(&inner_path)
-			.await
-			.expect("Failed to create temporary directory for test!");
-
-		let directory_to_symlink = join_many(tempdir.path(), ["data", "slc"]);
-		let dir_path_to_symlink = join_many(tempdir.path(), ["a", "b", "c", "d", "e", "f"]);
-
-		let file_path_to_symlink = join_many(
-			tempdir.path(),
-			["a", "b", "c", "d", "e", "symlinked-file.txt"],
-		);
+		// Place down symlinks.....
+		let dir_path_to_symlink = join_many(&symlink_folder_path, ["symlinked-folder"]);
+		let file_path_to_symlink = join_many(&symlink_folder_path, ["symlinked-file.txt"]);
 
 		#[cfg(unix)]
 		{
 			use std::os::unix::fs::symlink;
 
-			symlink(&directory_to_symlink, &dir_path_to_symlink)
-				.expect("Failed to symlink directory!");
+			symlink(&data_dir, &dir_path_to_symlink).expect("Failed to symlink directory!");
 			symlink(&file_path, &file_path_to_symlink).expect("Failed to symlink file!");
 		}
 
@@ -296,8 +204,7 @@ mod unit_tests {
 		{
 			use std::os::windows::fs::{symlink_dir, symlink_file};
 
-			symlink_dir(&directory_to_symlink, &dir_path_to_symlink)
-				.expect("Failed to symlink directory!");
+			symlink_dir(&data_dir, &dir_path_to_symlink).expect("Failed to symlink directory!");
 			symlink_file(&file_path, &file_path_to_symlink).expect("Failed to symlink file!");
 		}
 
@@ -318,7 +225,7 @@ mod unit_tests {
 		.await
 		.try_into()
 		.expect("Failed to serialize real removal response!");
-		let renamed_dir = join_many(tempdir.path(), ["a", "b", "c.rm"]);
+		let renamed_dir = join_many(tempdir.path(), ["directory-to-test-in.rm"]);
 
 		assert!(
 			!base_dir.exists(),

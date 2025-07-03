@@ -10,7 +10,7 @@ use crate::{
 };
 use bytes::{BufMut, Bytes, BytesMut};
 use reqwest::{Client, Method};
-use std::{fmt::Display, net::Ipv4Addr, ops::Deref};
+use std::{fmt::Display, net::Ipv4Addr, ops::Deref, time::Duration};
 use tracing::debug;
 
 const EEPROM_MAX_ADDRESS: usize = 0x1E00;
@@ -117,6 +117,8 @@ pub async fn do_raw_eeprom_request(
 		Method::POST,
 		format!("http://{mion_ip}/dbg/eeprom_dump.cgi"),
 		Some(encode_url_parameters(url_parameters)),
+		// Dump operations are sometimes slow...
+		Some(Duration::from_secs(60)),
 	)
 	.await
 }

@@ -77,18 +77,11 @@ pub async fn handle_create_folder(
 			.host_filesystem()
 			.ensure_folder_not_read_only(fs_location.resolved_path())
 			.await;
-	} else if let Err(cause) = state
-		.host_filesystem()
-		.mark_folder_read_only(fs_location.resolved_path().clone())
-		.await
-	{
-		error!(
-		  ?cause,
-		  path = %fs_location.resolved_path().display(),
-		  "Failed to mark directory as read-only for PCFS.",
-		);
-
-		return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
+	} else {
+		state
+			.host_filesystem()
+			.mark_folder_read_only(fs_location.resolved_path().clone())
+			.await;
 	}
 
 	SataResponse::new(state.pid(), request_header, SataResultCode::success())

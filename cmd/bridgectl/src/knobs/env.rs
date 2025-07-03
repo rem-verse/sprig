@@ -267,6 +267,18 @@ pub static PCFS_DISABLE_LOAD_BEARING_SLEEP: LazyLock<bool> = LazyLock::new(|| {
 pub static PCFS_IS_SATA: LazyLock<bool> =
 	LazyLock::new(|| env_var("USE_PCFS_OVER_SATA").ok().as_deref().unwrap_or("1") == "1");
 
+/// Determines where we should write a WAL log, and by consequence if we will.
+///
+/// note: WAL logging currently doubles the parsing, memory, etc. for
+/// requests/responses to SATA. Ideally we can lower this in the future but
+/// you should be aware of it for now.
+///
+/// Environment Variable Name: `SATA_WAL_LOG`
+/// Expected Values: The path we can write to of a file the WAL log should be written.
+/// Type: [`PathBuf`]
+pub static SATA_WAL_LOG: LazyLock<Option<PathBuf>> =
+	LazyLock::new(|| env_var_os("SATA_WAL_LOG").map(PathBuf::from));
+
 /// Change the load bearing sleep time for your MION when communicating over
 /// SDIO.
 ///

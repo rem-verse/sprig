@@ -20,6 +20,20 @@
 //!    from getting in our way. So our write calls will always lead to
 //!    hopefully one write call on the other side.
 //!
+//! ## Notes about Concurrency
+//!
+//! This TCP Client unfortunately has to make the sacrifice and process one
+//! packet per stream at a time. While you can have as many TCP streams as you
+//! want, and we should be able to handle many at the same time! Unfortunately
+//! the ordered nature of TCP, along with some protocol designs implemented by
+//! nintendo means this server must also force that we process one packet per
+//! tcp stream at a time.
+//!
+//! Most notably this comes from the fact that our file servers will
+//! consistently break their normal "NAGLE" protection, and we have to do just
+//! raw reads of N bytes from the stream (in both ways), _BEFORE_ processing
+//! another request.
+//!
 //! ## API Notes
 //!
 //! Most, TCP Clients only expect to connect to a single server, and have just

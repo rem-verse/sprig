@@ -4,7 +4,7 @@ mod change_mode;
 mod change_owner;
 mod close_file;
 mod close_folder;
-mod connection_flags;
+pub mod connection_flags;
 mod create_folder;
 mod info_by_query;
 mod open_file;
@@ -13,7 +13,10 @@ mod ping;
 mod read_file;
 mod read_folder;
 mod remove;
+mod rename;
 mod rewind_folder;
+mod set_file_position;
+pub mod wal;
 mod write_file;
 
 use crate::{
@@ -22,8 +25,14 @@ use crate::{
 		HostFilesystem,
 		pcfs::sata::{
 			proto::SataRequest,
-			server::connection_flags::{
-				SATA_CONNECTION_FLAGS, SataConnectionFlags, SataConnectionFlagsLayer,
+			server::{
+				connection_flags::{
+					SATA_CONNECTION_FLAGS, SataConnectionFlags, SataConnectionFlagsLayer,
+				},
+				wal::{
+					WriteAheadLog,
+					layer::{WALBeginStreamLayer, WALEndStreamLayer, WALMessageLayer},
+				},
 			},
 		},
 	},
@@ -38,6 +47,7 @@ use bytes::Bytes;
 use local_ip_address::local_ip;
 use std::{
 	net::{IpAddr, Ipv4Addr, SocketAddrV4},
+	path::PathBuf,
 	time::Duration,
 };
 use tower::ServiceBuilder;
@@ -118,6 +128,7 @@ pub async fn pcfs_sata_server(
 	disable_ffio: bool,
 	disable_csr: bool,
 	disable_real_removal: bool,
+	sata_wal_location: Option<PathBuf>,
 	cat_dev_sleep_override: Option<Duration>,
 	fully_disable_cat_dev_sleep: bool,
 	chunk_override: Option<usize>,
@@ -145,9 +156,14 @@ pub async fn pcfs_sata_server(
 	router.add_route(&0x5_u32.to_be_bytes(), open_file::handle_open_file)?;
 	router.add_route(&0x6_u32.to_be_bytes(), read_file::handle_read_file)?;
 	router.add_route(&0x7_u32.to_be_bytes(), write_file::handle_write_file)?;
+	router.add_route(
+		&0x9_u32.to_be_bytes(),
+		set_file_position::handle_set_file_position,
+	)?;
 	router.add_route(&0xB_u32.to_be_bytes(), info_by_query::stat_fd)?;
 	router.add_route(&0xD_u32.to_be_bytes(), close_file::handle_close_file)?;
 	router.add_route(&0xE_u32.to_be_bytes(), remove::handle_removal)?;
+	router.add_route(&0xF_u32.to_be_bytes(), rename::handle_rename)?;
 	router.add_route(
 		&0x10_u32.to_be_bytes(),
 		info_by_query::handle_get_info_by_query,
@@ -168,6 +184,11 @@ pub async fn pcfs_sata_server(
 	)
 	.await?;
 
+	let mut wal = match sata_wal_location {
+		Some(p) => WriteAheadLog::new(p).ok(),
+		None => None,
+	};
+
 	server.set_on_stream_begin(async move |event: ResponseStreamEvent<PCFSServerState>| {
 		let sid = event.stream_id();
 
@@ -180,13 +201,30 @@ pub async fn pcfs_sata_server(
 
 		Ok(true)
 	})?;
+	if let Some(w) = wal.as_ref() {
+		server.layer_on_stream_begin(WALBeginStreamLayer(w.clone()))?;
+	}
 	server.set_on_stream_end(on_sata_stream_end)?;
-	server.layer_initial_service(
-		ServiceBuilder::new()
-			.layer(RequestIDLayer)
-			.layer(StreamIDLayer)
-			.layer(SataConnectionFlagsLayer),
-	);
+	if let Some(w) = wal.as_ref() {
+		server.layer_on_stream_end(WALEndStreamLayer(w.clone()))?;
+	}
+
+	if let Some(w) = wal.take() {
+		server.layer_initial_service(
+			ServiceBuilder::new()
+				.layer(RequestIDLayer)
+				.layer(StreamIDLayer)
+				.layer(SataConnectionFlagsLayer)
+				.layer(WALMessageLayer(w)),
+		);
+	} else {
+		server.layer_initial_service(
+			ServiceBuilder::new()
+				.layer(RequestIDLayer)
+				.layer(StreamIDLayer)
+				.layer(SataConnectionFlagsLayer),
+		);
+	}
 
 	server.set_chunk_output_at_size(if fully_disable_chunk_override {
 		None
@@ -205,12 +243,17 @@ pub async fn pcfs_sata_server(
 }
 
 async fn unknown_packet_handler(Body(request): Body<Bytes>) -> Response {
-	if let Ok(req) = SataRequest::<Bytes>::parse_opaque(request) {
+	if let Ok(req) = SataRequest::<Bytes>::parse_opaque(request.clone()) {
 		warn!(
 			header = valuable(req.header()),
 			command_info = valuable(req.command_info()),
 			body = format!("{:02X?}", req.body()),
 			"Unknown PCFS Sata packet!",
+		);
+	} else {
+		warn!(
+			packet = format!("{:02X?}", request),
+			"Unknown Unparsable PCFS Sata Packet!",
 		);
 	}
 

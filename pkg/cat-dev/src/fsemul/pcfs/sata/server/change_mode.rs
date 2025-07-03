@@ -103,13 +103,14 @@ pub async fn handle_change_mode(
 				.host_filesystem()
 				.ensure_folder_not_read_only(fs_location.closest_resolved_path())
 				.await;
-			Ok(())
 		} else {
 			state
 				.host_filesystem()
 				.mark_folder_read_only(fs_location.closest_resolved_path().clone())
-				.await
+				.await;
 		}
+
+		Ok(())
 	} else {
 		set_permissions(fs_location.closest_resolved_path(), perms).map_err(FSError::IO)
 	};

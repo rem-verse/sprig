@@ -3,6 +3,7 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 #[cfg(any(feature = "clients", feature = "servers"))]
 use crate::fsemul::pcfs::sata::proto::SataQueryResponse;
 
@@ -26,6 +27,7 @@ pub enum PCFSApiError {
 	#[error("The requested path: [{0}] was not inside of a mapped directory, cannot serve.")]
 	#[diagnostic(code(cat_dev::api::fsemul::pcfs::path_not_mapped))]
 	PathNotMapped(String),
+	#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 	#[cfg(feature = "servers")]
 	#[error(
 		"The server was not configured correctly (programmer error), please report that extension: {0} did not load properly!"
@@ -66,6 +68,7 @@ pub enum SataProtocolError {
 	#[error("Unknown file location to move too: {0}")]
 	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::unknown_file_location))]
 	UnknownFileLocation(u32),
+	#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 	#[cfg(any(feature = "clients", feature = "servers"))]
 	#[error("Sata query response returned the wrong type of response: {0:?}")]
 	#[diagnostic(code(cat_dev::net::parse::pcfs::sata::wrong_query_response_type))]

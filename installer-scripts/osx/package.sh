@@ -26,13 +26,15 @@ cp ../../../cmd/getbridgetype/sh/getbridgetype ./
 cp ../../../cmd/setbridge/sh/setbridge ./
 cp ../../../target/release/mionps ./
 cp ../../../target/release/mionparamspace ./
+cp ../../../target/release/pcfsserver ./
+cp ../../../target/release/dbg-generate-sata-wal-from-pcap ./
 cp ../../../pkg/cat-dev/licenses/serial2-tokio-rs-apache.md ./
 cp ../../../pkg/cat-dev/licenses/serial2-tokio-rs-bsd.md ./
 cp ../../../LICENSE ./
 cd ../
 echo "Done! Building...."
 
-pkgbuild --root ./working-dir/ --identifier "dev.rem-verse.sprig" --version "0.0.10" --install-location "/usr/local/bin" sprig.pkg
+pkgbuild --root ./working-dir/ --identifier "dev.rem-verse.sprig" --version "0.0.11" --install-location "/usr/local/bin" sprig.pkg
 
 echo "Done! Preparing Distribution Directory..."
 mkdir working-dir-pkg

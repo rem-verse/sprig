@@ -75,10 +75,12 @@ Official Tool Replacements:
                             installation version, and the firmware installed
                             on your actual CAT-DEV. It is typically only used
                             for diagnostics.
-  - [ ] `FSEmul`: FSEmul is the 'core' proccess for handling emulation of
-                  various filesystem components for the CAT-DEV. Specifically
-                  FSEmul handles various block level protocols (SDIO/ATAPI),
-                  and provides information to `PCFSServer`
+- [ ] `FSEmul`: FSEmul is the 'core' proccess for handling emulation of
+                various filesystem components for the CAT-DEV. Specifically
+                FSEmul handles various block level protocols (SDIO/ATAPI),
+                and provides information to `PCFSServer`
+  - [ ] `PCFSServer`: handles interacting with an actual filesystem with SATA
+                      style apis like "create a folder", "create a file", etc.
 - [ ] `updatebridges`: a command used to update the firmware on a particular
                        Host Bridge.
 - [ ] `imageuploader`: allow uploading mastered `WUMAD`/`WUM`'s to the internal

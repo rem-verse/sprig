@@ -58,6 +58,7 @@ pub async fn get_versions_with_raw_client(
 		Method::GET,
 		format!("http://{mion_ip}/update.cgi"),
 		None,
+		None,
 	)
 	.await?;
 

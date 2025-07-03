@@ -20,7 +20,13 @@ use crate::{
 };
 use cat_dev::fsemul::{FSEmulConfig, HostFilesystem};
 use miette::miette;
-use std::{path::PathBuf, sync::OnceLock};
+use std::{
+	path::PathBuf,
+	sync::{
+		OnceLock,
+		atomic::{AtomicBool, Ordering},
+	},
+};
 use tokio::sync::{RwLock, RwLockMappedWriteGuard, RwLockReadGuard, RwLockWriteGuard};
 use tracing::{error, field::valuable, info};
 
@@ -29,6 +35,7 @@ static HOST_FILE_SYSTEM: OnceLock<HostFilesystem> = OnceLock::new();
 
 static FSEMUL_CONFIG_PATH: RwLock<Option<PathBuf>> = RwLock::const_new(None);
 static CAFE_DATA_PATH: RwLock<Option<PathBuf>> = RwLock::const_new(None);
+static FORCE_UNIQUE_FDS: AtomicBool = AtomicBool::new(false);
 
 /// Initialize all of the stuff necessary for fetching from the bridge
 /// configuration file.
@@ -61,6 +68,9 @@ pub async fn initialize_fsemul_config(fsemul_config_flags: &FSEmulConfigurationF
 				"Hey! It looks like we don't have a default path configured for the cafe sdk data directory. This may mean certain configuration options for fsemul may not work! You can always manually specify a manual place to store the file with `--fsemul-config-path`, but we'd really appreciate if you filed an issue to support your OS better!"
 			);
 		}
+	}
+	if fsemul_config_flags.force_unique_fds() {
+		FORCE_UNIQUE_FDS.store(true, Ordering::SeqCst);
 	}
 
 	if let Some(cli_arg) = fsemul_config_flags.fsemul_config_path() {
@@ -250,7 +260,13 @@ async fn try_to_load_host_file_system() {
 		let host_fs_path = read_env_path.as_ref().expect("impossible");
 
 		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(host_fs_path.clone()))) {
-			Ok(state) => state,
+			Ok(mut state) => {
+				if FORCE_UNIQUE_FDS.load(Ordering::SeqCst) {
+					// This is guaranteed to work, the host filesystem _just_ created.
+					std::mem::drop(state.force_unique_fds());
+				}
+				state
+			},
 			Err(cause) => {
 				if SHOULD_LOG_JSON() {
 					error!(
@@ -404,7 +420,13 @@ async fn validate_host_file_system_is_populated() {
 		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(
 			cafe_root_path.clone(),
 		))) {
-			Ok(state) => state,
+			Ok(mut state) => {
+				if FORCE_UNIQUE_FDS.load(Ordering::SeqCst) {
+					// This is guaranteed to work, the host filesystem _just_ created.
+					std::mem::drop(state.force_unique_fds());
+				}
+				state
+			}
 			Err(cause) => {
 				if SHOULD_LOG_JSON() {
 					error!(

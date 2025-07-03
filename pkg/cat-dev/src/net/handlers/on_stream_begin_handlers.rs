@@ -23,6 +23,7 @@ use crate::net::server::models::{FromResponseStreamEvent, ResponseStreamEvent};
 ///
 /// `ParamTy` is kept to prevent generation of conflicting type implementations
 /// of this trait. It however is not actually needed by any of our code.
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 pub trait OnRequestStreamBeginHandler<ParamTy, State: Clone + Send + Sync + 'static> {
 	type Future: Future<Output = Result<bool, CatBridgeError>> + Send + 'static;
@@ -31,6 +32,7 @@ pub trait OnRequestStreamBeginHandler<ParamTy, State: Clone + Send + Sync + 'sta
 }
 
 /// Allow any async function without arguments to be a handler.
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State> OnRequestStreamBeginHandler<(), State>
 	for UnderlyingFnType
@@ -48,6 +50,7 @@ where
 }
 
 /// Allow any async function with a single consuming argument.
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State, ArgTy>
 	OnRequestStreamBeginHandler<ArgTy, State> for UnderlyingFnType
@@ -74,6 +77,7 @@ where
 ///
 /// `ParamTy` is kept to prevent generation of conflicting type implementations
 /// of this trait. It however is not actually needed by any of our code.
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 pub trait OnResponseStreamBeginHandler<ParamTy, State: Clone + Send + Sync + 'static> {
 	type Future: Future<Output = Result<bool, CatBridgeError>> + Send + 'static;
@@ -81,7 +85,8 @@ pub trait OnResponseStreamBeginHandler<ParamTy, State: Clone + Send + Sync + 'st
 	fn call(self, event: ResponseStreamEvent<State>) -> Self::Future;
 }
 
-/// Allow any async function without arguments to be a handler
+/// Allow any async function without arguments to be a handler.
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State> OnResponseStreamBeginHandler<(), State>
 	for UnderlyingFnType
@@ -99,6 +104,7 @@ where
 }
 
 /// Allow any async function with a single consuming argument.
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 impl<UnderlyingFnType, FnFutureTy, ResponseTy, State, ArgTy>
 	OnResponseStreamBeginHandler<ArgTy, State> for UnderlyingFnType
@@ -121,6 +127,7 @@ macro_rules! fn_to_on_connection_handler {
 		[$($ty:ident),*], $last:ident
 	) => {
 		#[allow(non_snake_case, unused_mut)]
+		#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 		#[cfg(feature = "clients")]
 		impl<UnderlyingFnType, FnFutureTy, OutputTy, State, $($ty,)* $last> OnRequestStreamBeginHandler<($($ty,)* $last,), State> for UnderlyingFnType
 		where
@@ -146,6 +153,7 @@ macro_rules! fn_to_on_connection_handler {
 		}
 
 		#[allow(non_snake_case, unused_mut)]
+		#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 		#[cfg(feature = "servers")]
 		impl<UnderlyingFnType, FnFutureTy, OutputTy, State, $($ty,)* $last> OnResponseStreamBeginHandler<($($ty,)* $last,), State> for UnderlyingFnType
 		where
@@ -228,6 +236,7 @@ where
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 impl<HandlerTy, HandlerParamsTy, State> Service<RequestStreamEvent<State>>
 	for OnStreamBeginHandlerAsService<HandlerTy, HandlerParamsTy>
@@ -250,6 +259,7 @@ where
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 impl<HandlerTy, HandlerParamsTy, State> Service<ResponseStreamEvent<State>>
 	for OnStreamBeginHandlerAsService<HandlerTy, HandlerParamsTy>

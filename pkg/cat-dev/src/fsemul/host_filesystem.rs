@@ -5,7 +5,10 @@ use crate::{
 	TitleID,
 	errors::{CatBridgeError, FSError},
 	fsemul::{
-		bsf::BootSystemFile, dlf::DiskLayoutFile, errors::FSEmulFSError, pcfs::errors::PCFSApiError,
+		bsf::BootSystemFile,
+		dlf::DiskLayoutFile,
+		errors::{FSEmulAPIError, FSEmulFSError},
+		pcfs::errors::PCFSApiError,
 	},
 };
 use bytes::{Bytes, BytesMut};
@@ -14,24 +17,33 @@ use scc::{
 };
 use std::{
 	collections::HashMap,
+	ffi::OsString,
+	fs::{
+		DirEntry, copy as copy_file_sync, create_dir_all as create_dir_all_sync,
+		read_dir as read_dir_sync, read_link as read_link_sync,
+		remove_dir_all as remove_dir_all_sync, remove_file as remove_file_sync,
+		rename as rename_sync,
+	},
 	hash::RandomState,
 	io::{Error as IOError, SeekFrom},
 	path::{Path, PathBuf},
 	sync::{
 		Arc,
-		atomic::{AtomicI32, Ordering as AtomicOrdering},
+		atomic::{AtomicBool, AtomicI32, Ordering as AtomicOrdering},
 	},
 };
 use tokio::{
-	fs::{
-		File, OpenOptions, ReadDir, create_dir_all, read_dir, remove_file, rename,
-		write as fs_write,
-	},
+	fs::{File, OpenOptions, read as fs_read, write as fs_write},
 	io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+	sync::Mutex,
 };
+use tracing::{info, warn};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+use walkdir::WalkDir;
 use whoami::username;
 
+/// A way to create truly unique file fd's. Just a counter going up.
+static UNIQUE_FILE_FD: AtomicI32 = AtomicI32::new(1);
 /// Current "FD" for directories. Just a counter going up.
 static FOLDER_FD: AtomicI32 = AtomicI32::new(1);
 
@@ -50,14 +62,22 @@ static FOLDER_FD: AtomicI32 = AtomicI32::new(1);
 pub struct HostFilesystem {
 	/// The path to the base data directory to serve a filesystem out of.
 	cafe_sdk_path: PathBuf,
+	/// The actively mounted "disc".
+	///
+	/// This is a tuple of (isSLC, isSystem, [`TitleID`]).
+	///
+	/// When a disc is mounted we will copy the title from SLC/MLC
+	/// directory, into `disc/` recursively.
+	disc_mounted: Arc<Mutex<Option<(bool, bool, TitleID)>>>,
 	/// List of open file handles.
 	///
 	/// This contains a value of (file, file size, path, stream owner).
 	open_file_handles: Arc<ConcurrentMap<i32, (File, u64, PathBuf, Option<u64>)>>,
 	/// List of open folder "handles".
 	///
-	/// This contains a value of (read directory, is end, path, stream owner)
-	open_folder_handles: Arc<ConcurrentMap<i32, (ReadDir, bool, PathBuf, Option<u64>)>>,
+	/// This contains a value of (directory items, index, is end, path, stream owner)
+	open_folder_handles:
+		Arc<ConcurrentMap<i32, (Vec<DirEntry>, usize, bool, PathBuf, Option<u64>)>>,
 	/// A set of folders that we've "marked" as read-only.
 	///
 	/// We don't actually synchronize this to the filesystem because the original
@@ -68,6 +88,12 @@ pub struct HostFilesystem {
 	/// This is not the case on older windows distributions, unix based distros,
 	/// or similar.
 	folders_marked_read_only: Arc<ConcurrentSet<PathBuf>>,
+	/// If we are forcing unique file fd's. This should only be changed
+	/// if we have not opened a file yet.
+	is_using_unique_fds: bool,
+	/// If we've opened a file, used to safely ensure we don't switch from
+	/// unique fdf's to not.
+	has_opened_file: Arc<AtomicBool>,
 }
 
 impl HostFilesystem {
@@ -100,48 +126,48 @@ impl HostFilesystem {
 			return Err(FSEmulFSError::CantFindCafeSdkPath.into());
 		};
 
-		Self::patch_case_sensitive_title_ids(&cafe_sdk_path).await?;
+		Self::patch_case_sensitivity(&cafe_sdk_path).await?;
 
-		if !Self::join_many(
-			&cafe_sdk_path,
-			[
+		for path in [
+			&[
 				"data", "mlc", "sys", "title", "00050030", "1001000a", "code", "app.xml",
-			],
-		)
-		.exists() || !Self::join_many(
-			&cafe_sdk_path,
-			[
+			] as &[&str],
+			&[
 				"data", "mlc", "sys", "title", "00050030", "1001010a", "code", "app.xml",
 			],
-		)
-		.exists() || !Self::join_many(
-			&cafe_sdk_path,
-			[
+			&[
 				"data", "mlc", "sys", "title", "00050030", "1001020a", "code", "app.xml",
 			],
-		)
-		.exists()
-		{
-			return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
-		}
-
-		// Can't generate a `fw.img` file for now :(
-		if !Self::join_many(
-			&cafe_sdk_path,
-			[
+			&[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "code",
+			],
+			&[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "content",
+			],
+			&[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "meta",
+			],
+			// Can't generate a `fw.img` for now.... :(
+			&[
 				"data", "slc", "sys", "title", "00050010", "1000400a", "code", "fw.img",
 			],
-		)
-		.exists()
-		{
-			return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
+		] {
+			if !Self::join_many(&cafe_sdk_path, path).exists() {
+				return Err(FSEmulFSError::CafeSdkPathCorrupt.into());
+			}
 		}
+
+		Self::prepare_for_serving(&cafe_sdk_path).await?;
+		let ro_folders = Self::get_default_read_only_folders(&cafe_sdk_path);
 
 		Ok(Self {
 			cafe_sdk_path,
-			folders_marked_read_only: Arc::new(ConcurrentSet::new()),
+			disc_mounted: Arc::new(Mutex::new(None)),
+			folders_marked_read_only: Arc::new(ro_folders),
 			open_file_handles: Arc::new(ConcurrentMap::new()),
 			open_folder_handles: Arc::new(ConcurrentMap::new()),
+			is_using_unique_fds: false,
+			has_opened_file: Arc::new(AtomicBool::new(false)),
 		})
 	}
 
@@ -155,6 +181,41 @@ impl HostFilesystem {
 		&self.cafe_sdk_path
 	}
 
+	/// The root path to the Cafe SDK.
+	///
+	/// *note: although we do expose this for logging, and other info... we do
+	/// not recommend manually interacting with the SDK path. There are much
+	/// better alternatives.*
+	#[must_use]
+	pub fn disc_emu_path(&self) -> PathBuf {
+		Self::join_many(&self.cafe_sdk_path, ["data", "disc"])
+	}
+
+	/// Force unique file descriptors for open files.
+	///
+	/// Certain OS's _can_ return duplicate fd's especially when opening,
+	/// and closing files. This can make deciphering logs harder because the
+	/// same FD may appear multiple times, when you're trying to just find
+	/// the logs related to one file descriptor.
+	///
+	/// When unique fd's is turned on, similar to folders we just use a global
+	/// wrapping counter so that way every file descriptor is guaranteed to be
+	/// unique.
+	///
+	/// ## Errors
+	///
+	/// This will error if any file has ever been opened. This is because once
+	/// a client has already connected, and done some stuff with file stuff it
+	/// expects one set of behaviors, we cannot change another one.
+	pub fn force_unique_fds(&mut self) -> Result<(), FSEmulAPIError> {
+		if self.has_opened_file.load(AtomicOrdering::Relaxed) {
+			Err(FSEmulAPIError::CannotSwapFdStrategy)
+		} else {
+			self.is_using_unique_fds = true;
+			Ok(())
+		}
+	}
+
 	/// Open a file, and return it's file descriptor number.
 	///
 	/// ## Errors
@@ -166,6 +227,7 @@ impl HostFilesystem {
 		path: &PathBuf,
 		stream_owner: Option<u64>,
 	) -> Result<i32, FSError> {
+		self.has_opened_file.store(true, AtomicOrdering::Relaxed);
 		let fd = open_options.open(path).await?;
 		let raw_fd;
 		#[cfg(unix)]
@@ -180,11 +242,16 @@ impl HostFilesystem {
 		}
 
 		let md = fd.metadata().await?;
+		let final_fd = if self.is_using_unique_fds {
+			UNIQUE_FILE_FD.fetch_add(1, AtomicOrdering::SeqCst)
+		} else {
+			raw_fd
+		};
 
 		self.open_file_handles
-			.insert(raw_fd, (fd, md.len(), path.clone(), stream_owner))
-			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
-		Ok(raw_fd)
+			.insert(final_fd, (fd, md.len(), path.clone(), stream_owner))
+			.map_err(|_| IOError::other("somehow got duplicate fd?"))?;
+		Ok(final_fd)
 	}
 
 	/// Get a file from a file descriptor number.
@@ -236,7 +303,7 @@ impl HostFilesystem {
 	pub async fn read_file(
 		&self,
 		fd: i32,
-		total_data_to_read: usize,
+		mut total_data_to_read: usize,
 		for_stream: Option<u64>,
 	) -> Result<Option<Bytes>, FSError> {
 		let Some(mut real_entry) = self.open_file_handles.get_async(&fd).await else {
@@ -246,10 +313,19 @@ impl HostFilesystem {
 			return Ok(None);
 		}
 		let file_reader = &mut real_entry.0;
+
 		let mut file_buff = BytesMut::zeroed(total_data_to_read);
-		let bytes_read = file_reader.read(&mut file_buff).await?;
-		if bytes_read < total_data_to_read {
-			file_buff[bytes_read..].fill(0xCD);
+		let mut total_bytes_read = 0_usize;
+		while total_data_to_read > 0 {
+			let bytes_read = file_reader.read(&mut file_buff[total_bytes_read..]).await?;
+			if bytes_read == 0 {
+				break;
+			}
+			total_data_to_read -= bytes_read;
+			total_bytes_read += bytes_read;
+		}
+		if file_buff.len() > total_bytes_read {
+			file_buff.truncate(total_bytes_read);
 		}
 
 		Ok(Some(file_buff.freeze()))
@@ -342,16 +418,16 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If the path doesn't exist, then we can't open the folder.
-	pub async fn open_folder(
-		&self,
-		path: &PathBuf,
-		for_stream: Option<u64>,
-	) -> Result<i32, FSError> {
-		let dhandle = read_dir(path).await?;
+	pub fn open_folder(&self, path: &PathBuf, for_stream: Option<u64>) -> Result<i32, FSError> {
+		let mut dhandle = read_dir_sync(path)?
+			.filter_map(Result::ok)
+			.collect::<Vec<_>>();
+		dhandle.sort_by_key(DirEntry::path);
+
 		let fake_fd = FOLDER_FD.fetch_add(1, AtomicOrdering::SeqCst);
 
 		self.open_folder_handles
-			.insert(fake_fd, (dhandle, false, path.clone(), for_stream))
+			.insert(fake_fd, (dhandle, 0, false, path.clone(), for_stream))
 			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
 		Ok(fake_fd)
 	}
@@ -361,12 +437,8 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If we could not actually insert the folder into the read only map.
-	pub async fn mark_folder_read_only(&self, path: PathBuf) -> Result<(), FSError> {
-		self.folders_marked_read_only
-			.insert_async(path)
-			.await
-			.map_err(|_| IOError::other("Folder could not be marked read-only?"))
-			.map_err(FSError::IO)
+	pub async fn mark_folder_read_only(&self, path: PathBuf) {
+		_ = self.folders_marked_read_only.insert_async(path).await;
 	}
 
 	/// Mark a folder as being 'read-write' for this session.
@@ -400,21 +472,25 @@ impl HostFilesystem {
 			return Ok(None);
 		}
 
-		let component_count = entry.2.components().count();
+		let component_count = entry.3.components().count();
 		let mut value: Option<PathBuf> = None;
-		if !entry.1 {
-			let iter = &mut entry.0;
+		if !entry.2 {
 			loop {
-				value = iter.next_entry().await?.map(|de| de.path());
-				if let Some(ref_value) = value.as_ref() {
+				if entry.1 < entry.0.len() {
+					let ref_value = entry.0[entry.1].path();
+					entry.1 += 1;
+
 					if (!ref_value.is_file() && !ref_value.is_dir()) || ref_value.is_symlink() {
 						continue;
 					}
+
+					value = Some(ref_value);
 				}
+
 				break;
 			}
 			if value.is_none() {
-				entry.1 = true;
+				entry.2 = true;
 			}
 		}
 
@@ -437,9 +513,12 @@ impl HostFilesystem {
 		if !Self::allow_folder_access(&real_entry, for_stream) {
 			return Ok(());
 		}
+		if real_entry.1 == 0 {
+			return Ok(());
+		}
 
-		real_entry.0 = read_dir(&real_entry.2).await?;
-		real_entry.1 = false;
+		real_entry.1 -= 1;
+		real_entry.2 = false;
 		Ok(())
 	}
 
@@ -472,10 +551,10 @@ impl HostFilesystem {
 	/// - If the temp directory does not exist, and we can't create it.
 	/// - If the boot system file does not exist, and we can't write it to disk.
 	pub async fn boot1_sytstem_path(&self) -> Result<PathBuf, FSError> {
-		let mut path = self.temp_path().await?;
+		let mut path = self.temp_path()?;
 		path.push("caferun");
 		if !path.exists() {
-			create_dir_all(&path).await?;
+			create_dir_all_sync(&path)?;
 		}
 		path.push("ppc.bsf");
 
@@ -496,10 +575,10 @@ impl HostFilesystem {
 	/// - If the temporary directory does not exist, and we can't create it.
 	/// - If the disk ID path does not exist, and we can't write it to disk.
 	pub async fn disk_id_path(&self) -> Result<PathBuf, FSError> {
-		let mut path = self.temp_path().await?;
+		let mut path = self.temp_path()?;
 		path.push("caferun");
 		if !path.exists() {
-			create_dir_all(&path).await?;
+			create_dir_all_sync(&path)?;
 		}
 		path.push("diskid.bin");
 
@@ -508,6 +587,47 @@ impl HostFilesystem {
 		}
 
 		Ok(path)
+	}
+
+	#[doc(
+		// This is not yet finished and the signature may change....
+		hidden,
+	)]
+	/// Mount a particular title as if it were a disc.
+	///
+	/// ## Errors
+	///
+	/// - If we cannot remove any existing disc that may be present.
+	/// - If we cannot copy the title to the disc id path.
+	pub async fn mount_disk_title(
+		&mut self,
+		is_slc: bool,
+		is_sys: bool,
+		title_id: TitleID,
+	) -> Result<(), FSError> {
+		let source_path = Self::join_many(
+			&self.cafe_sdk_path,
+			[
+				"data".to_owned(),
+				if is_slc { "slc" } else { "mlc" }.to_owned(),
+				if is_sys { "sys" } else { "usr" }.to_owned(),
+				"title".to_owned(),
+				format!("{:08x}", title_id.0),
+				format!("{:08x}", title_id.1),
+			],
+		);
+		let dest_path = Self::join_many(&self.cafe_sdk_path, ["data", "disc"]);
+		if dest_path.exists() {
+			remove_dir_all_sync(&dest_path).map_err(FSError::IO)?;
+		}
+
+		Self::copy_dir(&source_path, &dest_path)?;
+		// Mount was successful!
+		{
+			let mut guard = self.disc_mounted.lock().await;
+			guard.replace((is_slc, is_sys, title_id));
+		}
+		todo!("figure out how to mount diskid.bin")
 	}
 
 	/// Get the path to the current firmware file to boot on the MION.
@@ -535,10 +655,10 @@ impl HostFilesystem {
 	/// - If the firmware image file does not exist.
 	/// - If the dlf file does not exist, and we can't create it.
 	pub async fn ppc_boot_dlf_path(&self) -> Result<PathBuf, CatBridgeError> {
-		let mut path = self.temp_path().await?;
+		let mut path = self.temp_path()?;
 		path.push("caferun");
 		if !path.exists() {
-			create_dir_all(&path).await.map_err(FSError::from)?;
+			create_dir_all_sync(&path).map_err(FSError::from)?;
 		}
 		path.push("ppc_boot.dlf");
 
@@ -561,8 +681,21 @@ impl HostFilesystem {
 	#[must_use]
 	pub fn path_allows_writes(&self, path: &Path) -> bool {
 		// TODO(mythra): check FSEmulAttributeRules
-		!path.to_string_lossy().contains("%DISC_EMU_DIR")
-			&& !path.starts_with(Self::join_many(&self.cafe_sdk_path, ["data", "disc"]))
+		let lossy_path = path.to_string_lossy();
+		let trimmed_lossy_path = lossy_path
+			.trim_start_matches("/vol/pc")
+			.trim_start_matches('/');
+		if trimmed_lossy_path.starts_with("%DISC_EMU_DIR") {
+			return trimmed_lossy_path.starts_with("%DISC_EMU_DIR/save");
+		}
+		if path.starts_with(Self::join_many(&self.cafe_sdk_path, ["data", "disc"])) {
+			return path.starts_with(Self::join_many(
+				&self.cafe_sdk_path,
+				["data", "disc", "save"],
+			));
+		}
+
+		true
 	}
 
 	/// Given a UTF-8 string path, get a pathbuf reference.
@@ -646,6 +779,45 @@ impl HostFilesystem {
 		)))
 	}
 
+	/// Create a directory within a particular path.
+	///
+	/// ## Errors
+	///
+	/// If we cannot end up creating this directory due to a filesystem error.
+	pub fn create_directory(&self, at: &Path) -> Result<(), FSError> {
+		create_dir_all_sync(at).map_err(FSError::IO)
+	}
+
+	/// Copy a file, symlink, or directory.
+	///
+	/// ## Errors
+	///
+	/// If we run into any filesystem error renaming a source, or directory.
+	pub fn copy(&self, from: &Path, to: &Path) -> Result<(), FSError> {
+		if from.is_dir() {
+			Self::copy_dir(from, to)
+		} else {
+			copy_file_sync(from, to).map_err(FSError::IO).map(|_| ())
+		}
+	}
+
+	/// Rename a file, symlink, or directory.
+	///
+	/// This is implemented so we can rename directories, and files without
+	/// having to worry about the logic. Especially given the fact the built in
+	/// rename doesn't support directories.
+	///
+	/// ## Errors
+	///
+	/// - If we run into any filesystem error renaming a source, or directory.
+	pub fn rename(&self, from: &Path, to: &Path) -> Result<(), FSError> {
+		if from.is_dir() {
+			Self::rename_dir(from, to)
+		} else {
+			rename_sync(from, to).map_err(FSError::IO)
+		}
+	}
+
 	/// Get a file from the SLC.
 	///
 	/// The SLC always serves "sys" files, and are relative to a title id, almost
@@ -664,51 +836,6 @@ impl HostFilesystem {
 				format!("{:08x}", title_id.0),
 				format!("{:08x}", title_id.1),
 			],
-		)
-	}
-
-	/// Get the current path to the temporary directory for this Cafe SDK
-	/// install.
-	///
-	/// ## Errors
-	///
-	/// - If the temporary path does not exist and could not be created.
-	async fn temp_path(&self) -> Result<PathBuf, FSError> {
-		let temp_path = Self::join_many(
-			&self.cafe_sdk_path,
-			["temp".to_owned(), username().to_lowercase()],
-		);
-		if !temp_path.exists() {
-			create_dir_all(&temp_path).await?;
-		}
-		Ok(temp_path)
-	}
-
-	/// A small utility function to join many paths into a single path effeciently.
-	#[must_use]
-	fn join_many<PathTy, IterTy>(base: &Path, parts: IterTy) -> PathBuf
-	where
-		PathTy: AsRef<Path>,
-		IterTy: IntoIterator<Item = PathTy>,
-	{
-		let mut as_owned = PathBuf::from(base);
-		for part in parts {
-			as_owned = as_owned.join(part.as_ref());
-		}
-		as_owned
-	}
-
-	/// Replace a particular emu directory string in a path.
-	fn replace_emu_dir(&self, path: &str, dir: &str) -> PathBuf {
-		let path_minus = path
-			.trim_start_matches(&format!("/%{}_EMU_DIR", dir.to_ascii_uppercase()))
-			.trim_start_matches('/')
-			.trim_start_matches('\\')
-			.replace('\\', "/");
-
-		Self::join_many(
-			&Self::join_many(self.cafe_sdk_path(), ["data", dir]),
-			path_minus.split('/'),
 		)
 	}
 
@@ -741,7 +868,52 @@ impl HostFilesystem {
 		None
 	}
 
-	async fn patch_case_sensitive_title_ids(cafe_sdk_path: &Path) -> Result<(), FSError> {
+	/// Get the current path to the temporary directory for this Cafe SDK
+	/// install.
+	///
+	/// ## Errors
+	///
+	/// - If the temporary path does not exist and could not be created.
+	fn temp_path(&self) -> Result<PathBuf, FSError> {
+		let temp_path = Self::join_many(
+			&self.cafe_sdk_path,
+			["temp".to_owned(), username().to_lowercase()],
+		);
+		if !temp_path.exists() {
+			create_dir_all_sync(&temp_path)?;
+		}
+		Ok(temp_path)
+	}
+
+	/// A small utility function to join many paths into a single path effeciently.
+	#[must_use]
+	fn join_many<PathTy, IterTy>(base: &Path, parts: IterTy) -> PathBuf
+	where
+		PathTy: AsRef<Path>,
+		IterTy: IntoIterator<Item = PathTy>,
+	{
+		let mut as_owned = PathBuf::from(base);
+		for part in parts {
+			as_owned = as_owned.join(part.as_ref());
+		}
+		as_owned
+	}
+
+	/// Replace a particular emu directory string in a path.
+	fn replace_emu_dir(&self, path: &str, dir: &str) -> PathBuf {
+		let path_minus = path
+			.trim_start_matches(&format!("/%{}_EMU_DIR", dir.to_ascii_uppercase()))
+			.trim_start_matches('/')
+			.trim_start_matches('\\')
+			.replace('\\', "/");
+
+		Self::join_many(
+			&Self::join_many(self.cafe_sdk_path(), ["data", dir]),
+			path_minus.split('/'),
+		)
+	}
+
+	async fn patch_case_sensitivity(cafe_sdk_path: &Path) -> Result<(), FSError> {
 		// First we need to check if we're even on a temporary filesystem/path.
 		if !cafe_sdk_path.exists() {
 			return Ok(());
@@ -751,74 +923,67 @@ impl HostFilesystem {
 		let is_insensitive = File::open(Self::join_many(cafe_sdk_path, ["insensitivecheck.txt"]))
 			.await
 			.is_ok();
-		remove_file(capital_path).await?;
+		remove_file_sync(capital_path)?;
 		if is_insensitive {
 			return Ok(());
 		}
 
-		for directory in [
-			Self::join_many(cafe_sdk_path, ["data", "slc", "sys", "title"]),
-			Self::join_many(cafe_sdk_path, ["data", "slc", "usr", "title"]),
-			Self::join_many(cafe_sdk_path, ["data", "mlc", "sys", "title"]),
-			Self::join_many(cafe_sdk_path, ["data", "mlc", "usr", "title"]),
-		] {
-			if !directory.exists() {
-				// Don't need to patch directories that don't exist.
-				continue;
-			}
-
-			// Now we need to scan, and lowercase all title ids. So those are the
-			// next two sub dirs as they're split into `title/{upper}/{lower}`.
-			let mut iter = read_dir(&directory).await?;
-			let lossy_cafe_dir = cafe_sdk_path.as_os_str().to_string_lossy().to_string();
-			while let Ok(Some(entry)) = iter.next_entry().await {
-				let p = entry.path();
-				if !p.is_dir() || !p.exists() {
+		info!(
+			"Your Host OS is not case-insensitive for file-paths... ensuring CafeSDK is all lowercase, this may take awhile..."
+		);
+		let cafe_sdk_components = cafe_sdk_path.components().count();
+		let mut had_rename = true;
+		while had_rename {
+			had_rename = false;
+			for directory in [
+				Self::join_many(cafe_sdk_path, ["data", "slc", "sys", "title"]),
+				Self::join_many(cafe_sdk_path, ["data", "slc", "usr", "title"]),
+				Self::join_many(cafe_sdk_path, ["data", "mlc", "sys", "title"]),
+				Self::join_many(cafe_sdk_path, ["data", "mlc", "usr", "title"]),
+			] {
+				if !directory.exists() {
+					// Don't need to patch directories that don't exist.
 					continue;
 				}
 
-				let mut inner_iter = read_dir(&p).await?;
-				while let Ok(Some(inner_entry)) = inner_iter.next_entry().await {
-					let ip = inner_entry.path();
-					if !ip.is_dir() || !ip.exists() {
+				let mut iter = WalkDir::new(&directory)
+					.contents_first(false)
+					.follow_links(false)
+					.follow_root_links(false)
+					.into_iter();
+				while let Some(Ok(entry)) = iter.next() {
+					let p = entry.path();
+					if !p.exists() {
 						continue;
 					}
 
-					// Doing a lossy conversion is safe here cause we know all title ids are valid ascii + utf-8.
-					let new_path = ip
-						.as_os_str()
-						.to_string_lossy()
-						.trim_start_matches(&lossy_cafe_dir)
-						.to_ascii_lowercase();
-					if ip
-						.as_os_str()
-						.to_string_lossy()
-						.trim_start_matches(&lossy_cafe_dir)
-						!= new_path
-					{
+					let path_minus_cafe = p
+						.components()
+						.skip(cafe_sdk_components)
+						.collect::<PathBuf>();
+					let Some(path_as_utf8) = path_minus_cafe.as_os_str().to_str() else {
+						warn!(problematic_path = %p.display(), "Path in Cafe SDK directory is not UTF-8! This may cause errors fetching!");
+						continue;
+					};
+					let new_path = path_as_utf8.to_ascii_lowercase();
+					if path_as_utf8 != new_path {
 						let mut final_new_path = cafe_sdk_path.as_os_str().to_owned();
+						final_new_path.push("/");
 						final_new_path.push(&new_path);
 						let new = PathBuf::from(final_new_path);
-						rename(ip, new).await?;
-					}
-				}
 
-				let new_path = p
-					.as_os_str()
-					.to_string_lossy()
-					.trim_start_matches(&lossy_cafe_dir)
-					.to_ascii_lowercase();
-				if p.as_os_str()
-					.to_string_lossy()
-					.trim_start_matches(&lossy_cafe_dir)
-					!= new_path
-				{
-					let mut final_new_path = cafe_sdk_path.as_os_str().to_owned();
-					final_new_path.push(&new_path);
-					rename(p, final_new_path).await?;
+						if p.is_dir() {
+							Self::rename_dir(p, &new)?;
+							had_rename = true;
+						} else {
+							rename_sync(p, new)?;
+							had_rename = true;
+						}
+					}
 				}
 			}
 		}
+		info!("ensure CafeSDK path is now case-insensitive by renaming to all lowercase...");
 
 		Ok(())
 	}
@@ -837,18 +1002,358 @@ impl HostFilesystem {
 		requesting_stream_id == owned_stream_id
 	}
 
+	#[allow(
+		// TODO(mythra): fix
+		clippy::type_complexity
+	)]
 	fn allow_folder_access(
-		entry: &CMOccupiedEntry<i32, (ReadDir, bool, PathBuf, Option<u64>), RandomState>,
+		entry: &CMOccupiedEntry<
+			i32,
+			(Vec<DirEntry>, usize, bool, PathBuf, Option<u64>),
+			RandomState,
+		>,
 		requester: Option<u64>,
 	) -> bool {
 		let Some(requesting_stream_id) = requester else {
 			return true;
 		};
-		let Some(owned_stream_id) = entry.3 else {
+		let Some(owned_stream_id) = entry.4 else {
 			return true;
 		};
 
 		requesting_stream_id == owned_stream_id
+	}
+
+	/// Enusre an SDK path is ready for serving this means:
+	///
+	/// - Create some configuration files that SDKs don't come with, but will
+	///   help the OS boot up.
+	/// - Mount the `DISC` directory if one is not present.
+	async fn prepare_for_serving(cafe_sdk_path: &Path) -> Result<(), FSError> {
+		if !Self::join_many(cafe_sdk_path, ["data", "slc", "sys", "config", "eco.xml"]).exists() {
+			Self::generate_eco_xml(cafe_sdk_path).await?;
+		}
+		if !Self::join_many(
+			cafe_sdk_path,
+			["data", "slc", "sys", "proc", "prefs", "wii_acct.xml"],
+		)
+		.exists()
+		{
+			Self::generate_wii_acct_xml(cafe_sdk_path).await?;
+		}
+
+		// Unmount any leftover discs....
+		if Self::join_many(cafe_sdk_path, ["data", "disc"]).exists() {
+			remove_dir_all_sync(Self::join_many(cafe_sdk_path, ["data", "disc"]))
+				.map_err(FSError::IO)?;
+		}
+		// Manually mount in SysConfigTool.....
+		//
+		// This doesn't actually create a discid.bin, but the files do exist.
+		let disc_dir = Self::join_many(cafe_sdk_path, ["data", "disc"]);
+		let sctt_dir = Self::join_many(
+			cafe_sdk_path,
+			["data", "mlc", "sys", "title", "00050010", "1f700500"],
+		);
+		for subpath in ["code", "content", "meta"] {
+			Self::copy_dir(
+				&Self::join_many(&sctt_dir, [subpath]),
+				&Self::join_many(&disc_dir, [subpath]),
+			)?;
+		}
+		// Manually capitilize the title id in app.xml, the normal PCFS
+		// tooling does this, even though it is case-insensitive, but for matching.
+		let app_xml_path = Self::join_many(cafe_sdk_path, ["data", "disc", "code", "app.xml"]);
+		// app.xml must be utf-8 to be read by the OS completely, so if we end up
+		// writing a corrupt app.xml, would be the exact same as the OS
+		// interpreting that.
+		let base_app_xml = String::from_utf8_lossy(&fs_read(&app_xml_path).await?).to_string();
+		fs_write(&app_xml_path, Self::capitilize_title_id(base_app_xml)).await?;
+
+		Ok(())
+	}
+
+	fn copy_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
+		if !dest_path.exists() {
+			create_dir_all_sync(dest_path)?;
+		}
+		let new_path_as_str_bytes = dest_path.as_os_str().as_encoded_bytes();
+		let old_path_bytes = source_path.as_os_str().as_encoded_bytes();
+
+		for result in WalkDir::new(source_path)
+			.follow_links(false)
+			.follow_root_links(false)
+		{
+			let rpb = result?.into_path();
+			let os_str_for_entry = rpb.as_os_str().as_encoded_bytes();
+			let mut new_bytes = Vec::with_capacity(os_str_for_entry.len() + 3);
+			new_bytes.extend_from_slice(new_path_as_str_bytes);
+			new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+			let as_new_path =
+				PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
+
+			if rpb.is_symlink() {
+				let mut resolved_path = read_link_sync(&rpb)?;
+				{
+					// If this symlink is a symlink to another path within the same
+					// directory, then rewrite it as well to start under our new directory.
+					let os_str_for_resolved = resolved_path.as_os_str().as_encoded_bytes();
+					if os_str_for_resolved.starts_with(old_path_bytes) {
+						let mut new_bytes = Vec::with_capacity(os_str_for_resolved.len() + 3);
+						new_bytes.extend_from_slice(new_path_as_str_bytes);
+						new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+						resolved_path = PathBuf::from(unsafe {
+							OsString::from_encoded_bytes_unchecked(new_bytes)
+						});
+					}
+				}
+
+				#[cfg(unix)]
+				{
+					use std::os::unix::fs::symlink;
+					symlink(resolved_path, &as_new_path)?;
+				}
+
+				#[cfg(target_os = "windows")]
+				{
+					use std::os::windows::fs::{symlink_dir, symlink_file};
+
+					if resolved_path.is_dir() {
+						symlink_dir(resolved_path, &as_new_path)?;
+					} else {
+						symlink_file(resolved_path, &as_new_path)?;
+					}
+				}
+			} else if rpb.is_file() {
+				copy_file_sync(&rpb, &as_new_path)?;
+			} else if rpb.is_dir() {
+				create_dir_all_sync(&as_new_path)?;
+			}
+		}
+
+		Ok(())
+	}
+
+	/// Rename an entire directory.
+	///
+	/// We have to implement this ourselves, because [`tokio::fs::rename`], and
+	/// [`std::fs::rename`] don't support renaming a directory at all on windows,
+	/// which is one of the critical OS's that we need to support.
+	///
+	/// This 'rename' works by actually creating a new directory. Then
+	/// moving all the files over with rename. This is slow, but
+	/// works.
+	fn rename_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
+		if !dest_path.exists() {
+			create_dir_all_sync(dest_path)?;
+		}
+		let new_path_as_str_bytes = dest_path.as_os_str().as_encoded_bytes();
+		let old_path_bytes = source_path.as_os_str().as_encoded_bytes();
+
+		for result in WalkDir::new(source_path)
+			.follow_links(false)
+			.follow_root_links(false)
+		{
+			let rpb = result?.into_path();
+			let os_str_for_entry = rpb.as_os_str().as_encoded_bytes();
+			let mut new_bytes = Vec::with_capacity(os_str_for_entry.len() + 3);
+			new_bytes.extend_from_slice(new_path_as_str_bytes);
+			new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+			let as_new_path =
+				PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
+
+			if rpb.is_symlink() {
+				let mut resolved_path = read_link_sync(&rpb)?;
+				{
+					// If this symlink is a symlink to another path within the same
+					// directory, then rewrite it as well to start under our new directory.
+					let os_str_for_resolved = resolved_path.as_os_str().as_encoded_bytes();
+					if os_str_for_resolved.starts_with(old_path_bytes) {
+						let mut new_bytes = Vec::with_capacity(os_str_for_resolved.len() + 3);
+						new_bytes.extend_from_slice(new_path_as_str_bytes);
+						new_bytes.extend_from_slice(&os_str_for_entry[old_path_bytes.len()..]);
+						resolved_path = PathBuf::from(unsafe {
+							OsString::from_encoded_bytes_unchecked(new_bytes)
+						});
+					}
+				}
+
+				// Symlinks to directories on Windows run into
+				// edge cases, and will frequently get permission denied when
+				// attempting to remove them.
+				//
+				// They will instead be cleaned up by the final folder cleanup which
+				// will not run into any such errors.
+				let should_remove: bool;
+				#[cfg(unix)]
+				{
+					use std::os::unix::fs::symlink;
+					symlink(resolved_path, &as_new_path)?;
+					should_remove = true;
+				}
+
+				#[cfg(target_os = "windows")]
+				{
+					use std::os::windows::fs::{symlink_dir, symlink_file};
+
+					if resolved_path.is_dir() {
+						symlink_dir(resolved_path, &as_new_path)?;
+						should_remove = false;
+					} else {
+						symlink_file(resolved_path, &as_new_path)?;
+						should_remove = true;
+					}
+				}
+
+				// Remove the original link, we renamed this....
+				if should_remove {
+					remove_file_sync(&rpb)?;
+				}
+			} else if rpb.is_file() {
+				rename_sync(&rpb, &as_new_path)?;
+			} else if rpb.is_dir() {
+				create_dir_all_sync(&as_new_path)?;
+			}
+		}
+		// Clean up after ourselves...
+		remove_dir_all_sync(source_path)?;
+
+		Ok(())
+	}
+
+	/// Generate an `eco.xml` if one is not present.
+	///
+	/// This is _required_ in order to provide an actual functional PCFS install,
+	/// and not actually normally created on the host filesystem with the
+	/// official tools. It just generates it in memory.
+	///
+	/// ## Errors
+	///
+	/// If we cannot create the config directory, or write the eco config
+	/// file to disk.
+	async fn generate_eco_xml(cafe_os_path: &Path) -> Result<(), FSError> {
+		let mut eco_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "config"]);
+		if !eco_path.exists() {
+			create_dir_all_sync(&eco_path).map_err(FSError::IO)?;
+		}
+		eco_path.push("eco.xml");
+
+		let mut eco_file = File::create(eco_path).await.map_err(FSError::IO)?;
+		eco_file
+			.write_all(
+				br#"<?xml version="1.0" encoding="utf-8"?>
+<eco type="complex" access="777">
+  <enable type="unsignedInt" length="4">0</enable>
+  <max_on_time type="unsignedInt" length="4">3601</max_on_time>
+  <default_off_time type="unsignedInt" length="4">15</default_off_time>
+  <wd_disable type="unsignedInt" length="4">1</wd_disable>
+</eco>"#,
+			)
+			.await
+			.map_err(FSError::IO)?;
+
+		#[cfg(unix)]
+		{
+			use std::{fs::Permissions, os::unix::prelude::*};
+			eco_file
+				.set_permissions(Permissions::from_mode(0o770))
+				.await?;
+		}
+
+		Ok(())
+	}
+
+	/// Generate a `wii_acct.xml` if one is not present.
+	///
+	/// This is _required_ in order to provide an actual functional PCFS install,
+	/// and not actually normally created on the host filesystem with the
+	/// official tools. It just generates it in memory.
+	///
+	/// ## Errors
+	///
+	/// If we cannot create the config directory, or write the wii acct config
+	/// file to disk.
+	async fn generate_wii_acct_xml(cafe_os_path: &Path) -> Result<(), FSError> {
+		let mut wii_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "proc", "prefs"]);
+		if !wii_path.exists() {
+			create_dir_all_sync(&wii_path).map_err(FSError::IO)?;
+		}
+		wii_path.push("wii_acct.xml");
+
+		let mut wii_file = File::create(wii_path).await.map_err(FSError::IO)?;
+		wii_file
+			.write_all(
+				br#"<?xml version="1.0" encoding="utf-8"?> 
+<wii_acct type="complex"> 
+  <profile type="complex"> 
+    <nickname type="hexBinary" length="22">00570069006900000000000000000000000000000000</nickname>
+
+    <language type="unsignedInt" length="4">0</language> 
+    <country type="unsignedInt" length="4">1</country> 
+  </profile> 
+  <pc type="complex"> 
+    <rating type="unsignedInt" length="4">18</rating> 
+    <organization type="unsignedInt" length="4">0</organization> 
+    <rst_internet_ch type="unsignedByte" length="1">0</rst_internet_ch> 
+    <rst_nw_access type="unsignedByte" length="1">0</rst_nw_access> 
+    <rst_pt_order type="unsignedByte" length="1">0</rst_pt_order> 
+  </pc> 
+</wii_acct>"#,
+			)
+			.await
+			.map_err(FSError::IO)?;
+
+		#[cfg(unix)]
+		{
+			use std::{fs::Permissions, os::unix::prelude::*};
+			wii_file
+				.set_permissions(Permissions::from_mode(0o770))
+				.await?;
+		}
+
+		Ok(())
+	}
+
+	/// Take an app.xml, and capitilize the title id. Used for byte-matching
+	/// perfectly with the official SDK.
+	#[must_use]
+	fn capitilize_title_id(app_xml: String) -> String {
+		let Some(title_id_xml_tag_start) = app_xml.find("<title_id") else {
+			return app_xml;
+		};
+		let Some(title_id_tag_end) = app_xml[title_id_xml_tag_start..].find('>') else {
+			return app_xml;
+		};
+
+		let tid_start = title_id_xml_tag_start + title_id_tag_end;
+		let Some(title_slash_location) = app_xml[tid_start..].find("</title_id>") else {
+			return app_xml;
+		};
+		let tid_end = tid_start + title_slash_location;
+		let title_id = &app_xml[tid_start..tid_end];
+		let mut final_xml = String::with_capacity(app_xml.len());
+		final_xml += &app_xml[..tid_start];
+		final_xml += &title_id.to_uppercase();
+		final_xml += &app_xml[tid_end..];
+
+		final_xml
+	}
+
+	fn get_default_read_only_folders(cafe_dir: &Path) -> ConcurrentSet<PathBuf> {
+		let set = ConcurrentSet::new();
+
+		for cafe_sub_paths in [
+			&["data", "slc", "sys", "config"] as &[&str],
+			&["data", "slc", "sys", "proc"],
+			&["data", "slc", "sys", "logs"],
+			&["data", "mlc", "usr"],
+			&["data", "mlc", "usr", "import"],
+			&["data", "mlc", "usr", "title"],
+		] {
+			_ = set.insert(Self::join_many(cafe_dir, cafe_sub_paths));
+		}
+
+		set
 	}
 }
 
@@ -876,7 +1381,7 @@ impl Valuable for HostFilesystem {
 		});
 		let mut folder_values = HashMap::with_capacity(self.open_folder_handles.len());
 		self.open_folder_handles.scan(|k, v| {
-			folder_values.insert(*k, format!("{}", v.2.display()));
+			folder_values.insert(*k, format!("{}", v.3.display()));
 		});
 
 		visitor.visit_named_fields(&NamedValues::new(
@@ -978,6 +1483,7 @@ impl Valuable for FilesystemLocation {
 	}
 }
 
+#[cfg_attr(docsrs, doc(cfg(test)))]
 #[cfg(test)]
 pub mod test_helpers {
 	use super::*;
@@ -1002,12 +1508,30 @@ pub mod test_helpers {
 			vec![
 				"data", "mlc", "sys", "title", "00050030", "1001000a", "code",
 			],
+			vec![
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "code",
+			],
+			vec![
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "content",
+			],
+			vec![
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "meta",
+			],
 			// Purposefully create capital so we can validate renaming works!
 			vec![
 				"data", "mlc", "sys", "title", "00050030", "1001010A", "code",
 			],
 			vec![
 				"data", "mlc", "sys", "title", "00050030", "1001020a", "code",
+			],
+			vec![
+				"data", "slc", "sys", "title", "00050010", "1000400a", "code",
+			],
+			vec!["data", "mlc", "sys", "update", "nand", "os_v10_ndebug"],
+			vec!["data", "mlc", "sys", "update", "nand", "os_v10_debug"],
+			vec!["data", "slc", "sys", "proc", "prefs"],
+			vec![
+				"data", "slc", "sys", "title", "00050010", "1000800a", "code",
 			],
 			vec![
 				"data", "slc", "sys", "title", "00050010", "1000400a", "code",
@@ -1048,6 +1572,13 @@ pub mod test_helpers {
 			],
 		))
 		.expect("Failed to create needed fw.img!");
+		File::create(HostFilesystem::join_many(
+			dir.path(),
+			[
+				"data", "mlc", "sys", "title", "00050010", "1f700500", "code", "app.xml",
+			],
+		))
+		.expect("Failed to create needed app.xml for disc!");
 
 		let fs = HostFilesystem::from_cafe_dir(Some(PathBuf::from(dir.path())))
 			.await
@@ -1375,7 +1906,6 @@ mod unit_tests {
 
 		let fd = fs
 			.open_folder(&path, None)
-			.await
 			.expect("Failed to open existing folder!");
 		assert!(
 			fs.open_folder_handles.len() == 1,
@@ -1430,10 +1960,7 @@ mod unit_tests {
 			.await
 			.expect("Failed to create file to use!");
 
-		let dfd = fs
-			.open_folder(&path, None)
-			.await
-			.expect("Failed to open file!");
+		let dfd = fs.open_folder(&path, None).expect("Failed to open folder!");
 		assert!(
 			fs.next_in_folder(dfd, None)
 				.await
@@ -1480,13 +2007,124 @@ mod unit_tests {
 			fs.next_in_folder(dfd, None)
 				.await
 				.expect("Failed to query for next in folder! 2.2!")
-				.is_some()
+				.is_none()
 		);
-		assert!(
-			fs.next_in_folder(dfd, None)
-				.await
-				.expect("Failed to query for next in folder! 2.3!")
-				.is_some()
+	}
+
+	#[test]
+	pub fn can_capitilize_ids() {
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(
+				r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101f700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+					.to_owned()
+			),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101F700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+				.to_owned(),
+		);
+
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(
+				r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101F700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+					.to_owned()
+			),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_id type="hexBinary" length="8">000500101F700500</title_id>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+				.to_owned(),
+		);
+
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(
+				r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+					.to_owned()
+			),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version>
+  <title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#
+				.to_owned(),
+		);
+
+		assert_eq!(
+			HostFilesystem::capitilize_title_id(r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version><title_id type="hexBinary" length="8">000500101f700500</title_id><title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#.to_owned()),
+			r#"<?xml version="1.0" encoding = "utf-8"?>
+<app type="complex" access="777">
+  <version type="unsignedInt" length="4">16</version>
+  <os_version type="hexBinary" length="8">000500101000400A</os_version><title_id type="hexBinary" length="8">000500101F700500</title_id><title_version type="hexBinary" length="2">090D</title_version>
+  <sdk_version type="unsignedInt" length="4">21213</sdk_version>
+  <app_type type="hexBinary" length="4">90000001</app_type>
+  <group_id type="hexBinary" length="4">00000400</group_id>
+  <os_mask  type="hexBinary" length="32">0</os_mask>
+  <common_id type="hexBinary" length="8">0000000000000000</common_id>
+</app>"#.to_owned(),
 		);
 	}
 }

@@ -9,13 +9,17 @@
 //! 7975), and "SDIO Block Data" (by default port 7976), which actually
 //! interact over two totally independent TCP streams.
 
+#[cfg_attr(docsrs, doc(cfg(feature = "clients")))]
 #[cfg(feature = "clients")]
 pub mod client;
+#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 #[cfg(any(feature = "clients", feature = "servers"))]
 pub(crate) mod data_stream;
 pub mod errors;
+#[cfg_attr(docsrs, doc(cfg(any(feature = "clients", feature = "servers"))))]
 #[cfg(any(feature = "clients", feature = "servers"))]
 pub mod proto;
+#[cfg_attr(docsrs, doc(cfg(feature = "servers")))]
 #[cfg(feature = "servers")]
 pub mod server;
 

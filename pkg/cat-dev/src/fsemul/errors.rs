@@ -15,6 +15,9 @@ use thiserror::Error;
 /// Errors related to API errors for `FSEmul`.
 #[derive(Diagnostic, Error, Debug, PartialEq, Eq)]
 pub enum FSEmulAPIError {
+	#[error("File descriptors have already been opened, we cannot change our strategy now!")]
+	#[diagnostic(code(cat_dev::api::fsemul::cannot_swap_fd_strategy))]
+	CannotSwapFdStrategy,
 	/// This DLF address is too large to be inserted.
 	#[error("DLF Address is too large ({0:016X}) to be inserted ({1:016X})")]
 	#[diagnostic(code(cat_dev::api::fsemul::dlf_address_too_large))]

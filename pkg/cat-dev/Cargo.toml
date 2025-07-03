@@ -12,7 +12,7 @@ default = ["clients", "serial", "servers"]
 clients = ["bitflags", "form_urlencoded", "local-ip-address", "mac_address", "network-interface", "rand", "reqwest", "tower", "wide"]
 scientists = []
 serial = ["libc", "pin-project-lite", "windows"]
-servers = ["bitflags", "local-ip-address", "rand", "sysinfo", "tower", "walkdir", "wide"]
+servers = ["bitflags", "local-ip-address", "rand", "sysinfo", "tower", "wide"]
 
 [dependencies]
 aes = "^0.8.4"
@@ -29,7 +29,7 @@ mac_address = { optional = true, workspace = true }
 miette.workspace = true
 network-interface = { optional = true, workspace = true }
 pin-project-lite = { version = "^0.2.16", optional = true }
-reqwest = { version = "^0.12.18", default-features = false, features=["charset", "macos-system-configuration"], optional = true }
+reqwest = { version = "^0.12.22", default-features = false, features=["charset", "macos-system-configuration"], optional = true }
 rand = { version = "^0.9.0", optional = true }
 scc = "^2.3.4"
 sysinfo = { version = "^0.35.1", default-features = false, features=["disk", "linux-tmpfs"], optional = true }
@@ -39,15 +39,15 @@ tokio.workspace = true
 tokio-util = { version = "^0.7.15", default-features = false, features = ["codec"] }
 tower = { version = "^0.5.2", default-features = false, features = ["util", "make"], optional = true }
 valuable.workspace = true
-walkdir = { version = "^2.5.0", optional = true }
-wide = { version = "^0.7.32", optional = true }
+walkdir = "^2.5.0"
+wide = { version = "^0.7.33", optional = true }
 whoami = "^1.6.0"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "macos"))'.dependencies]
 libc = { version = "^0.2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "^0.61.1", default-features = false, features=["Win32_Devices_Communication", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading", "std"], optional = true }
+windows = { version = "^0.61.3", default-features = false, features=["Win32_Devices_Communication", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading", "std"], optional = true }
 
 [dev-dependencies]
 tempfile = "^3.20.0"

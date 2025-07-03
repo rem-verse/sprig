@@ -43,6 +43,8 @@ pub async fn handle_ping(
 		flags.set_csr_enabled(false);
 		flags.set_ffio_enabled(false);
 	}
+	flags.set_first_read_size(command_info.user().0);
+	flags.set_first_write_size(command_info.user().1);
 
 	SataResponse::new(
 		pid,

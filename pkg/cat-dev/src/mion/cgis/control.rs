@@ -299,6 +299,7 @@ pub async fn do_raw_control_request(
 		Method::POST,
 		format!("http://{mion_ip}/mion/control.cgi"),
 		Some(encode_url_parameters(url_parameters)),
+		None,
 	)
 	.await
 }

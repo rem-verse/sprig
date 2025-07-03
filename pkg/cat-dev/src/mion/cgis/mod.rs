@@ -39,8 +39,14 @@ use crate::{
 use bytes::Bytes;
 use form_urlencoded::byte_serialize;
 use reqwest::{Body, Client, Method, Response, Version};
-use std::{fmt::Display, ops::Deref};
-use tracing::{field::valuable, warn};
+use std::{fmt::Display, ops::Deref, time::Duration};
+use tokio::time::timeout;
+use tracing::{Instrument, error_span, field::valuable, warn};
+
+/// The default timeout for making HTTP requests.
+///
+/// This is a relatively low value by default as most HTTP pages are fairly simple, and quick to respond.
+pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Perform a request that attempts to remove all the logic for the 'simple'
 /// request cases.
@@ -62,23 +68,40 @@ async fn do_simple_request<BodyTy>(
 	method: Method,
 	url: String,
 	body: Option<BodyTy>,
+	req_timeout: Option<Duration>,
 ) -> Result<String, NetworkError>
 where
 	BodyTy: Into<Body>,
 {
-	let mut req = client
-		.request(method, url)
-		.version(Version::HTTP_11)
-		.header("authorization", format!("Basic {AUTHZ_HEADER}"))
-		.header("content-type", "application/x-www-form-urlencoded")
-		.header("user-agent", concat!("cat-dev/", env!("CARGO_PKG_VERSION")));
-	if let Some(body) = body {
-		req = req.body(body);
-	}
-	let response_body =
-		assert_status_and_read_body(200, req.send().await.map_err(NetworkError::HTTP)?).await?;
+	let span = error_span!(
+		"cat_dev::mion::cgis::do_simple_request",
+		http.method = %method,
+		http.url = %url,
+	);
 
-	Ok(String::from_utf8(response_body.into()).map_err(NetworkParseError::Utf8Expected)?)
+	async {
+		let mut req = client
+			.request(method, url)
+			.version(Version::HTTP_11)
+			.header("authorization", format!("Basic {AUTHZ_HEADER}"))
+			.header("content-type", "application/x-www-form-urlencoded")
+			.header("user-agent", concat!("cat-dev/", env!("CARGO_PKG_VERSION")));
+		if let Some(body) = body {
+			req = req.body(body);
+		}
+
+		let timeout_time = req_timeout.unwrap_or(DEFAULT_HTTP_TIMEOUT);
+		let response_body = timeout(
+			timeout_time,
+			assert_status_and_read_body(200, req.send().await.map_err(NetworkError::HTTP)?),
+		)
+		.await
+		.map_err(|_| NetworkError::Timeout(timeout_time))??;
+
+		Ok(String::from_utf8(response_body.into()).map_err(NetworkParseError::Utf8Expected)?)
+	}
+	.instrument(span)
+	.await
 }
 
 fn encode_url_parameters(parameters: &[(impl Deref<Target = str>, impl Display)]) -> String {

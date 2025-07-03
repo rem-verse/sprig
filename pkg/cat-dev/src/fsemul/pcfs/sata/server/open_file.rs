@@ -73,17 +73,21 @@ pub async fn handle_open_file(
 
 	// Okay time to open!
 	let mut options = OpenOptions::new();
+	let mut will_create = false;
 	if mode.contains('r') {
 		options.read(true);
 	}
 	if mode.contains('w') {
 		options.write(true).truncate(true).create(true);
+		will_create = true;
 	}
 	if mode.contains('a') {
 		options.write(true).truncate(false).create(true);
+		will_create = true;
 	}
 	if mode.contains('+') {
 		options.create(true);
+		will_create = true;
 	}
 
 	let fd = match state
@@ -100,10 +104,18 @@ pub async fn handle_open_file(
 				"Failed to open file!",
 			);
 
+			if fs_location.resolved_path().exists() || will_create {
+				return SataResponse::new(
+					state.pid(),
+					request_header,
+					SataFileDescriptorResult::error(FS_ERROR),
+				);
+			}
+
 			return SataResponse::new(
 				state.pid(),
 				request_header,
-				SataFileDescriptorResult::error(FS_ERROR),
+				SataFileDescriptorResult::error(PATH_NOT_EXIST_ERROR),
 			);
 		}
 	};

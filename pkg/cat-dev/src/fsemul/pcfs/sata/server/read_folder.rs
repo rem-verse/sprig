@@ -133,7 +133,6 @@ mod unit_tests {
 
 		let dfd = fs
 			.open_folder(&base_dir, Some(1))
-			.await
 			.expect("Failed to open existing directory!");
 		let request = SataReadFolderPacketBody::new(dfd);
 

@@ -5,7 +5,7 @@ use crate::{
 	fsemul::{
 		HostFilesystem,
 		pcfs::sata::{
-			proto::{MoveToFileLocation, SataReadFilePacketBody, SataRequest},
+			proto::{SataReadFilePacketBody, SataRequest},
 			server::SataConnectionFlags,
 		},
 	},
@@ -36,49 +36,26 @@ pub async fn handle_read_file(
 	let packet = request.body();
 	let handle = packet.file_descriptor();
 	let ffio_enabled = flags.ffio_enabled();
+	let mut buffer_grew = flags.ffio_buffer_should_have_grown();
 
 	if packet.should_move() {
-		match packet.move_to_pointer() {
-			MoveToFileLocation::Begin => {
-				if fs
-					.seek_file(handle, true, Some(stream.to_raw()))
-					.await
-					.is_err()
-				{
-					debug!(
-						packet.fd = handle,
-						packet.typ = "PCFSSrvReadFile",
-						"Failed to seek to beginning of file!",
-					);
+		if let Err(cause) = packet
+			.move_to_pointer()
+			.do_move(&fs, handle, Some(stream.to_raw()))
+			.await
+		{
+			debug!(
+				?cause,
+				packet.fd = handle,
+				packet.typ = "PCFSSrvReadFile",
+				"Failed to move file to a specific pointer!",
+			);
 
-					if ffio_enabled {
-						return Ok(construct_ffio_error(FS_ERROR));
-					}
+			if ffio_enabled {
+				return Ok(construct_ffio_error(FS_ERROR));
+			}
 
-					todo!("Implement non-FFIO support.");
-				}
-			}
-			MoveToFileLocation::Current => {
-				// Luckily to move to current, we don't need to move at all.
-			}
-			MoveToFileLocation::End => {
-				if fs
-					.seek_file(handle, false, Some(stream.to_raw()))
-					.await
-					.is_err()
-				{
-					debug!(
-						packet.fd = handle,
-						packet.typ = "PCFSSrvReadFile",
-						"Failed to seek to end of file of file!",
-					);
-
-					if ffio_enabled {
-						return Ok(construct_ffio_error(FS_ERROR));
-					}
-					todo!("Implement non-FFIO support.");
-				}
-			}
+			todo!("Implement non-FFIO support.");
 		}
 	}
 
@@ -94,15 +71,15 @@ pub async fn handle_read_file(
 		}
 		todo!("Implement non-ffio support.");
 	};
+
+	let first_read_size = usize::try_from(flags.first_read_size())
+		.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
+	let total_read_amount = usize::try_from(packet.block_size())
+		.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?
+		* usize::try_from(packet.block_count())
+			.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?;
 	let Ok(Some(read_file)) = fs
-		.read_file(
-			handle,
-			usize::try_from(packet.block_size())
-				.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?
-				* usize::try_from(packet.block_count())
-					.map_err(|_| CatBridgeError::UnsupportedBitsPerCore)?,
-			Some(stream.to_raw()),
-		)
+		.read_file(handle, total_read_amount, Some(stream.to_raw()))
 		.await
 	else {
 		debug!(
@@ -118,14 +95,29 @@ pub async fn handle_read_file(
 	};
 
 	if ffio_enabled {
-		let mut buff = BytesMut::with_capacity(read_file.len() + 0x24);
-		// The header is normally just 'malloc'd and not cleared between
-		// buffers. Luckily for us we can just zero it out, and it's easier than
-		// actually dealing with whatever random bytes PCFSServer would normally
-		// send.
-		buff.extend_from_slice(&[0; 0x20]);
-		buff.put_u32(u32::try_from(file_size).unwrap_or(u32::MAX));
+		let mut buff = BytesMut::with_capacity(0x24 + read_file.len());
+
+		if !buffer_grew && read_file.len() > first_read_size {
+			flags.set_ffio_buffer_should_have_grown(true);
+			buffer_grew = true;
+		}
+		if (read_file.len() < total_read_amount && read_file.len() > first_read_size) || buffer_grew
+		{
+			buff.extend_from_slice(&[0; 0x20]);
+			buff.put_u32(u32::try_from(read_file.len()).unwrap_or(u32::MAX));
+		} else {
+			buff.extend_from_slice(&[0xC4, 0x00, 0x24, 0x02, 0xE8, 0xEF, 0x24, 0x02]);
+			buff.extend_from_slice(&[0; 0x18]);
+			buff.put_u32(u32::try_from(file_size).unwrap_or(u32::MAX));
+		}
+
+		let rf_len = read_file.len();
 		buff.extend(read_file);
+
+		if rf_len < total_read_amount && rf_len < first_read_size {
+			let pad_amount = std::cmp::min(total_read_amount, first_read_size) - rf_len;
+			buff.extend(vec![0xCD; pad_amount]);
+		}
 
 		Ok(buff.freeze())
 	} else {
@@ -136,7 +128,7 @@ pub async fn handle_read_file(
 fn construct_ffio_error(error_code: u32) -> Bytes {
 	let mut buff = BytesMut::with_capacity(36);
 	buff.extend(&[0xC4, 0x00, 0xFE, 0x00, 0x20, 0xEF, 0xFE, 0x00]);
-	buff.extend([0; 24]);
+	buff.extend([0; 0x18]);
 	buff.put_u32(error_code);
 	buff.freeze()
 }
@@ -170,10 +162,13 @@ mod unit_tests {
 			.expect("Failed to open file!");
 
 		let read_request = SataReadFilePacketBody::new(4, 1, fd, None);
+		let conn_flags = SataConnectionFlags::new_with_flags(true, true);
+		conn_flags.set_first_read_size(1000);
+		conn_flags.set_first_write_size(1000);
 
 		let response = handle_read_file(
 			StreamID::from_existing(1),
-			SataConnectionFlags::new_with_flags(true, true),
+			conn_flags,
 			State(fs),
 			Body(SataRequest::new(
 				SataPacketHeader::new(0),
@@ -186,7 +181,8 @@ mod unit_tests {
 
 		let mut expected_response = BytesMut::new();
 		// Header
-		expected_response.extend_from_slice(&[0; 0x20]);
+		expected_response.extend_from_slice(&[0xC4, 0x00, 0x24, 0x02, 0xE8, 0xEF, 0x24, 0x02]);
+		expected_response.extend_from_slice(&[0; 0x18]);
 		// File length.
 		expected_response.extend_from_slice(&2_u32.to_be_bytes());
 		// File data, and padding.

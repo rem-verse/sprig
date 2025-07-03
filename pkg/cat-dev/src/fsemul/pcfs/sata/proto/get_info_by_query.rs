@@ -229,7 +229,7 @@ impl TryFrom<u32> for SataQueryType {
 /// just return a very basic "size" (e.g. file count, or file length, etc.).
 /// However the file stat query type actually returns all the information about
 /// a particular path.
-#[derive(Debug, Valuable, PartialEq, Eq)]
+#[derive(Clone, Debug, Valuable, PartialEq, Eq)]
 pub enum SataQueryResponse {
 	/// An error has occured, and we are returning an error code.
 	ErrorCode(u32),
@@ -409,6 +409,24 @@ impl SataFDInfo {
 		)
 		.unwrap_or(u64::MAX);
 
+		Self {
+			file_or_folder_flags,
+			perms,
+			file_length,
+			created_timestamp,
+			last_updated_timestamp: updated_timestamp,
+		}
+	}
+
+	/// Create a fake fd info from totally controlled values.
+	#[must_use]
+	pub fn create_fake_info(
+		file_or_folder_flags: u32,
+		perms: u32,
+		file_length: u32,
+		created_timestamp: u64,
+		updated_timestamp: u64,
+	) -> Self {
 		Self {
 			file_or_folder_flags,
 			perms,
