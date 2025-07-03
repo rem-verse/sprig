@@ -23,7 +23,7 @@ use tokio::{
 use tracing::{Instrument, debug, error, error_span, field::valuable, info, warn};
 
 /// The amount of times we'll try reconnecting to debug out.
-const DEBUG_OUT_RETRY_COUNT: usize = 5_usize;
+const DEBUG_OUT_RETRY_COUNT: usize = 10_usize;
 
 /// Determines if a positional argument that could be a path, or something
 /// not a path, should be interpreted as a path.

@@ -72,14 +72,25 @@ pub async fn handle_rename(
 		todo!("network shares not yet implemented!")
 	};
 
-	if let Err(cause) = state
-		.host_filesystem
-		.rename(
-			fs_source_location.resolved_path(),
-			fs_dest_location.resolved_path(),
-		)
-		.await
-	{
+	let result = if request.command_info().user() == (0x1000_00F5, 0x1000_00FF) {
+		state
+			.host_filesystem
+			.copy(
+				fs_source_location.resolved_path(),
+				fs_dest_location.resolved_path(),
+			)
+			.await
+	} else {
+		state
+			.host_filesystem
+			.rename(
+				fs_source_location.resolved_path(),
+				fs_dest_location.resolved_path(),
+			)
+			.await
+	};
+
+	if let Err(cause) = result {
 		error!(
 			?cause,
 			packet.source_path = packet.source_path(),

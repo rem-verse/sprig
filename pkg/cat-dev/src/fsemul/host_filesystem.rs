@@ -784,6 +784,19 @@ impl HostFilesystem {
 		create_dir_all(at).await.map_err(FSError::IO)
 	}
 
+	/// Copy a file, symlink, or directory.
+	///
+	/// ## Errors
+	///
+	/// If we run into any filesystem error renaming a source, or directory.
+	pub async fn copy(&self, from: &Path, to: &Path) -> Result<(), FSError> {
+		if from.is_dir() {
+			Self::copy_dir(from, to).await
+		} else {
+			copy_file(from, to).await.map_err(FSError::IO).map(|_| ())
+		}
+	}
+
 	/// Rename a file, symlink, or directory.
 	///
 	/// This is implemented so we can rename directories, and files without
@@ -1065,7 +1078,7 @@ impl HostFilesystem {
 		Ok(())
 	}
 
-	async fn copy_dir(source_path: &PathBuf, dest_path: &PathBuf) -> Result<(), FSError> {
+	async fn copy_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
 		if !dest_path.exists() {
 			create_dir_all(dest_path).await?;
 		}
