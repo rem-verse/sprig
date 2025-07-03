@@ -3,6 +3,7 @@
 
 use crate::{errors::NetworkParseError, fsemul::sdio::errors::SDIOProtocolError};
 use bytes::{BufMut, Bytes, BytesMut};
+use std::ffi::CStr;
 use valuable::{
 	EnumDef, Enumerable, Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value,
 	Variant, VariantDef, Visit,
@@ -14,14 +15,14 @@ pub enum SdioControlMessage {
 	Printf(Bytes, String),
 	/// TODO(mythra): Currently unknown, mostly used for scientist.
 	Unknown(Vec<u8>),
-	/// TODO(mythra): also very unknown, mostly used for debugging.
-	UnknownTwo(Vec<u8>),
+	/// Record the boot mode that was being used, and should be used.
+	RecordBootMode(String),
 }
 
 static SDIO_CONTROL_MESSAGE_VARIANTS: &[VariantDef<'static>] = &[
 	VariantDef::new("Printf", Fields::Unnamed(2)),
 	VariantDef::new("Unknown", Fields::Unnamed(1)),
-	VariantDef::new("UnknownTwo", Fields::Unnamed(3)),
+	VariantDef::new("RecordBootMode", Fields::Unnamed(1)),
 ];
 
 impl Enumerable for SdioControlMessage {
@@ -33,7 +34,9 @@ impl Enumerable for SdioControlMessage {
 		match self {
 			SdioControlMessage::Printf(_, _) => Variant::Static(&SDIO_CONTROL_MESSAGE_VARIANTS[0]),
 			SdioControlMessage::Unknown(_) => Variant::Static(&SDIO_CONTROL_MESSAGE_VARIANTS[1]),
-			SdioControlMessage::UnknownTwo(_) => Variant::Static(&SDIO_CONTROL_MESSAGE_VARIANTS[2]),
+			SdioControlMessage::RecordBootMode(_) => {
+				Variant::Static(&SDIO_CONTROL_MESSAGE_VARIANTS[2])
+			}
 		}
 	}
 }
@@ -51,8 +54,11 @@ impl Valuable for SdioControlMessage {
 					Valuable::as_value(&buff),
 				]);
 			}
-			SdioControlMessage::Unknown(buff) | SdioControlMessage::UnknownTwo(buff) => {
+			SdioControlMessage::Unknown(buff) => {
 				visitor.visit_unnamed_fields(&[Valuable::as_value(&buff)]);
+			}
+			SdioControlMessage::RecordBootMode(mode) => {
+				visitor.visit_unnamed_fields(&[Valuable::as_value(&mode)]);
 			}
 		}
 	}
@@ -96,8 +102,12 @@ impl TryFrom<&SdioControlMessageRequest> for Bytes {
 					SdioControlMessage::Printf(_, buff) => {
 						size += buff.len();
 					}
-					SdioControlMessage::Unknown(un) | SdioControlMessage::UnknownTwo(un) => {
+					SdioControlMessage::Unknown(un) => {
 						size += un.len();
+					}
+					SdioControlMessage::RecordBootMode(vers) => {
+						size += vers.len();
+						size += 1;
 					}
 				}
 			}
@@ -125,9 +135,10 @@ impl TryFrom<&SdioControlMessageRequest> for Bytes {
 					final_buff.extend(buff);
 					break;
 				}
-				SdioControlMessage::UnknownTwo(buff) => {
+				SdioControlMessage::RecordBootMode(version) => {
 					final_buff.put_u16_le(8);
-					final_buff.extend(buff);
+					final_buff.extend(&[0x0C, 0x00, 0xFF, 0xFF, 0x11, 0x00]);
+					final_buff.extend(version.as_bytes());
 					break;
 				}
 			}
@@ -166,7 +177,7 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 			return Err(SDIOProtocolError::UnknownPrintfPacketType(value[0]).into());
 		}
 
-		let _character_length = u16::from_le_bytes([value[0x2], value[0x3]]);
+		let character_length = u16::from_le_bytes([value[0x2], value[0x3]]);
 		let mut messages = Vec::with_capacity(1);
 		let mut read_size = 0;
 		loop {
@@ -193,9 +204,19 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 				messages.push(SdioControlMessage::Unknown(unknown_data));
 				break;
 			} else if message_ty == 8 {
-				let unknown_data = value.slice(base_offset + 2..).to_vec();
-				read_size += unknown_data.len();
-				messages.push(SdioControlMessage::UnknownTwo(unknown_data));
+				// May be useful in the future....
+				let _header = value.slice(base_offset + 2..base_offset + 8).to_vec();
+				let mode = value
+					.slice(
+						base_offset + 8
+							..base_offset + 8 + (usize::from(character_length) - (base_offset + 8)),
+					)
+					.to_vec();
+				let mode_cstr =
+					CStr::from_bytes_until_nul(&mode).map_err(NetworkParseError::BadCString)?;
+				messages.push(SdioControlMessage::RecordBootMode(
+					mode_cstr.to_string_lossy().to_string(),
+				));
 				break;
 			}
 
