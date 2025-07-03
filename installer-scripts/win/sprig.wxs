@@ -59,7 +59,7 @@
             <File Id="pcfsserver" Name="PCFSServer.exe" Source="target/release/pcfsserver.exe" KeyPath="yes" />
           </Component>
           <Component>
-            <File Id="dbg-generate-sata-wal-from-pcap" Name="dbg-generate-sata-wal-from-pcap.exe" Source="target/release/dbg-generate-sata-wal-from-pcap.exe" KeyPath="yes" />
+            <File Id="dbggeneratesatawalfrompcap" Name="dbg-generate-sata-wal-from-pcap.exe" Source="target/release/dbg-generate-sata-wal-from-pcap.exe" KeyPath="yes" />
           <Component>
             <File Id="license" Name="LICENSE" Source="LICENSE" KeyPath="yes" />
           </Component>
@@ -87,7 +87,7 @@
       <ComponentRef Id="mionparamspace" />
       <ComponentRef Id="catlog" />
       <ComponentRef Id="pcfsserver" />
-      <ComponentRef Id="dbg-generate-sata-wal-from-pcap" />
+      <ComponentRef Id="dbggeneratesatawalfrompcap" />
       <ComponentRef Id="license" />
       <ComponentRef Id="serial2_apache_license" />
       <ComponentRef Id="serial2_bsd_license" />
