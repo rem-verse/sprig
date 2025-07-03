@@ -60,6 +60,7 @@
           </Component>
           <Component>
             <File Id="dbggeneratesatawalfrompcap" Name="dbg-generate-sata-wal-from-pcap.exe" Source="target/release/dbg-generate-sata-wal-from-pcap.exe" KeyPath="yes" />
+          </Component>
           <Component>
             <File Id="license" Name="LICENSE" Source="LICENSE" KeyPath="yes" />
           </Component>
