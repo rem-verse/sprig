@@ -18,7 +18,12 @@ use scc::{
 use std::{
 	collections::HashMap,
 	ffi::OsString,
-	fs::{DirEntry, read_dir},
+	fs::{
+		DirEntry, copy as copy_file_sync, create_dir_all as create_dir_all_sync,
+		read_dir as read_dir_sync, read_link as read_link_sync,
+		remove_dir_all as remove_dir_all_sync, remove_file as remove_file_sync,
+		rename as rename_sync,
+	},
 	hash::RandomState,
 	io::{Error as IOError, SeekFrom},
 	path::{Path, PathBuf},
@@ -28,14 +33,11 @@ use std::{
 	},
 };
 use tokio::{
-	fs::{
-		File, OpenOptions, copy as copy_file, create_dir_all, read as fs_read,
-		read_dir as async_read_dir, read_link, remove_dir_all, remove_file, rename,
-		write as fs_write,
-	},
+	fs::{File, OpenOptions, read as fs_read, write as fs_write},
 	io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 	sync::Mutex,
 };
+use tracing::{info, warn};
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 use walkdir::WalkDir;
 use whoami::username;
@@ -124,7 +126,7 @@ impl HostFilesystem {
 			return Err(FSEmulFSError::CantFindCafeSdkPath.into());
 		};
 
-		Self::patch_case_sensitive_title_ids(&cafe_sdk_path).await?;
+		Self::patch_case_sensitivity(&cafe_sdk_path).await?;
 
 		for path in [
 			&[
@@ -417,7 +419,9 @@ impl HostFilesystem {
 	///
 	/// If the path doesn't exist, then we can't open the folder.
 	pub fn open_folder(&self, path: &PathBuf, for_stream: Option<u64>) -> Result<i32, FSError> {
-		let mut dhandle = read_dir(path)?.filter_map(Result::ok).collect::<Vec<_>>();
+		let mut dhandle = read_dir_sync(path)?
+			.filter_map(Result::ok)
+			.collect::<Vec<_>>();
 		dhandle.sort_by_key(DirEntry::path);
 
 		let fake_fd = FOLDER_FD.fetch_add(1, AtomicOrdering::SeqCst);
@@ -547,10 +551,10 @@ impl HostFilesystem {
 	/// - If the temp directory does not exist, and we can't create it.
 	/// - If the boot system file does not exist, and we can't write it to disk.
 	pub async fn boot1_sytstem_path(&self) -> Result<PathBuf, FSError> {
-		let mut path = self.temp_path().await?;
+		let mut path = self.temp_path()?;
 		path.push("caferun");
 		if !path.exists() {
-			create_dir_all(&path).await?;
+			create_dir_all_sync(&path)?;
 		}
 		path.push("ppc.bsf");
 
@@ -571,10 +575,10 @@ impl HostFilesystem {
 	/// - If the temporary directory does not exist, and we can't create it.
 	/// - If the disk ID path does not exist, and we can't write it to disk.
 	pub async fn disk_id_path(&self) -> Result<PathBuf, FSError> {
-		let mut path = self.temp_path().await?;
+		let mut path = self.temp_path()?;
 		path.push("caferun");
 		if !path.exists() {
-			create_dir_all(&path).await?;
+			create_dir_all_sync(&path)?;
 		}
 		path.push("diskid.bin");
 
@@ -614,10 +618,10 @@ impl HostFilesystem {
 		);
 		let dest_path = Self::join_many(&self.cafe_sdk_path, ["data", "disc"]);
 		if dest_path.exists() {
-			remove_dir_all(&dest_path).await.map_err(FSError::IO)?;
+			remove_dir_all_sync(&dest_path).map_err(FSError::IO)?;
 		}
 
-		Self::copy_dir(&source_path, &dest_path).await?;
+		Self::copy_dir(&source_path, &dest_path)?;
 		// Mount was successful!
 		{
 			let mut guard = self.disc_mounted.lock().await;
@@ -651,10 +655,10 @@ impl HostFilesystem {
 	/// - If the firmware image file does not exist.
 	/// - If the dlf file does not exist, and we can't create it.
 	pub async fn ppc_boot_dlf_path(&self) -> Result<PathBuf, CatBridgeError> {
-		let mut path = self.temp_path().await?;
+		let mut path = self.temp_path()?;
 		path.push("caferun");
 		if !path.exists() {
-			create_dir_all(&path).await.map_err(FSError::from)?;
+			create_dir_all_sync(&path).map_err(FSError::from)?;
 		}
 		path.push("ppc_boot.dlf");
 
@@ -780,8 +784,8 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If we cannot end up creating this directory due to a filesystem error.
-	pub async fn create_directory(&self, at: &Path) -> Result<(), FSError> {
-		create_dir_all(at).await.map_err(FSError::IO)
+	pub fn create_directory(&self, at: &Path) -> Result<(), FSError> {
+		create_dir_all_sync(at).map_err(FSError::IO)
 	}
 
 	/// Copy a file, symlink, or directory.
@@ -789,11 +793,11 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// If we run into any filesystem error renaming a source, or directory.
-	pub async fn copy(&self, from: &Path, to: &Path) -> Result<(), FSError> {
+	pub fn copy(&self, from: &Path, to: &Path) -> Result<(), FSError> {
 		if from.is_dir() {
-			Self::copy_dir(from, to).await
+			Self::copy_dir(from, to)
 		} else {
-			copy_file(from, to).await.map_err(FSError::IO).map(|_| ())
+			copy_file_sync(from, to).map_err(FSError::IO).map(|_| ())
 		}
 	}
 
@@ -806,11 +810,11 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// - If we run into any filesystem error renaming a source, or directory.
-	pub async fn rename(&self, from: &Path, to: &Path) -> Result<(), FSError> {
+	pub fn rename(&self, from: &Path, to: &Path) -> Result<(), FSError> {
 		if from.is_dir() {
-			Self::rename_dir(from, to).await
+			Self::rename_dir(from, to)
 		} else {
-			rename(from, to).await.map_err(FSError::IO)
+			rename_sync(from, to).map_err(FSError::IO)
 		}
 	}
 
@@ -870,13 +874,13 @@ impl HostFilesystem {
 	/// ## Errors
 	///
 	/// - If the temporary path does not exist and could not be created.
-	async fn temp_path(&self) -> Result<PathBuf, FSError> {
+	fn temp_path(&self) -> Result<PathBuf, FSError> {
 		let temp_path = Self::join_many(
 			&self.cafe_sdk_path,
 			["temp".to_owned(), username().to_lowercase()],
 		);
 		if !temp_path.exists() {
-			create_dir_all(&temp_path).await?;
+			create_dir_all_sync(&temp_path)?;
 		}
 		Ok(temp_path)
 	}
@@ -909,7 +913,7 @@ impl HostFilesystem {
 		)
 	}
 
-	async fn patch_case_sensitive_title_ids(cafe_sdk_path: &Path) -> Result<(), FSError> {
+	async fn patch_case_sensitivity(cafe_sdk_path: &Path) -> Result<(), FSError> {
 		// First we need to check if we're even on a temporary filesystem/path.
 		if !cafe_sdk_path.exists() {
 			return Ok(());
@@ -919,74 +923,67 @@ impl HostFilesystem {
 		let is_insensitive = File::open(Self::join_many(cafe_sdk_path, ["insensitivecheck.txt"]))
 			.await
 			.is_ok();
-		remove_file(capital_path).await?;
+		remove_file_sync(capital_path)?;
 		if is_insensitive {
 			return Ok(());
 		}
 
-		for directory in [
-			Self::join_many(cafe_sdk_path, ["data", "slc", "sys", "title"]),
-			Self::join_many(cafe_sdk_path, ["data", "slc", "usr", "title"]),
-			Self::join_many(cafe_sdk_path, ["data", "mlc", "sys", "title"]),
-			Self::join_many(cafe_sdk_path, ["data", "mlc", "usr", "title"]),
-		] {
-			if !directory.exists() {
-				// Don't need to patch directories that don't exist.
-				continue;
-			}
-
-			// Now we need to scan, and lowercase all title ids. So those are the
-			// next two sub dirs as they're split into `title/{upper}/{lower}`.
-			let mut iter = async_read_dir(&directory).await?;
-			let lossy_cafe_dir = cafe_sdk_path.as_os_str().to_string_lossy().to_string();
-			while let Ok(Some(entry)) = iter.next_entry().await {
-				let p = entry.path();
-				if !p.is_dir() || !p.exists() {
+		info!(
+			"Your Host OS is not case-insensitive for file-paths... ensuring CafeSDK is all lowercase, this may take awhile..."
+		);
+		let cafe_sdk_components = cafe_sdk_path.components().count();
+		let mut had_rename = true;
+		while had_rename {
+			had_rename = false;
+			for directory in [
+				Self::join_many(cafe_sdk_path, ["data", "slc", "sys", "title"]),
+				Self::join_many(cafe_sdk_path, ["data", "slc", "usr", "title"]),
+				Self::join_many(cafe_sdk_path, ["data", "mlc", "sys", "title"]),
+				Self::join_many(cafe_sdk_path, ["data", "mlc", "usr", "title"]),
+			] {
+				if !directory.exists() {
+					// Don't need to patch directories that don't exist.
 					continue;
 				}
 
-				let mut inner_iter = async_read_dir(&p).await?;
-				while let Ok(Some(inner_entry)) = inner_iter.next_entry().await {
-					let ip = inner_entry.path();
-					if !ip.is_dir() || !ip.exists() {
+				let mut iter = WalkDir::new(&directory)
+					.contents_first(false)
+					.follow_links(false)
+					.follow_root_links(false)
+					.into_iter();
+				while let Some(Ok(entry)) = iter.next() {
+					let p = entry.path();
+					if !p.exists() {
 						continue;
 					}
 
-					// Doing a lossy conversion is safe here cause we know all title ids are valid ascii + utf-8.
-					let new_path = ip
-						.as_os_str()
-						.to_string_lossy()
-						.trim_start_matches(&lossy_cafe_dir)
-						.to_ascii_lowercase();
-					if ip
-						.as_os_str()
-						.to_string_lossy()
-						.trim_start_matches(&lossy_cafe_dir)
-						!= new_path
-					{
+					let path_minus_cafe = p
+						.components()
+						.skip(cafe_sdk_components)
+						.collect::<PathBuf>();
+					let Some(path_as_utf8) = path_minus_cafe.as_os_str().to_str() else {
+						warn!(problematic_path = %p.display(), "Path in Cafe SDK directory is not UTF-8! This may cause errors fetching!");
+						continue;
+					};
+					let new_path = path_as_utf8.to_ascii_lowercase();
+					if path_as_utf8 != new_path {
 						let mut final_new_path = cafe_sdk_path.as_os_str().to_owned();
+						final_new_path.push("/");
 						final_new_path.push(&new_path);
 						let new = PathBuf::from(final_new_path);
-						rename(ip, new).await?;
-					}
-				}
 
-				let new_path = p
-					.as_os_str()
-					.to_string_lossy()
-					.trim_start_matches(&lossy_cafe_dir)
-					.to_ascii_lowercase();
-				if p.as_os_str()
-					.to_string_lossy()
-					.trim_start_matches(&lossy_cafe_dir)
-					!= new_path
-				{
-					let mut final_new_path = cafe_sdk_path.as_os_str().to_owned();
-					final_new_path.push(&new_path);
-					rename(p, final_new_path).await?;
+						if p.is_dir() {
+							Self::rename_dir(p, &new)?;
+							had_rename = true;
+						} else {
+							rename_sync(p, new)?;
+							had_rename = true;
+						}
+					}
 				}
 			}
 		}
+		info!("ensure CafeSDK path is now case-insensitive by renaming to all lowercase...");
 
 		Ok(())
 	}
@@ -1047,8 +1044,7 @@ impl HostFilesystem {
 
 		// Unmount any leftover discs....
 		if Self::join_many(cafe_sdk_path, ["data", "disc"]).exists() {
-			remove_dir_all(Self::join_many(cafe_sdk_path, ["data", "disc"]))
-				.await
+			remove_dir_all_sync(Self::join_many(cafe_sdk_path, ["data", "disc"]))
 				.map_err(FSError::IO)?;
 		}
 		// Manually mount in SysConfigTool.....
@@ -1063,8 +1059,7 @@ impl HostFilesystem {
 			Self::copy_dir(
 				&Self::join_many(&sctt_dir, [subpath]),
 				&Self::join_many(&disc_dir, [subpath]),
-			)
-			.await?;
+			)?;
 		}
 		// Manually capitilize the title id in app.xml, the normal PCFS
 		// tooling does this, even though it is case-insensitive, but for matching.
@@ -1078,9 +1073,9 @@ impl HostFilesystem {
 		Ok(())
 	}
 
-	async fn copy_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
+	fn copy_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
 		if !dest_path.exists() {
-			create_dir_all(dest_path).await?;
+			create_dir_all_sync(dest_path)?;
 		}
 		let new_path_as_str_bytes = dest_path.as_os_str().as_encoded_bytes();
 		let old_path_bytes = source_path.as_os_str().as_encoded_bytes();
@@ -1098,7 +1093,7 @@ impl HostFilesystem {
 				PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
 
 			if rpb.is_symlink() {
-				let mut resolved_path = read_link(&rpb).await?;
+				let mut resolved_path = read_link_sync(&rpb)?;
 				{
 					// If this symlink is a symlink to another path within the same
 					// directory, then rewrite it as well to start under our new directory.
@@ -1130,9 +1125,9 @@ impl HostFilesystem {
 					}
 				}
 			} else if rpb.is_file() {
-				copy_file(&rpb, &as_new_path).await?;
+				copy_file_sync(&rpb, &as_new_path)?;
 			} else if rpb.is_dir() {
-				create_dir_all(&as_new_path).await?;
+				create_dir_all_sync(&as_new_path)?;
 			}
 		}
 
@@ -1148,9 +1143,9 @@ impl HostFilesystem {
 	/// This 'rename' works by actually creating a new directory. Then
 	/// moving all the files over with rename. This is slow, but
 	/// works.
-	async fn rename_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
+	fn rename_dir(source_path: &Path, dest_path: &Path) -> Result<(), FSError> {
 		if !dest_path.exists() {
-			create_dir_all(dest_path).await?;
+			create_dir_all_sync(dest_path)?;
 		}
 		let new_path_as_str_bytes = dest_path.as_os_str().as_encoded_bytes();
 		let old_path_bytes = source_path.as_os_str().as_encoded_bytes();
@@ -1168,7 +1163,7 @@ impl HostFilesystem {
 				PathBuf::from(unsafe { OsString::from_encoded_bytes_unchecked(new_bytes) });
 
 			if rpb.is_symlink() {
-				let mut resolved_path = read_link(&rpb).await?;
+				let mut resolved_path = read_link_sync(&rpb)?;
 				{
 					// If this symlink is a symlink to another path within the same
 					// directory, then rewrite it as well to start under our new directory.
@@ -1209,18 +1204,19 @@ impl HostFilesystem {
 						should_remove = true;
 					}
 				}
+
 				// Remove the original link, we renamed this....
 				if should_remove {
-					remove_file(&rpb).await?;
+					remove_file_sync(&rpb)?;
 				}
 			} else if rpb.is_file() {
-				rename(&rpb, &as_new_path).await?;
+				rename_sync(&rpb, &as_new_path)?;
 			} else if rpb.is_dir() {
-				create_dir_all(&as_new_path).await?;
+				create_dir_all_sync(&as_new_path)?;
 			}
 		}
 		// Clean up after ourselves...
-		remove_dir_all(source_path).await?;
+		remove_dir_all_sync(source_path)?;
 
 		Ok(())
 	}
@@ -1238,7 +1234,7 @@ impl HostFilesystem {
 	async fn generate_eco_xml(cafe_os_path: &Path) -> Result<(), FSError> {
 		let mut eco_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "config"]);
 		if !eco_path.exists() {
-			create_dir_all(&eco_path).await.map_err(FSError::IO)?;
+			create_dir_all_sync(&eco_path).map_err(FSError::IO)?;
 		}
 		eco_path.push("eco.xml");
 
@@ -1280,7 +1276,7 @@ impl HostFilesystem {
 	async fn generate_wii_acct_xml(cafe_os_path: &Path) -> Result<(), FSError> {
 		let mut wii_path = Self::join_many(cafe_os_path, ["data", "slc", "sys", "proc", "prefs"]);
 		if !wii_path.exists() {
-			create_dir_all(&wii_path).await.map_err(FSError::IO)?;
+			create_dir_all_sync(&wii_path).map_err(FSError::IO)?;
 		}
 		wii_path.push("wii_acct.xml");
 

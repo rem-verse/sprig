@@ -73,21 +73,15 @@ pub async fn handle_rename(
 	};
 
 	let result = if request.command_info().user() == (0x1000_00F5, 0x1000_00FF) {
-		state
-			.host_filesystem
-			.copy(
-				fs_source_location.resolved_path(),
-				fs_dest_location.resolved_path(),
-			)
-			.await
+		state.host_filesystem.copy(
+			fs_source_location.resolved_path(),
+			fs_dest_location.resolved_path(),
+		)
 	} else {
-		state
-			.host_filesystem
-			.rename(
-				fs_source_location.resolved_path(),
-				fs_dest_location.resolved_path(),
-			)
-			.await
+		state.host_filesystem.rename(
+			fs_source_location.resolved_path(),
+			fs_dest_location.resolved_path(),
+		)
 	};
 
 	if let Err(cause) = result {

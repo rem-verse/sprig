@@ -103,10 +103,9 @@ pub async fn handle_boot(
 	let host_ip = get_host_bind_address().await;
 
 	let is_modern_bridge = is_modern_bridge(bridge_ip).await;
-	let serial_task_handle =
-		coalesce_serial_ports(bridge_ip, &serial_port_args.0, serial_port_args.1)
-			.await
-			.spawn_log_task();
+	let serial_task_handle = coalesce_serial_ports(&serial_port_args.0, serial_port_args.1)
+		.await
+		.spawn_log_task();
 
 	let (_info_request, setup_params, needs_pcfs) = validate_bridge_ready_for_booting(
 		is_modern_bridge,

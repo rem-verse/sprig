@@ -1,29 +1,22 @@
 use crate::{
 	SHOULD_LOG_JSON,
-	commands::argv_helpers::lease_fsemul_config_optionally,
 	exit_codes::{
 		ARGV_SERIAL_CONFLICTING_ARGUMENTS, SERIAL_PORT_CONNECTION_FAILURE,
 		SHOULD_NEVER_HAPPEN_FAILURE,
 	},
-	knobs::{
-		cli::SharedSerialPortFlags,
-		env::{BRIDGECTL_SERIAL_PORT, SESSION_DEBUG_OUT_PORT},
-	},
+	knobs::{cli::SharedSerialPortFlags, env::BRIDGECTL_SERIAL_PORT},
 	utils::add_context_to,
 };
 use cat_dev::serial::{AsyncSerialPort, SerialLines};
 use miette::miette;
-use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 use tokio::{
 	io::{AsyncBufRead, BufReader},
-	net::TcpStream,
 	signal::ctrl_c as ctrl_c_signal,
 	task::{Builder as TaskBuilder, JoinHandle},
+	time::sleep,
 };
 use tracing::{Instrument, debug, error, error_span, field::valuable, info, warn};
-
-/// The amount of times we'll try reconnecting to debug out.
-const DEBUG_OUT_RETRY_COUNT: usize = 10_usize;
 
 /// Determines if a positional argument that could be a path, or something
 /// not a path, should be interpreted as a path.
@@ -69,7 +62,6 @@ pub fn should_interpret_arg_as_port_path(arg: Option<&String>) -> bool {
 ///   for a serial port.
 /// - If we cannot open a handle/descriptor to the associated serial device.
 pub async fn coalesce_serial_ports(
-	mion_ip: Ipv4Addr,
 	serial_port_flags: &SharedSerialPortFlags,
 	serial_port_positional: Option<&PathBuf>,
 ) -> SerialLogger {
@@ -112,18 +104,7 @@ pub async fn coalesce_serial_ports(
 		} else if let Some(env) = BRIDGECTL_SERIAL_PORT.as_ref() {
 			env
 		} else {
-			let fsemul_port = lease_fsemul_config_optionally()
-				.await
-				.and_then(|config| config.get_debug_out_port());
-			// Connect to the debug out port.
-			return SerialLogger::new_from_debug_out_port(
-				mion_ip,
-				serial_port_flags
-					.debug_out_port()
-					.or(*SESSION_DEBUG_OUT_PORT)
-					.or(fsemul_port)
-					.unwrap_or(6001),
-			);
+			return SerialLogger::honk_shoo();
 		};
 
 	let port = match AsyncSerialPort::new(arg_to_take) {
@@ -166,9 +147,6 @@ pub async fn coalesce_serial_ports(
 
 /// A logger capable of reading logs from a 'serial port' style logger.
 pub struct SerialLogger {
-	/// A port to connect over `DEBUG_OUT` which just shoves serial logs as
-	/// raw bytes.
-	debug_out: Option<(Ipv4Addr, u16)>,
 	/// A wrapper around an actual physical connected serial port.
 	///
 	/// This is a tuple type of (Async Serial Port Stream, Path to Serial Port).
@@ -182,49 +160,54 @@ impl SerialLogger {
 	#[must_use]
 	pub const fn new_from_serial_port(port: AsyncSerialPort, path: PathBuf) -> Self {
 		Self {
-			debug_out: None,
 			serial_port: Some((port, path)),
 		}
 	}
 
-	/// Construct a logger based off a port to connect to `DEBUG_OUT`...
+	/// Construct a logger that does nothing but sleep...
 	#[must_use]
-	pub const fn new_from_debug_out_port(mion_ip: Ipv4Addr, port: u16) -> Self {
-		Self {
-			debug_out: Some((mion_ip, port)),
-			serial_port: None,
-		}
+	pub const fn honk_shoo() -> Self {
+		Self { serial_port: None }
+	}
+
+	#[must_use]
+	pub const fn has_serial_port(&self) -> bool {
+		self.serial_port.is_some()
 	}
 
 	/// Spawn a task that will watch for logs....
 	pub fn spawn_log_task(self) -> JoinHandle<()> {
 		if let Some((port, port_path)) = self.serial_port {
 			Self::spawn_serial_log_task(port, port_path)
-		} else if let Some((ip, port)) = self.debug_out {
-			Self::spawn_debug_out_task(ip, port)
 		} else {
-			unreachable!("No way to construct a serial logger without debug_out, or serial_port")
+			Self::spawn_sleep_task()
 		}
 	}
 
-	/// Spawn a task that reads serial logs from the debug out port over, and over.
+	/// Spawn a task that just sleeps forever.
 	#[allow(clippy::blocks_in_conditions)]
-	fn spawn_debug_out_task(ip: Ipv4Addr, port: u16) -> JoinHandle<()> {
+	fn spawn_sleep_task() -> JoinHandle<()> {
 		match TaskBuilder::new()
-			.name("bridgectl::serial_log::debug_out_watcher")
+			.name("bridgectl::serial_log::honk_shoo")
 			.spawn(async move {
-				tokio::select! {
-					 () = Self::do_remote_serial_connect_and_process(ip, port) => {}
-					 _ = ctrl_c_signal() => if SHOULD_LOG_JSON() {
-							info!(
-								id = "bridgectl::serial::debug_out_detected_ctrlc",
-								"ctrl-c has been hit, shutting down serial logger for DEBUG_OUT!",
-							);
-						} else {
-							info!(
-								"Ctrl-C has been detected as being hit! Shutting down serial logger for DEBUG_OUT!"
-							);
+				loop {
+					tokio::select! {
+						() = sleep(Duration::from_secs(u64::MAX)) => {}
+						_ = ctrl_c_signal() => {
+							if SHOULD_LOG_JSON() {
+								info!(
+									id = "bridgectl::serial::honk_shoo_detected_ctrlc",
+									"ctrl-c has been hit, shutting down empty serial logger!",
+								);
+							} else {
+								info!(
+									"Ctrl-C has been detected as being hit! Shutting down empty serial logger!"
+								);
+							}
+
+							break;
 						}
+					}
 				}
 			}) {
 			Ok(port) => port,
@@ -245,94 +228,6 @@ impl SerialLogger {
 				std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
 			}
 		}
-	}
-
-	/// Actually spawn a connection to a `DEBUG_OUT` port, and process any log
-	/// messages that come in.
-	async fn do_remote_serial_connect_and_process(ip: Ipv4Addr, port: u16) {
-		info!(
-			id = "bridgectl::serial::debug_out::start_connection",
-			"Connecting to MION DEBUG_OUT port..."
-		);
-		let mut stream_opt = None;
-
-		for _ in 0..DEBUG_OUT_RETRY_COUNT {
-			stream_opt =
-				match tokio::time::timeout(Duration::from_secs(30), TcpStream::connect((ip, port)))
-					.await
-				{
-					Ok(Ok(stream)) => Some(stream),
-					Ok(Err(cause)) => {
-						if SHOULD_LOG_JSON() {
-							warn!(
-								alternatives = valuable(&[
-									"You can always connect a USB to Serial Adapter to your cat-dev to get logs consistently",
-								]),
-								id = "bridgectl::serial::debug_out::connection_failure",
-								?cause,
-								"we could not connect to the Cat-Dev to listen for serial logs over DEBUG_OUT",
-							);
-						} else {
-							warn!(
-								alternatives = valuable(&[
-									"You can always connect a USB to Serial Adapter to your cat-dev to get logs consistently",
-								]),
-								?cause,
-								"we could not connect to the Cat-Dev to listen for serial logs over DEBUG_OUT",
-							);
-						}
-
-						None
-					}
-					Err(cause) => {
-						if SHOULD_LOG_JSON() {
-							warn!(
-								alternatives = valuable(&[
-									"You can always connect a USB to Serial Adapter to your cat-dev to get logs consistently",
-								]),
-								id = "bridgectl::serial::debug_out::connection_failure",
-								?cause,
-								"we could not connect to the Cat-Dev to listen for serial logs over DEBUG_OUT",
-							);
-						} else {
-							warn!(
-								alternatives = valuable(&[
-									"You can always connect a USB to Serial Adapter to your cat-dev to get logs consistently",
-								]),
-								?cause,
-								"we could not connect to the Cat-Dev to listen for serial logs over DEBUG_OUT",
-							);
-						}
-
-						None
-					}
-				};
-
-			if stream_opt.is_some() {
-				break;
-			}
-		}
-
-		let Some(stream) = stream_opt else {
-			info!(
-				id = "bridgectl::serial::debug_out::setup_connection",
-				"Failed to find debug out connection! Not trying again...."
-			);
-			return;
-		};
-
-		info!(
-			id = "bridgectl::serial::debug_out::setup_connection",
-			"Connected to DEBUG_OUT! Now streaming logs..."
-		);
-
-		Self::do_serial_read_loop(BufReader::new(stream))
-			.instrument(error_span!(
-				"bridgectl::serial::watch_debug_out",
-				debug_out.ip = %ip,
-				debug_out.port = port,
-			))
-			.await;
 	}
 
 	/// Spawn a task that reads from a physical serial port over, and over again.

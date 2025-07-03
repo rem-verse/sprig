@@ -14,11 +14,14 @@ pub enum SdioControlMessage {
 	Printf(Bytes, String),
 	/// TODO(mythra): Currently unknown, mostly used for scientist.
 	Unknown(Vec<u8>),
+	/// TODO(mythra): also very unknown, mostly used for debugging.
+	UnknownTwo(Vec<u8>),
 }
 
 static SDIO_CONTROL_MESSAGE_VARIANTS: &[VariantDef<'static>] = &[
 	VariantDef::new("Printf", Fields::Unnamed(2)),
 	VariantDef::new("Unknown", Fields::Unnamed(1)),
+	VariantDef::new("UnknownTwo", Fields::Unnamed(3)),
 ];
 
 impl Enumerable for SdioControlMessage {
@@ -30,6 +33,7 @@ impl Enumerable for SdioControlMessage {
 		match self {
 			SdioControlMessage::Printf(_, _) => Variant::Static(&SDIO_CONTROL_MESSAGE_VARIANTS[0]),
 			SdioControlMessage::Unknown(_) => Variant::Static(&SDIO_CONTROL_MESSAGE_VARIANTS[1]),
+			SdioControlMessage::UnknownTwo(_) => Variant::Static(&SDIO_CONTROL_MESSAGE_VARIANTS[2]),
 		}
 	}
 }
@@ -47,7 +51,7 @@ impl Valuable for SdioControlMessage {
 					Valuable::as_value(&buff),
 				]);
 			}
-			SdioControlMessage::Unknown(buff) => {
+			SdioControlMessage::Unknown(buff) | SdioControlMessage::UnknownTwo(buff) => {
 				visitor.visit_unnamed_fields(&[Valuable::as_value(&buff)]);
 			}
 		}
@@ -92,7 +96,7 @@ impl TryFrom<&SdioControlMessageRequest> for Bytes {
 					SdioControlMessage::Printf(_, buff) => {
 						size += buff.len();
 					}
-					SdioControlMessage::Unknown(un) => {
+					SdioControlMessage::Unknown(un) | SdioControlMessage::UnknownTwo(un) => {
 						size += un.len();
 					}
 				}
@@ -118,6 +122,11 @@ impl TryFrom<&SdioControlMessageRequest> for Bytes {
 				}
 				SdioControlMessage::Unknown(buff) => {
 					final_buff.put_u16_le(9);
+					final_buff.extend(buff);
+					break;
+				}
+				SdioControlMessage::UnknownTwo(buff) => {
+					final_buff.put_u16_le(8);
 					final_buff.extend(buff);
 					break;
 				}
@@ -182,6 +191,11 @@ impl TryFrom<Bytes> for SdioControlMessageRequest {
 				let unknown_data = value.slice(base_offset + 2..).to_vec();
 				read_size += unknown_data.len();
 				messages.push(SdioControlMessage::Unknown(unknown_data));
+				break;
+			} else if message_ty == 8 {
+				let unknown_data = value.slice(base_offset + 2..).to_vec();
+				read_size += unknown_data.len();
+				messages.push(SdioControlMessage::UnknownTwo(unknown_data));
 				break;
 			}
 

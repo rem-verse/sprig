@@ -31,6 +31,12 @@ pub(super) async fn handle_message(
 					"Unknown message type == 9 for SDIO, Not Sure How to Respond?",
 				);
 			}
+			SdioControlMessage::UnknownTwo(buff) => {
+				debug!(
+					buff = format!("{:02X?}", buff),
+					"Unknown message type == 8 for SDIO, Not Sure How to Respond?",
+				);
+			}
 		}
 	}
 

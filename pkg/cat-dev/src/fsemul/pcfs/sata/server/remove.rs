@@ -84,7 +84,6 @@ pub async fn handle_removal(
 		if let Err(cause) = state
 			.host_filesystem()
 			.rename(fs_location.resolved_path(), &new_path)
-			.await
 		{
 			error!(
 			  ?cause,

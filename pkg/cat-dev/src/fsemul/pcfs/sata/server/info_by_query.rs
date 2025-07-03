@@ -69,7 +69,7 @@ pub async fn handle_get_info_by_query(
 			&& !resolved_path.exists()
 		{
 			// Ignore any errors, file details or otherwise will properly error out.
-			_ = fs.create_directory(resolved_path).await;
+			_ = fs.create_directory(resolved_path);
 		}
 	}
 
