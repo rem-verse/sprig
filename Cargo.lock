@@ -238,14 +238,14 @@ dependencies = [
 
 [[package]]
 name = "bridgectl"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "cat-dev",
  "clap",
  "fnv",
  "futures",
  "libc",
- "log 0.0.11",
+ "log 0.0.12",
  "mac_address",
  "miette",
  "terminal_size",
@@ -280,7 +280,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cat-dev"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "aes",
  "bitflags",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "catlog"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "tokio",
 ]
@@ -517,13 +517,13 @@ dependencies = [
 
 [[package]]
 name = "dbg-generate-sata-wal-from-pcap"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bytes",
  "cat-dev",
  "clap",
  "fnv",
- "log 0.0.11",
+ "log 0.0.12",
  "miette",
  "rtshark",
  "tokio",
@@ -599,7 +599,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "findbridge"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "cat-dev",
  "mac_address",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "getbridgeconfig"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "cat-dev",
  "tokio",
@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "console-subscriber",
  "miette",
@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "mionparamspace"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "cat-dev",
  "time",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "mionps"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "cat-dev",
  "time",
@@ -1476,7 +1476,7 @@ dependencies = [
 
 [[package]]
 name = "pcfsserver"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "cat-dev",
  "tokio",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "setbridgeconfig"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "cat-dev",
  "tokio",

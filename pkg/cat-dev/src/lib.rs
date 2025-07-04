@@ -4,6 +4,7 @@
   // modules themselves.
 	clippy::module_name_repetitions,
 )]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod errors;
 pub mod fsemul;

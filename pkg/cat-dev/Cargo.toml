@@ -10,6 +10,7 @@ version.workspace = true
 [features]
 default = ["clients", "serial", "servers"]
 clients = ["bitflags", "form_urlencoded", "local-ip-address", "mac_address", "network-interface", "rand", "reqwest", "tower", "wide"]
+docsrs = []
 scientists = []
 serial = ["libc", "pin-project-lite", "windows"]
 servers = ["bitflags", "local-ip-address", "rand", "sysinfo", "tower", "wide"]
@@ -53,6 +54,6 @@ windows = { version = "^0.61.3", default-features = false, features=["Win32_Devi
 tempfile = "^3.20.0"
 
 [package.metadata.docs.rs]
-features = ["clients", "scientists", "serial", "servers"]
+features = ["clients", "docsrs", "scientists", "serial", "servers"]
 rustc-args = ["--cfg", "tokio_unstable", "--cfg", "tracing_unstable"]
 rustdoc-args = ["--cfg", "tokio_unstable", "--cfg", "tracing_unstable"]
