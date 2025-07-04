@@ -34,7 +34,7 @@ cp ../../../LICENSE ./
 cd ../
 echo "Done! Building...."
 
-pkgbuild --root ./working-dir/ --identifier "dev.rem-verse.sprig" --version "0.0.11" --install-location "/usr/local/bin" sprig.pkg
+pkgbuild --root ./working-dir/ --identifier "dev.rem-verse.sprig" --version "0.0.12" --install-location "/usr/local/bin" sprig.pkg
 
 echo "Done! Preparing Distribution Directory..."
 mkdir working-dir-pkg
