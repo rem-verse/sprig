@@ -21,7 +21,7 @@ jobs:
       - name: Install Rust
         run: rustup update stable
       - name: Run Check
-        run: cargo hack check --exclude-features docsrs --feature-powerset
+        run: cargo hack check --feature-powerset
   test:
     name: Run Non Doc Tests on All Feature Combinations
     strategy:
@@ -36,7 +36,7 @@ jobs:
       - name: Install Rust
         run: rustup update stable
       - name: Run Nextest
-        run: cargo hack nextest run --exclude-features docsrs --feature-powerset --no-tests=pass
+        run: cargo hack nextest run --feature-powerset --no-tests=pass
         env:
           RUST_BACKTRACE: full
   doc-test:
@@ -53,6 +53,6 @@ jobs:
       - name: Install Rust
         run: rustup update stable
       - name: Run Doc Tests (cat-dev)
-        run: cargo hack test --doc --exclude-features docsrs --feature-powerset --manifest-path "pkg/cat-dev/Cargo.toml"
+        run: cargo hack test --doc --feature-powerset --manifest-path "pkg/cat-dev/Cargo.toml"
         env:
           RUST_BACKTRACE: full
