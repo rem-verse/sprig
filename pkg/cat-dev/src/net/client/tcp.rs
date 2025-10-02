@@ -815,8 +815,9 @@ impl TCPClient {
 
 		let mut ids = FnvHashSet::default();
 		self.streams
-			.scan_async(|stream_id, _stream| {
+			.iter_async(|stream_id, _stream| {
 				ids.insert(*stream_id);
+				true
 			})
 			.await;
 
@@ -865,8 +866,9 @@ impl TCPClient {
 		} else {
 			let mut ids = FnvHashSet::default();
 			self.streams
-				.scan_async(|stream_id, _stream| {
+				.iter_async(|stream_id, _stream| {
 					ids.insert(*stream_id);
+					true
 				})
 				.await;
 
@@ -900,8 +902,9 @@ impl TCPClient {
 	) -> FnvHashMap<u64, Option<Response>> {
 		let mut ids = FnvHashSet::default();
 		self.streams
-			.scan_async(|stream_id, _stream| {
+			.iter_async(|stream_id, _stream| {
 				ids.insert(*stream_id);
+				true
 			})
 			.await;
 
@@ -931,8 +934,9 @@ impl TCPClient {
 
 		let mut ids = FnvHashSet::default();
 		self.streams
-			.scan_async(|stream_id, _stream| {
+			.iter_async(|stream_id, _stream| {
 				ids.insert(*stream_id);
+				true
 			})
 			.await;
 
@@ -1118,8 +1122,8 @@ impl TCPClient {
 	) -> Result<bool, CatBridgeError> {
 		tcp_stream.set_nodelay(true).map_err(NetworkError::IO)?;
 
-		if let Some(mut handle) = on_stream_begin_handler {
-			if !handle
+		if let Some(mut handle) = on_stream_begin_handler
+			&& !handle
 				.call(RequestStreamEvent::new_with_state(
 					send_channel.clone(),
 					*remote_address,
@@ -1127,10 +1131,9 @@ impl TCPClient {
 					(),
 				))
 				.await?
-			{
-				trace!("handler failed on stream begin hook");
-				return Ok(true);
-			}
+		{
+			trace!("handler failed on stream begin hook");
+			return Ok(true);
 		}
 
 		Ok(false)
@@ -1360,10 +1363,10 @@ impl TCPClient {
 	) -> (u64, Option<Response>) {
 		if let Some(mut stream) = self.streams.get_async(&stream_id).await {
 			while let Some((opt_req_id, response)) = stream.response_channel_mut().recv().await {
-				if let Some(got_req_id) = opt_req_id {
-					if got_req_id == request_id {
-						return (stream_id, Some(response));
-					}
+				if let Some(got_req_id) = opt_req_id
+					&& got_req_id == request_id
+				{
+					return (stream_id, Some(response));
 				}
 			}
 
@@ -1381,11 +1384,11 @@ impl TCPClient {
 			return Err(CommonNetClientNetworkError::NotConnectedToServer);
 		}
 
-		if !self.streams.contains(&active_sid) {
+		if !self.streams.contains_async(&active_sid).await {
 			let mut oldest_stream = None;
 
 			self.streams
-				.scan_async(|stream_id, stream| {
+				.iter_async(|stream_id, stream| {
 					if let Some((_strm_id, strm_created_at)) = oldest_stream {
 						if stream.opened_at() < strm_created_at {
 							_ = oldest_stream.insert((*stream_id, stream.opened_at()));
@@ -1393,6 +1396,7 @@ impl TCPClient {
 					} else {
 						_ = oldest_stream.insert((*stream_id, stream.opened_at()));
 					}
+					true
 				})
 				.await;
 		}
@@ -1461,8 +1465,9 @@ impl Valuable for TCPClient {
 
 	fn visit(&self, visitor: &mut dyn Visit) {
 		let mut valuable_map = FnvHashMap::default();
-		self.streams.scan(|stream_id, stream| {
+		self.streams.iter_sync(|stream_id, stream| {
 			valuable_map.insert(*stream_id, stream.to_valuable());
+			true
 		});
 
 		visitor.visit_named_fields(&NamedValues::new(

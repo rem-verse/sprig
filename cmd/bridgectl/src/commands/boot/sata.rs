@@ -5,10 +5,8 @@
 //! level emulation.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
 	knobs::env::PCFS_OVERRIDE_LOAD_BEARING_SLEEP_MS,
-	utils::add_context_to,
 };
 use cat_dev::{
 	fsemul::{
@@ -17,7 +15,6 @@ use cat_dev::{
 	},
 	net::server::TCPServer,
 };
-use miette::miette;
 use std::{net::Ipv4Addr, path::PathBuf};
 use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};
 use tracing::{error, info};
@@ -57,21 +54,11 @@ pub async fn serve_sata(
 	{
 		Ok(srv) => srv,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::sata_bind_failure",
-					?cause,
-					"failed to start server for PCFS Sata Emulation"
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Failed to start server for PCFS Sata Emulation"),
-						[cause.into()].into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::boot::sata_bind_failure",
+				?cause,
+				"failed to start server for PCFS Sata Emulation"
+			);
 
 			std::process::exit(BOOT_COULD_NOT_CONNECT);
 		}
@@ -88,33 +75,19 @@ fn spawn_sata(sata_emulator: TCPServer<PCFSServerState>) {
 		.spawn(async move {
 			tokio::select! {
 				_res = sata_emulator.bind() => {}
-				_ = ctrl_c_signal() => if SHOULD_LOG_JSON() {
+				_ = ctrl_c_signal() => {
 					info!(
 						id = "bridgectl::boot::sata_detected_ctrlc",
 						"ctrl-c has been hit, shutting down PCFS over sata",
 					);
-				} else {
-					info!(
-						"Ctrl-C has been detected as being hit! Shutting down sata!"
-					);
 				}
 			}
 		}) {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::boot::pcfs_sata_spawn_failure",
-				?cause,
-				"failed to spawn task to serve pcfs sata data to mion"
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("Failed to spawn task to serve PCFS Sata data to MION!"),
-					[miette!("{cause:?}")].into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::boot::pcfs_sata_spawn_failure",
+			?cause,
+			"failed to spawn task to serve pcfs sata data to mion"
+		);
 
 		std::process::exit(BOOT_COULD_NOT_SPAWN);
 	}

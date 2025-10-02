@@ -6,12 +6,10 @@
 //! on multiple unique ports.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	commands::utils::{PacketOnPort, PacketsWithDataOnPort, validate_pcap_path_constraints},
 	exit_codes::{
 		PADLOG_CANT_CREATE_LOG, PADLOG_FLUSH_FAILURE, PADLOG_NAGLE_FAILURE, PADLOG_WRITE_FAILURE,
 	},
-	utils::add_context_to,
 };
 use bytes::{Buf, Bytes, BytesMut};
 use cat_dev::{
@@ -25,7 +23,6 @@ use cat_dev::{
 	net::models::{Endianness, NagleGuard},
 };
 use fnv::FnvHashMap;
-use miette::miette;
 use std::{
 	cmp::Ordering as CompareOrdering,
 	collections::{VecDeque, hash_map::Entry},
@@ -382,24 +379,12 @@ fn process_request(
 		let parsed_data = match SataRequest::<SataOpenFilePacketBody>::try_from(packet.clone()) {
 			Ok(d) => d,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						?cause,
-						id = "dgswfp::generate::open_file_parse_failure",
-						packet = format!("{packet:02x?}"),
-						"Failed to parse open file request, so cannot determine correct nagle length!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Failed to parse open file request, so cannot determine correct nagle length!"
-							),
-							[cause.into()].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::generate::open_file_parse_failure",
+					packet = format!("{packet:02x?}"),
+					"Failed to parse open file request, so cannot determine correct nagle length!",
+				);
 
 				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
@@ -415,24 +400,12 @@ fn process_request(
 		let parsed_data = match SataRequest::<SataReadFilePacketBody>::try_from(packet.clone()) {
 			Ok(d) => d,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						?cause,
-						id = "dgswfp::generate::read_file_parse_failure",
-						packet = format!("{packet:02x?}"),
-						"Failed to parse read file request, so cannot determine correct nagle length!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Failed to parse read file request, so cannot determine correct nagle length!"
-							),
-							[cause.into()].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::generate::read_file_parse_failure",
+					packet = format!("{packet:02x?}"),
+					"Failed to parse read file request, so cannot determine correct nagle length!",
+				);
 
 				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
@@ -452,24 +425,12 @@ fn process_request(
 		let parsed_data = match SataRequest::<SataWriteFilePacketBody>::try_from(packet.clone()) {
 			Ok(d) => d,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						?cause,
-						id = "dgswfp::generate::write_file_parse_failure",
-						packet = format!("{packet:02x?}"),
-						"Failed to parse write file request, so cannot determine correct nagle length!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Failed to parse write file request, so cannot determine correct nagle length!"
-							),
-							[cause.into()].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::generate::write_file_parse_failure",
+					packet = format!("{packet:02x?}"),
+					"Failed to parse write file request, so cannot determine correct nagle length!",
+				);
 
 				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
@@ -484,30 +445,19 @@ fn process_request(
 		let parsed_data = match SataRequest::<SataPingPacketBody>::try_from(packet.clone()) {
 			Ok(d) => d,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						?cause,
-						id = "dgswfp::generate::ping_parse_failure",
-						packet = format!("{packet:02x?}"),
-						"Failed to parse ping request, so cannot determine correct nagle length!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Failed to parse ping request, so cannot determine correct nagle length!"
-							),
-							[cause.into()].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::generate::ping_parse_failure",
+					packet = format!("{packet:02x?}"),
+					"Failed to parse ping request, so cannot determine correct nagle length!",
+				);
 
 				std::process::exit(PADLOG_NAGLE_FAILURE);
 			}
 		};
 
 		info!(
+			id = "dgswfp::padlog::update_read_write_size",
 			read_size = parsed_data.command_info().user().0,
 			write_size = parsed_data.command_info().user().1,
 			"Updating Connection Read/Write Size",
@@ -524,29 +474,13 @@ async fn get_log_writer(log_path: &Path) -> BufWriter<File> {
 	let file = match File::create_new(log_path).await {
 		Ok(fd) => fd,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					?cause,
-					id = "dgswfp::padlog::cannot_open_log",
-					log.path = %log_path.display(),
-					"Could not create destination log file!",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("could not create destination log file"),
-						[
-							miette!("{cause:?}"),
-							miette!(
-								"Please ensure the LOG location you specified is correct, and does not exist: {}",
-								log_path.display(),
-							),
-						]
-						.into_iter(),
-					),
-				);
-			}
+			error!(
+				?cause,
+				id = "dgswfp::padlog::cannot_open_log",
+				log.path = %log_path.display(),
+				help = "Please ensure the LOG location you specified is correct, and does not exist.",
+				"Could not create destination log file!",
+			);
 
 			std::process::exit(PADLOG_CANT_CREATE_LOG);
 		}
@@ -557,21 +491,11 @@ async fn get_log_writer(log_path: &Path) -> BufWriter<File> {
 
 async fn do_flush(writer: &mut BufWriter<File>) {
 	if let Err(cause) = writer.flush().await {
-		if SHOULD_LOG_JSON() {
-			error!(
-				?cause,
-				id = "dgswfp::padlog::cannot_flush_log_file",
-				"Could not write all data to our log file, may be corrupt!",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("could not write all data to log file, may be corrupt"),
-					[miette!("{cause:?}"),].into_iter(),
-				),
-			);
-		}
+		error!(
+			?cause,
+			id = "dgswfp::padlog::cannot_flush_log_file",
+			"Could not write all data to our log file, may be corrupt!",
+		);
 
 		std::process::exit(PADLOG_FLUSH_FAILURE);
 	}
@@ -579,21 +503,11 @@ async fn do_flush(writer: &mut BufWriter<File>) {
 
 fn check_write(result: Result<(), AsyncIOError>) {
 	if let Err(cause) = result {
-		if SHOULD_LOG_JSON() {
-			error!(
-				?cause,
-				id = "dgswfp::padlog::cannot_write_to_buffer",
-				"Could not write data to our in memory buffer to later flush to a file, OOM?",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("We couldn't write data to our buffered writer, to then flush? OOM?"),
-					[miette!("{cause:?}"),].into_iter(),
-				),
-			);
-		}
+		error!(
+			?cause,
+			id = "dgswfp::padlog::cannot_write_to_buffer",
+			"Could not write data to our in memory buffer to later flush to a file, OOM?",
+		);
 
 		std::process::exit(PADLOG_WRITE_FAILURE);
 	}

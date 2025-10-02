@@ -50,7 +50,6 @@ mod sdio;
 mod utils;
 
 use crate::{
-	SHOULD_LOG_JSON,
 	commands::{
 		argv_helpers::{
 			coalesce_serial_ports, get_atapi_port, get_host_bind_address, get_pcfs_sata_port,
@@ -82,7 +81,6 @@ use cat_dev::mion::{
 	cgis::{power_on, power_on_v2},
 	proto::cgis::SetupParameters,
 };
-use miette::miette;
 use std::{net::Ipv4Addr, path::PathBuf};
 use tokio::task::JoinHandle;
 use tracing::{error, field::valuable, info, warn};
@@ -207,49 +205,39 @@ async fn boot_modern_without_pcfs(
 	serial_handle: JoinHandle<()>,
 ) {
 	if needs_pcfs {
-		if SHOULD_LOG_JSON() {
-			warn!(
-				id = "bridgectl::boot::override_pcfs",
-				reason = "manually_requested",
-				"overriding PCFS boot mode, the cat-dev will still have an error light but should at least boot to SystemConfigTool",
-			);
-		} else {
-			warn!(
-				reason = "manually_requested",
-				"Overriding PCFS boot mode, the cat-dev will still have an error light but should at least boot to SystemConfigTool",
-			);
-		}
+		warn!(
+			id = "bridgectl::boot::override_pcfs",
+			reason = "manually_requested",
+			"overriding PCFS boot mode, the cat-dev will still have an error light but should at least boot to SystemConfigTool",
+		);
 	}
 
 	match power_on_v2(bridge_ip, host_ip, None, None, false).await {
 		Ok(result_code) => {
 			if result_code {
-				info!("Successfully powered on MION!");
+				info!(
+					id = "bridgectl::boot::power_on_v2",
+					"Successfully powered on MION!",
+				);
 				_ = serial_handle.await;
 			} else {
-				error!("Failed to boot cat-dev bridge! Please reach out for support!");
+				error!(
+					id = "bridgectl::boot::power_on_v2_failure",
+					"Failed to boot cat-dev bridge! Please reach out for support!",
+				);
 				std::process::exit(BOOT_CGI_FAILURE);
 			}
 		}
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::failed_to_boot_device",
-					bridge.ip = %bridge_ip,
-					?cause,
-					suggestions = valuable(&[
-						"Please file an issue, and reach out!"
-					]),
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					miette!(
-						help = "PLEASE PLEASE PLEASE FILE AN ISSUE!",
-						"Failure to perform non PCFS boot!!! THIS IS STILL EARLY !!! PLEASE FILE AN ISSUE!\n {cause:?}",
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::boot::failed_to_boot_device",
+				bridge.ip = %bridge_ip,
+				?cause,
+				help = valuable(&[
+					"Please file an issue, and reach out!"
+				]),
+				"Failed to call power_on_v2 api!",
+			);
 
 			std::process::exit(BOOT_CGI_FAILURE);
 		}
@@ -266,32 +254,29 @@ async fn boot_legacy_without_pcfs(bridge_ip: Ipv4Addr, serial_handle: JoinHandle
 	match power_on(bridge_ip).await {
 		Ok(result_code) => {
 			if result_code {
-				info!("Successfully powered on MION!");
+				info!(
+					id = "bridgectl::boot::power_on",
+					"Successfully powered on MION!",
+				);
 				_ = serial_handle.await;
 			} else {
-				error!("Failed to boot cat-dev bridge! Please reach out for support!");
+				error!(
+					id = "bridgectl::boot::power_on_failure",
+					"Failed to boot cat-dev bridge! Please reach out for support!",
+				);
 				std::process::exit(BOOT_CGI_FAILURE);
 			}
 		}
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::legacy::failed_to_boot_device",
-					bridge.ip = %bridge_ip,
-					?cause,
-					suggestions = valuable(&[
-						"Please file an issue, and reach out!"
-					]),
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					miette!(
-						help = "PLEASE PLEASE PLEASE FILE AN ISSUE!",
-						"Failure to perform non PCFS boot!!! THIS IS STILL EARLY !!! PLEASE FILE AN ISSUE!\n {cause:?}",
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::boot::legacy::failed_to_boot_device",
+				bridge.ip = %bridge_ip,
+				?cause,
+				help = valuable(&[
+					"Please file an issue, and reach out!"
+				]),
+				"Failed to call power_on api!",
+			);
 
 			std::process::exit(BOOT_CGI_FAILURE);
 		}
@@ -307,16 +292,12 @@ fn get_will_use_sata(disable_sata_cli: bool) -> bool {
 	};
 
 	if !result {
-		if SHOULD_LOG_JSON() {
-			warn!(
-				id = "bridgectl::boot::disabled_sata_port",
-				notes = valuable(&[
-					"All File I/O Operations should be expected to be slower, and not as performant.",
-				]),
-			);
-		} else {
-			warn!("The SATA server was disabled, all file operations will be noticeably slower.");
-		}
+		warn!(
+			id = "bridgectl::boot::disabled_sata_port",
+			notes = valuable(&[
+				"All File I/O Operations should be expected to be slower, and not as performant.",
+			]),
+		);
 	}
 
 	result

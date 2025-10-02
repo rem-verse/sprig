@@ -14,7 +14,6 @@
 pub mod commands;
 pub mod exit_codes;
 pub mod knobs;
-pub mod utils;
 
 use crate::{
 	commands::{
@@ -41,31 +40,18 @@ use crate::{
 		cli::{CliArguments, MionSubcommands, Subcommands},
 		env::USE_JSON_OUTPUT,
 	},
-	utils::add_context_to,
 };
-use clap::{
-	Parser,
-	error::{Error as ClapError, ErrorKind as ClapErrorKind},
+use clap::{Parser, error::ErrorKind as ClapErrorKind};
+use rm_lisa::{
+	display::{SuperConsole, SuperConsoleFlushGuard, renderers::JSONConsoleRenderer},
+	initialize_logging, initialize_with_console,
 };
-use log::install_logging_handlers;
-use miette::{IntoDiagnostic, miette};
-use std::path::PathBuf;
+use std::{
+	io::{Stderr, Stdout},
+	path::PathBuf,
+	sync::Arc,
+};
 use tracing::{error, info};
-
-/// Whether or not we're logging in JSON.
-static mut USE_JSON: bool = false;
-
-/// Whether or not we should log in JSON.
-///
-/// Wrapper around the "unsafe" static mutable. This is guaranteed to be
-/// safe as it's initialized as the very first thing to be used in the
-/// program, and guaranteed to not change after that.
-#[allow(non_snake_case)]
-#[inline]
-#[must_use]
-pub fn SHOULD_LOG_JSON() -> bool {
-	unsafe { USE_JSON }
-}
 
 #[allow(
 	// Most of this is just farming out to subcommands which can't be shorter.
@@ -73,14 +59,12 @@ pub fn SHOULD_LOG_JSON() -> bool {
 )]
 #[tokio::main]
 async fn main() {
-	let (argv, use_json) = bootstrap_cli();
-	unsafe {
-		USE_JSON = use_json;
-	}
+	let (argv, render_guard) = bootstrap_cli();
 
 	if argv.help || argv.commands.is_none() || matches!(argv.commands, Some(Subcommands::Help {})) {
 		let should_error = !argv.help && argv.commands.is_none();
 		handle_help(argv.commands);
+		std::mem::drop(render_guard);
 		std::process::exit(if should_error {
 			ARGV_NO_COMMAND_SPECIFIED
 		} else {
@@ -89,19 +73,12 @@ async fn main() {
 	}
 
 	let Some(sub_command) = argv.commands else {
-		if use_json {
-			error!(
-				id = "bridgectl::help::internal",
-				cause = "Didn't call help even when subcommands was none?"
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				miette!(
-					"internal error: Failed to specify a single command, and didn't call `help` handler?"
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::help::internal",
+			cause = "Didn't call help even when subcommands was none?"
+		);
+
+		std::mem::drop(render_guard);
 		std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
 	};
 
@@ -386,7 +363,7 @@ async fn main() {
 	}
 }
 
-fn bootstrap_cli() -> (CliArguments, bool) {
+fn bootstrap_cli() -> (CliArguments, SuperConsoleFlushGuard<Stdout, Stderr>) {
 	let args_opt = CliArguments::try_parse();
 
 	let use_json_cli = args_opt.as_ref().map_or_else(
@@ -408,64 +385,63 @@ fn bootstrap_cli() -> (CliArguments, bool) {
 	);
 	let use_json = *USE_JSON_OUTPUT || use_json_cli;
 
-	if let Err(cause) = install_logging_handlers(use_json) {
-		// We have to use a custom panic script here, because logging isn't setup yet.
-		if use_json {
-			println!(
-				r#"{{"id": "bridgectl::logging::install_failure", "inner_display_error": "{}", "message": "Failed to install the logging handlers!"}}"#,
-				format!("{cause:?}").replace('"', "\\\"")
-			);
-		} else {
-			println!("Failed to install the logging handler to setup logging:\n{cause:?}");
+	let guard: SuperConsoleFlushGuard<Stdout, Stderr>;
+	if use_json {
+		match initialize_with_console(SuperConsole::new_preselected_renderers(
+			"bctl",
+			Arc::new(JSONConsoleRenderer::new()),
+			Arc::new(JSONConsoleRenderer::new()),
+		)) {
+			Ok(console) => {
+				guard = SuperConsoleFlushGuard::new(console);
+			}
+			Err(cause) => {
+				println!(
+					r#"{{"id": "bridgectl::logging::install_failure", "inner_display_error": "{}", "message": "Failed to install the logging handlers!"}}"#,
+					format!("{cause:?}")
+						.replace('"', "\\\"")
+						.replace('\n', "  ")
+				);
+
+				std::process::exit(LOGGING_HANDLER_INSTALL_FAILURE);
+			}
 		}
-		std::process::exit(LOGGING_HANDLER_INSTALL_FAILURE);
+	} else {
+		match initialize_logging("bctl") {
+			Ok(console) => {
+				guard = SuperConsoleFlushGuard::new(console);
+			}
+			Err(cause) => {
+				// We have to use a custom panic script here, because logging isn't setup yet.
+				println!("Failed to install the logging handler to setup logging:\n{cause:?}");
+				std::process::exit(LOGGING_HANDLER_INSTALL_FAILURE);
+			}
+		}
 	}
 
 	match args_opt {
-		Ok(args) => (args, use_json),
+		Ok(args) => (args, guard),
 		Err(cause) => {
 			if cause.kind() == ClapErrorKind::DisplayVersion {
-				if use_json {
-					info!(
-						id = "bridgectl::cli::print_version",
-						version = format!(
-							"{} ({})",
-							format!("{}", cause.render()).trim(),
-							option_env!("BRIDGECTL_BUILD").unwrap_or("unknown")
-						),
-					);
-				} else {
-					info!(
-						"{}",
-						format!(
-							"{} ({})",
-							format!("{}", cause.render()).trim(),
-							option_env!("BRIDGECTL_BUILD").unwrap_or("unknown")
-						),
-					);
-				}
+				info!(
+					id = "bridgectl::cli::print_version",
+					"{} ({})",
+					format!("{}", cause.render()).trim(),
+					option_env!("BRIDGECTL_BUILD").unwrap_or("unknown")
+				);
 
+				std::mem::drop(guard);
 				std::process::exit(0);
 			}
 
-			if use_json {
-				error!(
-					id = "bridgectl::cli::arg_parse_failure",
-					error.kind = %cause.kind(),
-					error.context = ?cause.context().map(|(kind, value)| format!("{kind}: {value}")).collect::<Vec<String>>(),
-					error.rendered = %cause.render(),
-					"Failed parsing CLI arguments"
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						Err::<(), ClapError>(cause).into_diagnostic().unwrap_err(),
-						[miette!("Failed parsing CLI arguments!")].into_iter(),
-					),
-				);
-			}
-
+			error!(
+				id = "bridgectl::cli::arg_parse_failure",
+				error.kind = %cause.kind(),
+				error.context = ?cause.context().map(|(kind, value)| format!("{kind}: {value}")).collect::<Vec<String>>(),
+				error.rendered = %cause.render(),
+				"Failed parsing CLI arguments"
+			);
+			std::mem::drop(guard);
 			std::process::exit(ARGV_PARSE_FAILURE);
 		}
 	}

@@ -184,7 +184,7 @@ pub async fn pcfs_sata_server(
 	)
 	.await?;
 
-	let mut wal = match sata_wal_location {
+	let wal = match sata_wal_location {
 		Some(p) => WriteAheadLog::new(p).ok(),
 		None => None,
 	};
@@ -209,22 +209,7 @@ pub async fn pcfs_sata_server(
 		server.layer_on_stream_end(WALEndStreamLayer(w.clone()))?;
 	}
 
-	if let Some(w) = wal.take() {
-		server.layer_initial_service(
-			ServiceBuilder::new()
-				.layer(RequestIDLayer)
-				.layer(StreamIDLayer)
-				.layer(SataConnectionFlagsLayer)
-				.layer(WALMessageLayer(w)),
-		);
-	} else {
-		server.layer_initial_service(
-			ServiceBuilder::new()
-				.layer(RequestIDLayer)
-				.layer(StreamIDLayer)
-				.layer(SataConnectionFlagsLayer),
-		);
-	}
+	create_initial_server_layer(&mut server, wal, trace_during_debug);
 
 	server.set_chunk_output_at_size(if fully_disable_chunk_override {
 		None
@@ -240,6 +225,44 @@ pub async fn pcfs_sata_server(
 	});
 
 	Ok(server)
+}
+
+fn create_initial_server_layer(
+	server: &mut TCPServer<PCFSServerState>,
+	mut wal: Option<WriteAheadLog>,
+	trace_during_debug: bool,
+) {
+	if let Some(w) = wal.take() {
+		if trace_during_debug {
+			server.layer_initial_service(
+				ServiceBuilder::new()
+					.layer(RequestIDLayer::new("sata".to_owned()))
+					.layer(StreamIDLayer)
+					.layer(SataConnectionFlagsLayer)
+					.layer(WALMessageLayer(w)),
+			);
+		} else {
+			server.layer_initial_service(
+				ServiceBuilder::new()
+					.layer(RequestIDLayer::new("sata".to_owned()))
+					.layer(SataConnectionFlagsLayer)
+					.layer(WALMessageLayer(w)),
+			);
+		}
+	} else if trace_during_debug {
+		server.layer_initial_service(
+			ServiceBuilder::new()
+				.layer(RequestIDLayer::new("sata".to_owned()))
+				.layer(StreamIDLayer)
+				.layer(SataConnectionFlagsLayer),
+		);
+	} else {
+		server.layer_initial_service(
+			ServiceBuilder::new()
+				.layer(RequestIDLayer::new("sata".to_owned()))
+				.layer(SataConnectionFlagsLayer),
+		);
+	}
 }
 
 async fn unknown_packet_handler(Body(request): Body<Bytes>) -> Response {

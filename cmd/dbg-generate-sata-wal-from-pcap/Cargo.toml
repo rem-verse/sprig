@@ -14,8 +14,8 @@ bytes.workspace = true
 cat-dev = { default-features = false, features = ["servers"], path = "../../pkg/cat-dev" }
 clap.workspace = true
 fnv.workspace = true
-log = { path = "../../pkg/log" }
 miette.workspace = true
+rm-lisa.workspace = true
 rtshark = "^3.2.0"
 tokio.workspace = true
 tracing.workspace = true

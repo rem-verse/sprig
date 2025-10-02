@@ -1,13 +1,8 @@
 //! Utilities that aren't directly related to booting, but help get info that
 //! can inform the booting process.
 
-use crate::{
-	SHOULD_LOG_JSON,
-	exit_codes::{
-		BOOT_CGI_FAILURE, BOOT_COULD_NOT_CONNECT, BOOT_NOT_READY_TO_BOOT,
-		BRIDGE_TOO_OLD_FOR_FEATURE,
-	},
-	utils::add_context_to,
+use crate::exit_codes::{
+	BOOT_CGI_FAILURE, BOOT_COULD_NOT_CONNECT, BOOT_NOT_READY_TO_BOOT, BRIDGE_TOO_OLD_FOR_FEATURE,
 };
 use cat_dev::mion::{
 	cgis::{
@@ -18,7 +13,6 @@ use cat_dev::mion::{
 };
 use fnv::FnvHashMap;
 use mac_address::MacAddress;
-use miette::miette;
 use std::{hash::BuildHasherDefault, net::Ipv4Addr};
 use tracing::{debug, error, warn};
 
@@ -42,33 +36,20 @@ use tracing::{debug, error, warn};
 /// versions from `http://<mion ip>/update.cgi`, either cause we didn't make
 /// a successful HTTP request, or it contained data we didn't understand.
 pub async fn is_modern_bridge(bridge_ip: Ipv4Addr) -> bool {
-	if SHOULD_LOG_JSON() {
-		debug!(
-			id = "bridgectl::boot::check_modern_bridge",
-			"Determining MION capabilities...",
-		);
-	} else {
-		debug!("Determining MION capabilities...");
-	}
+	debug!(
+		id = "bridgectl::boot::check_modern_bridge",
+		"Determining MION capabilities...",
+	);
 
 	let versions = match get_versions(bridge_ip).await {
 		Ok(versions) => versions,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::failed_to_get_mion_version",
-					?cause,
-					bridge.ip = %bridge_ip,
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Could not fetch the current MION FW version of the MION bridge."),
-						[cause.into(), miette!(format!("Bridge IP: {bridge_ip}"))].into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::boot::failed_to_get_mion_version",
+				?cause,
+				bridge.ip = %bridge_ip,
+				"Failed to get MION version!",
+			);
 
 			std::process::exit(BOOT_COULD_NOT_CONNECT);
 		}
@@ -82,20 +63,12 @@ pub async fn is_modern_bridge(bridge_ip: Ipv4Addr) -> bool {
 		|| (mion_version[1] == 14 && mion_version[2] >= 77);
 
 	if !is_modern {
-		if SHOULD_LOG_JSON() {
-			warn!(
-				id = "bridgectl::boot::old_mion_warning",
-				bridge.ip = %bridge_ip,
-				bridge.version = %versions.displayable_mion_version(),
-				"mion firmware outdated, please update to at least 0.00.14.77",
-			);
-		} else {
-			warn!(
-				bridge.ip = %bridge_ip,
-				bridge.version = %versions.displayable_mion_version(),
-				"Your Cat-DEV's MION Board Version is rather old, and not fully functional. Please update it to at least 0.00.14.77 for full functionality...",
-			);
-		}
+		warn!(
+			id = "bridgectl::boot::old_mion_warning",
+			bridge.ip = %bridge_ip,
+			bridge.version = %versions.displayable_mion_version(),
+			"Your Cat-DEV's MION Board Version is rather old, and not fully functional. Please update it to at least 0.00.14.77 for full functionality...",
+		);
 	}
 
 	is_modern
@@ -146,23 +119,11 @@ pub async fn validate_bridge_ready_for_booting(
 		.unwrap_or_default()
 		!= "OK"
 	{
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::boot::check_info_result",
-				response_fields = ?information_request,
-				"Result was not okay for receiving information",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				miette!(
-					help = format!(
-						"debugging note, all results from the cat-dev: {information_request:?}"
-					),
-					"Fetching information was not successful",
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::boot::check_info_result",
+			response_fields = ?information_request,
+			"Result was not okay for receiving information",
+		);
 
 		std::process::exit(BOOT_NOT_READY_TO_BOOT);
 	}
@@ -173,43 +134,22 @@ pub async fn validate_bridge_ready_for_booting(
 		.unwrap_or_default()
 		!= "0.0.0.0"
 	{
-		if SHOULD_LOG_JSON() {
-			warn!(
-				id = "bridgectl::boot::owned_by_other_host",
-				bridge.ip = %bridge_ip,
-				bridge.name = %bridge_name,
-				response_fields = ?information_request,
-				"MION is currently being managed by another host!!",
-			);
-		} else {
-			warn!(
-				bridge.ip = %bridge_ip,
-				bridge.name = %bridge_name,
-				"\n{:?}",
-				miette!(
-					help = format!(
-						"debugging note, all results from the cat-dev: {information_request:?}"
-					),
-					"MION Bridge is currently being managed by another host!!",
-				),
-			);
-		}
+		warn!(
+			id = "bridgectl::boot::owned_by_other_host",
+			bridge.ip = %bridge_ip,
+			bridge.name = %bridge_name,
+			response_fields = ?information_request,
+			"MION is currently being managed by another host!!",
+		);
 
 		if !will_take_over {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::mion_already_owned",
-					bridge.ip = %bridge_ip,
-					bridge.name = %bridge_name,
-					"Did not specify `--take-ownership`, exiting because MION is owned by another..."
-				);
-			} else {
-				error!(
-					bridge.ip = %bridge_ip,
-					bridge.name = %bridge_name,
-					"Did not specify `--take-ownership`, exiting because MION is owned by another..."
-				);
-			}
+			error!(
+				id = "bridgectl::boot::mion_already_owned",
+				bridge.ip = %bridge_ip,
+				bridge.name = %bridge_name,
+				"Did not specify `--take-ownership`, exiting because MION is owned by another..."
+			);
+
 			std::process::exit(BOOT_NOT_READY_TO_BOOT);
 		}
 	}
@@ -242,40 +182,22 @@ pub async fn turn_down_for_disc(bridge_ip: Ipv4Addr) {
 	match set_disc_eject_state(bridge_ip, false).await {
 		Ok(success) => {
 			if !success {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::boot::eject_failed",
-						bridge.ip = %bridge_ip,
-						"Bridge responded with an error (and no extra info) while ejecting the disc",
-					);
-				} else {
-					error!(
-						bridge.ip = %bridge_ip,
-						"Bridge responded with an error (and no extra info) while ejecting the disc",
-					);
-				}
+				error!(
+					id = "bridgectl::boot::eject_failed",
+					bridge.ip = %bridge_ip,
+					"Bridge responded with an error (and no extra info) while ejecting the disc",
+				);
 
 				std::process::exit(BOOT_NOT_READY_TO_BOOT);
 			}
 		}
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::cannot_eject_disc",
-					?cause,
-					bridge.ip = %bridge_ip,
-					"cannot eject disc to properly boot bridge",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					miette!(
-						help = format!("while talking to bridge: {bridge_ip}"),
-						"Could not eject disc from MION to then properly boot MION"
-					)
-					.wrap_err(cause)
-				);
-			}
+			error!(
+				id = "bridgectl::boot::cannot_eject_disc",
+				?cause,
+				bridge.ip = %bridge_ip,
+				"cannot eject disc to properly boot bridge",
+			);
 
 			std::process::exit(BOOT_COULD_NOT_CONNECT);
 		}
@@ -310,52 +232,16 @@ pub async fn wrap_power_on(
 	};
 
 	if let Err(cause) = res {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::boot::send_power_on",
-				?cause,
-				bridge.ip = %bridge_ip,
-				bridge.is_modern = is_modern_bridge,
-				host.ip_override = ?host_ip,
-				host.atapi_port = %final_atapi_port,
-				host.sata_port = ?final_sata_port,
-				"Failed to power on bridge!",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("Could not power on bridge!"),
-					[
-						cause.into(),
-						miette!(
-							help = format!(
-								"Arguments were: Bridge IP: {bridge_ip} {modern_str}",
-								modern_str = if is_modern_bridge { "(modern)" } else { "" },
-							),
-							"Bridge Information Retrieved",
-						),
-						miette!(
-							help = format!(
-								"Arguments were: Host IP Override: {} / ATAPI: {final_atapi_port} / SATA: {}",
-								if let Some(over) = host_ip {
-									format!("{over}")
-								} else {
-									"(None)".to_owned()
-								},
-								if let Some(sp) = final_sata_port {
-									format!("{sp}")
-								} else {
-									"(Not Enabled)".to_owned()
-								},
-							),
-							"Host Information",
-						),
-					]
-					.into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::boot::send_power_on",
+			?cause,
+			bridge.ip = %bridge_ip,
+			bridge.is_modern = is_modern_bridge,
+			host.ip_override = ?host_ip,
+			host.atapi_port = %final_atapi_port,
+			host.sata_port = ?final_sata_port,
+			"Failed to power on bridge!",
+		);
 
 		std::process::exit(BOOT_CGI_FAILURE);
 	}
@@ -378,16 +264,10 @@ async fn validate_legacy_bridge_ready_for_booting(
 	parameter_space_port: Option<u16>,
 ) -> (FnvHashMap<String, String>, Option<SetupParameters>, bool) {
 	if will_take_over {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::boot::take_over_unsupported",
-				"you specified `--take-ownership` which is not supported for MIONs running this old of FW..."
-			);
-		} else {
-			error!(
-				"You have specified `--take-ownership` which is not supported on the FW version your MION is running..."
-			);
-		}
+		error!(
+			id = "bridgectl::boot::take_over_unsupported",
+			"you specified `--take-ownership` which is not supported for MIONs running this old of FW..."
+		);
 
 		std::process::exit(BRIDGE_TOO_OLD_FOR_FEATURE);
 	}
@@ -398,24 +278,13 @@ async fn validate_legacy_bridge_ready_for_booting(
 		match get_param_space_parameters(bridge_ip, parameter_space_port, None).await {
 			Ok(ps) => ps,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::boot::failed_dump_mion_param_space",
-						?cause,
-						bridge.ip = %bridge_ip,
-						bridge.override_ps_port = ?parameter_space_port,
-						"Failed to get boot mode for legacy MION of parameter space port.",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						miette!(
-							help = format!("while talking to bridge: {bridge_ip}"),
-							"Failed to get boot mode for legacy MION of parameter space port."
-						)
-						.wrap_err(cause)
-					);
-				}
+				error!(
+					id = "bridgectl::boot::failed_dump_mion_param_space",
+					?cause,
+					bridge.ip = %bridge_ip,
+					bridge.override_ps_port = ?parameter_space_port,
+					"Failed to get boot mode for legacy MION of parameter space port.",
+				);
 
 				std::process::exit(BOOT_COULD_NOT_CONNECT);
 			}
@@ -444,21 +313,14 @@ async fn get_info_and_parameters(
 	let information_request = match get_info(bridge_ip, bridge_name).await {
 		Ok(map) => map,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::get_bridge_info",
-					?cause,
-					"failed to query bridge information to make sure it was ready for booting",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					miette!(
-						help = format!("You can ensure the bridge is ready to be viewed at: <http://{bridge_ip}/menu.cgi>"),
-						"Failed to query bridge information to make sure it was ready for booting, please make sure the device is on, and has it's webpages running."
-					).wrap_err(cause),
-				);
-			}
+			error!(
+				id = "bridgectl::boot::get_bridge_info",
+				?cause,
+				help = format!(
+					"You can ensure the bridge is ready to be viewed at: <http://{bridge_ip}/menu.cgi>"
+				),
+				"failed to query bridge information to make sure it was ready for booting",
+			);
 
 			std::process::exit(BOOT_CGI_FAILURE);
 		}
@@ -485,21 +347,12 @@ async fn wrap_get_setup_parameters(
 	match get_setup_parameters(bridge_ip).await {
 		Ok(params) => Some(params),
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::get_setup_parameters",
-					?cause,
-					"failed to query setup parameters to make sure the bridge was ready for booting",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					miette!(
-						help = format!("You can see the setup page at: <http://{bridge_ip}/setup.cgi>"),
-						"Failed to query setup information to make sure it was ready for booting, please make sure that the device is on, and has it's webpages running.",
-					).wrap_err(cause),
-				);
-			}
+			error!(
+				id = "bridgectl::boot::get_setup_parameters",
+				?cause,
+				help = format!("You can see the setup page at: <http://{bridge_ip}/setup.cgi>"),
+				"failed to query setup parameters to make sure the bridge was ready for booting",
+			);
 
 			if let Some(mac) = default_mac {
 				warn!("Using default setup-parameters, may be incorrect");

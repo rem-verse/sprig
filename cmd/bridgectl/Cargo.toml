@@ -14,10 +14,9 @@ cat-dev = { default-features = false, features = ["clients", "serial", "scientis
 clap.workspace = true
 fnv.workspace = true
 futures.workspace = true
-log = { path = "../../pkg/log" }
 mac_address.workspace = true
 miette.workspace = true
-terminal_size = "^0.4.2"
+rm-lisa.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 valuable.workspace = true

@@ -170,7 +170,7 @@ where
 	}
 
 	fn call(&mut self, mut req: Request<State>) -> Self::Future {
-		if let Some(flags) = SATA_CONNECTION_FLAGS.get(&req.stream_id()) {
+		if let Some(flags) = SATA_CONNECTION_FLAGS.get_sync(&req.stream_id()) {
 			req.extensions_mut().insert(flags.clone());
 		}
 

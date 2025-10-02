@@ -318,8 +318,9 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 		let mut ids = FnvHashSet::default();
 		// Scan all senders at a Point-in-Time..
 		OUT_OF_BAND_SENDERS
-			.scan_async(|key, _value| {
+			.iter_async(|key, _value| {
 				ids.insert(*key);
+				true
 			})
 			.await;
 
@@ -962,8 +963,8 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 			.upsert_async(stream_id, send_channel.clone())
 			.await;
 
-		if let Some(mut handle) = on_stream_begin_handler {
-			if !handle
+		if let Some(mut handle) = on_stream_begin_handler
+			&& !handle
 				.call(ResponseStreamEvent::new_with_state(
 					send_channel.clone(),
 					*source_address,
@@ -971,10 +972,9 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 					state.clone(),
 				))
 				.await?
-			{
-				trace!("handler failed on stream begin hook");
-				return Ok(true);
-			}
+		{
+			trace!("handler failed on stream begin hook");
+			return Ok(true);
 		}
 
 		Ok(false)
@@ -999,40 +999,40 @@ impl<State: Clone + Send + Sync + 'static> TCPServer<State> {
 				Ok(true)
 			}
 			ResponseStreamMessage::Response(resp) => {
-				if let Some(body) = resp.body() {
-					if !body.is_empty() {
-						let messages = if let Some(size) = chunk_output_on_size {
-							body.chunks(size)
-								.map(Bytes::copy_from_slice)
-								.collect::<Vec<_>>()
-						} else {
-							vec![body.clone()]
-						};
+				if let Some(body) = resp.body()
+					&& !body.is_empty()
+				{
+					let messages = if let Some(size) = chunk_output_on_size {
+						body.chunks(size)
+							.map(Bytes::copy_from_slice)
+							.collect::<Vec<_>>()
+					} else {
+						vec![body.clone()]
+					};
 
-						for message in messages {
-							#[cfg(debug_assertions)]
-							if trace_io {
-								debug!(
-									body.hex = format!("{message:02x?}"),
-									body.str = String::from_utf8_lossy(&message).to_string(),
-									"cat-dev-trace-output-tcp-server",
-								);
-							}
-
-							let mut full_response = message.clone();
-							if let Some(post) = post_hook {
-								full_response = block_in_place(|| post(stream_id, full_response));
-							}
-							if let Some(slowdown_ms) = cat_dev_slowdown {
-								sleep(slowdown_ms).await;
-							}
-
-							tcp_stream.writable().await.map_err(NetworkError::IO)?;
-							tcp_stream
-								.write_all(&full_response)
-								.await
-								.map_err(NetworkError::IO)?;
+					for message in messages {
+						#[cfg(debug_assertions)]
+						if trace_io {
+							debug!(
+								body.hex = format!("{message:02x?}"),
+								body.str = String::from_utf8_lossy(&message).to_string(),
+								"cat-dev-trace-output-tcp-server",
+							);
 						}
+
+						let mut full_response = message.clone();
+						if let Some(post) = post_hook {
+							full_response = block_in_place(|| post(stream_id, full_response));
+						}
+						if let Some(slowdown_ms) = cat_dev_slowdown {
+							sleep(slowdown_ms).await;
+						}
+
+						tcp_stream.writable().await.map_err(NetworkError::IO)?;
+						tcp_stream
+							.write_all(&full_response)
+							.await
+							.map_err(NetworkError::IO)?;
 					}
 				}
 

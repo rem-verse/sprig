@@ -1,10 +1,8 @@
 //! Handles generation of a SATA WAL log from a PCAPNG.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	commands::utils::{PacketOnPort, PacketsWithDataOnPort, validate_pcap_path_constraints},
 	exit_codes::{GENERATE_CANT_CREATE_WAL, GENERATE_NAGLE_FAILURE},
-	utils::add_context_to,
 };
 use bytes::{Bytes, BytesMut};
 use cat_dev::{
@@ -15,7 +13,6 @@ use cat_dev::{
 	net::models::{Endianness, NagleGuard},
 };
 use fnv::FnvHashMap;
-use miette::miette;
 use std::{
 	collections::hash_map::Entry,
 	path::{Path, PathBuf},
@@ -138,7 +135,10 @@ async fn do_packet_processing(
 				}
 
 				if nagle_cache.len() < *needed {
-					debug!("waiting for more data in NeedsAtLeast....");
+					debug!(
+						id = "dgswfp::sata_wal::needs_at_least",
+						"waiting for more data in NeedsAtLeast....",
+					);
 					return;
 				}
 			}
@@ -155,16 +155,22 @@ async fn do_packet_processing(
 		}
 		if let SataStreamState::NeedsAtLeastCheckAt(fd, needed_at) = state {
 			// Sniff out read file errors...
-			if !pkt.is_request() && nagle_cache.starts_with(&[0xC4_u8, 0x00, 0xFE, 0x00, 0x20]) {
-				let needed = 8 + 24 + 4;
-				if nagle_cache.len() < needed {
-					debug!("waiting for more data in error'd NeedsAtLeastCheckAt");
-					return;
-				}
+			if !pkt.is_request()
+				&& nagle_cache.starts_with(&[0xC4_u8, 0x00, 0xFE, 0x00, 0x20])
+				&& nagle_cache.len() < 8 + 24 + 4
+			{
+				debug!(
+					id = "dgswfp::sata_wal::needs_at_least_check_at_error",
+					"waiting for more data in error'd NeedsAtLeastCheckAt",
+				);
+				return;
 			}
 
 			if nagle_cache.len() < *needed_at + 4 {
-				debug!("waiting for more data for length check in NeedsAtLeastCheckAt....");
+				debug!(
+					id = "dgswfp::sata_wal::needs_at_least_check_at",
+					"waiting for more data for length check in NeedsAtLeastCheckAt....",
+				);
 				return;
 			}
 			let read_bytes_or_file_size = u32::from_be_bytes([
@@ -184,9 +190,7 @@ async fn do_packet_processing(
 			if read_bytes_or_file_size < cflags.first_read_size() {
 				// Okay so we're large enough that we got into this state, but we're not
 				// large enough to ignore padding. So switch our state, and pad.
-				if pkt.is_request() {
-					unreachable!();
-				} else {
+				if !pkt.is_request() {
 					*state = SataStreamState::NeedsAtLeast(
 						*fd,
 						0x20 + 0x4
@@ -198,7 +202,10 @@ async fn do_packet_processing(
 			}
 
 			if nagle_cache.len() < *needed_at + 4 + read_bytes_or_file_size_size {
-				debug!("waiting for more data in NeedsAtLeastCheckAt....");
+				debug!(
+					id = "dgswfp::sata_wal::needs_more_file_size",
+					"waiting for more data in NeedsAtLeastCheckAt....",
+				);
 				return;
 			}
 
@@ -235,10 +242,6 @@ async fn do_packet_processing(
 	}
 }
 
-#[allow(
-	// TODO(mythra): fix
-	clippy::too_many_lines,
-)]
 async fn process_request(
 	stream_id: u64,
 	packet: Bytes,
@@ -261,24 +264,12 @@ async fn process_request(
 		let parsed_data = match SataRequest::<SataReadFilePacketBody>::try_from(packet.clone()) {
 			Ok(d) => d,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						?cause,
-						id = "dgswfp::generate::read_file_parse_failure",
-						packet = format!("{packet:02x?}"),
-						"Failed to parse read file request, so cannot determine correct nagle length!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Failed to parse read file request, so cannot determine correct nagle length!"
-							),
-							[cause.into()].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::generate::read_file_parse_failure",
+					packet = format!("{packet:02x?}"),
+					"Failed to parse read file request, so cannot determine correct nagle length!",
+				);
 
 				std::process::exit(GENERATE_NAGLE_FAILURE);
 			}
@@ -305,24 +296,12 @@ async fn process_request(
 		let parsed_data = match SataRequest::<SataWriteFilePacketBody>::try_from(packet.clone()) {
 			Ok(d) => d,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						?cause,
-						id = "dgswfp::generate::write_file_parse_failure",
-						packet = format!("{packet:02x?}"),
-						"Failed to parse write file request, so cannot determine correct nagle length!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Failed to parse write file request, so cannot determine correct nagle length!"
-							),
-							[cause.into()].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::generate::write_file_parse_failure",
+					packet = format!("{packet:02x?}"),
+					"Failed to parse write file request, so cannot determine correct nagle length!",
+				);
 
 				std::process::exit(GENERATE_NAGLE_FAILURE);
 			}
@@ -340,30 +319,19 @@ async fn process_request(
 		let parsed_data = match SataRequest::<SataPingPacketBody>::try_from(packet.clone()) {
 			Ok(d) => d,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						?cause,
-						id = "dgswfp::generate::ping_parse_failure",
-						packet = format!("{packet:02x?}"),
-						"Failed to parse ping request, so cannot determine correct nagle length!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Failed to parse ping request, so cannot determine correct nagle length!"
-							),
-							[cause.into()].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::generate::ping_parse_failure",
+					packet = format!("{packet:02x?}"),
+					"Failed to parse ping request, so cannot determine correct nagle length!",
+				);
 
 				std::process::exit(GENERATE_NAGLE_FAILURE);
 			}
 		};
 
 		info!(
+			id = "dgswfp::sata_wal::update_connection_read_write",
 			read_size = parsed_data.command_info().user().0,
 			write_size = parsed_data.command_info().user().1,
 			"Updating Connection Read/Write Size",
@@ -407,29 +375,12 @@ fn get_wal(wal_path: &Path) -> WriteAheadLog {
 	match WriteAheadLog::new(wal_path.to_path_buf()) {
 		Ok(wal) => wal,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					?cause,
-					id = "dgswfp::generate::cannot_open_wal",
-					wal.path = %wal_path.display(),
-					"Failed to create a WAL to write!",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("cannot open and generate wal"),
-						[
-							cause.into(),
-							miette!(
-								"The wal path we would've written to is: {}",
-								wal_path.display(),
-							),
-						]
-						.into_iter(),
-					),
-				);
-			}
+			error!(
+				?cause,
+				id = "dgswfp::generate::cannot_open_wal",
+				wal.path = %wal_path.display(),
+				"Failed to create a WAL to write!",
+			);
 
 			std::process::exit(GENERATE_CANT_CREATE_WAL);
 		}

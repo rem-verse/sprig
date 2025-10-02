@@ -169,12 +169,11 @@ fn handle_disk_space(
 				.unwrap_or_else(|_| mount_point.to_path_buf()),
 		) {
 			let mut should_insert = true;
-			if let Some(other_potential_source) = disk_holding_path {
-				if other_potential_source.mount_point().components().count()
+			if let Some(other_potential_source) = disk_holding_path
+				&& other_potential_source.mount_point().components().count()
 					> potential_disk.mount_point().components().count()
-				{
-					should_insert = false;
-				}
+			{
+				should_insert = false;
 			}
 			if should_insert {
 				_ = disk_holding_path.insert(potential_disk);

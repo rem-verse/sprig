@@ -74,11 +74,17 @@ pub async fn create_atapi_server(
 		trace_during_debug,
 	)
 	.await?;
-	server.layer_initial_service(
-		ServiceBuilder::new()
-			.layer(RequestIDLayer)
-			.layer(StreamIDLayer),
-	);
+	if trace_during_debug {
+		server.layer_initial_service(
+			ServiceBuilder::new()
+				.layer(RequestIDLayer::new("atapi".to_owned()))
+				.layer(StreamIDLayer),
+		);
+	} else {
+		server.layer_initial_service(
+			ServiceBuilder::new().layer(RequestIDLayer::new("atapi".to_owned())),
+		);
+	}
 
 	server.set_chunk_output_at_size(if fully_disable_chunk_override {
 		None

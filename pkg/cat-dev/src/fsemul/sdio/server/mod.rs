@@ -114,11 +114,17 @@ pub async fn sdio_server(
 	.await?;
 	control_server.set_on_stream_begin(on_sdio_stream_begin)?;
 	control_server.set_on_stream_end(on_sdio_stream_end)?;
-	control_server.layer_initial_service(
-		ServiceBuilder::new()
-			.layer(RequestIDLayer)
-			.layer(StreamIDLayer),
-	);
+	if trace_during_debug {
+		control_server.layer_initial_service(
+			ServiceBuilder::new()
+				.layer(RequestIDLayer::new("sdio".to_owned()))
+				.layer(StreamIDLayer),
+		);
+	} else {
+		control_server.layer_initial_service(
+			ServiceBuilder::new().layer(RequestIDLayer::new("sdio".to_owned())),
+		);
+	}
 	// We are still communicating with a slowdown...
 	control_server.set_cat_dev_slowdown(control_server.state().cat_dev_slowdown);
 	control_server.set_chunk_output_at_size(chunk_frd);

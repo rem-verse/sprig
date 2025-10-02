@@ -44,19 +44,18 @@
 //! but obviously the fastest will be when we don't have to do a lookup at all.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	commands::argv_helpers::{
 		get_control_port, get_scan_timeout, lease_bridge_config, lease_bridge_config_optionally,
 	},
 	exit_codes::{
 		ARGV_BRIDGE_CONFLICTING_ARGUMENTS, ARGV_COULD_NOT_GET_DEFAULT_BRIDGE,
 		ARGV_COULD_NOT_SEARCH_FOR_BRIDGE, ARGV_NO_BRIDGE_ENV, ARGV_NO_BRIDGE_SPECIFIED,
+		SHOULD_NEVER_HAPPEN_FAILURE,
 	},
 	knobs::{
 		cli::TargetBridgeFlags,
 		env::{BRIDGE_CURRENT_IP_ADDRESS, BRIDGE_CURRENT_NAME},
 	},
-	utils::add_context_to,
 };
 use cat_dev::mion::{
 	BridgeHostState,
@@ -64,7 +63,6 @@ use cat_dev::mion::{
 	proto::control::MionIdentity,
 };
 use mac_address::MacAddress;
-use miette::miette;
 use std::{net::Ipv4Addr, time::Duration};
 use tokio::sync::{RwLock, RwLockReadGuard};
 use tracing::{debug, error, field::valuable, info, warn};
@@ -111,41 +109,21 @@ pub async fn target_bridge(
 	}
 
 	if !try_to_load_from_env().await {
-		if SHOULD_LOG_JSON() {
-			info!(
-				id = "bridgectl::argv::default_fallback",
-				"No bridge specified in environment, and argument is missing or _may_ not be bridge name, trying to load default from configuration.",
-			);
-		} else {
-			info!(
-				"No bridge specified in environment, and argument is missing or _may_ not be a bridge name, trying to load default from configuration."
-			);
-		}
+		info!(
+			id = "bridgectl::argv::default_fallback",
+			"No bridge specified in environment, and argument is missing or _may_ not be bridge name, trying to load default from configuration.",
+		);
 
 		if !try_to_load_default().await {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::no_bridge_found",
-					help_items = valuable(&[
-						"You can specify a bridge with environment variables `BRIDGE_CURRENT_NAME`, `BRIDGE_CURRENT_IP_ADDRESS`.",
-						"You can specify one with flags `--ip`, `--mac`, or `--name`.",
-						"You can set a default bridge in your configuration file (see `bridgectl set-default`, or `bridgectl add --default`).",
-					]),
-					"Command needs to target a single bridge, and you didn't specify a single bridge to use.",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Command needs to target a single bridge, and you didn't specify a single bridge to use."),
-						[
-							miette!("You can specify a bridge with environment variables `BRIDGE_CURRENT_NAME`, or `BRIDGE_CURRENT_IP_ADDRESS` (these get set by cafex/mochiato too)."),
-							miette!("You can specify one with flags `--ip`, `--mac`, or `--name`."),
-							miette!("You can set a default bridge in your configuration file (see `bridgectl set-default`, or `bridgectl add --default`"),
-						].into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::no_bridge_found",
+				help = valuable(&[
+					"You can specify a bridge with environment variables `BRIDGE_CURRENT_NAME`, `BRIDGE_CURRENT_IP_ADDRESS`.",
+					"You can specify one with flags `--ip`, `--mac`, or `--name`.",
+					"You can set a default bridge in your configuration file (see `bridgectl set-default`, or `bridgectl add --default`).",
+				]),
+				"Command needs to target a single bridge, and you didn't specify a single bridge to use.",
+			);
 
 			std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
 		}
@@ -216,28 +194,15 @@ async fn resolve_mac_from_ip(mion_ip: Ipv4Addr) -> MacAddress {
 	match find_mion(MIONFindBy::Ip(mion_ip), false, Some(timeout), Some(port)).await {
 		Ok(opt_mion_info) => get_mion_mac_from_scan_result(opt_mion_info, mion_ip, port, timeout),
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::failed_to_execute_search",
-					?cause,
-					filters.find_by = %MIONFindBy::Ip(mion_ip),
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					help = "Perhaps another program is already using the single MION port?",
-					"Could not execute search for bridge...",
-				);
-			} else {
-				error!(
-					filters.find_by = %MIONFindBy::Ip(mion_ip),
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					"\n{:?}",
-					miette!(
-						help = "Perhaps another program is already using the single MION port?",
-						"Could not send a packet directly to the IP specified, perhaps it wasn't reachable?",
-					).wrap_err(cause),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::failed_to_execute_search",
+				?cause,
+				filters.find_by = %MIONFindBy::Ip(mion_ip),
+				scanning.port = %port,
+				scanning.timeout_seconds = timeout.as_secs(),
+				help = "Perhaps another program is already using the single MION port?",
+				"Could not execute search for bridge...",
+			);
 
 			std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
 		}
@@ -247,12 +212,11 @@ async fn resolve_mac_from_ip(mion_ip: Ipv4Addr) -> MacAddress {
 async fn resolve_name_from_ip(mion_ip: Ipv4Addr) -> String {
 	// First check environment, they may have passed a flag, but the other info
 	// was already in the environment.
-	if let Some(ip_addr) = BRIDGE_CURRENT_IP_ADDRESS.as_ref() {
-		if let Some(name) = BRIDGE_CURRENT_NAME.as_ref() {
-			if mion_ip == *ip_addr {
-				return name.to_owned();
-			}
-		}
+	if let Some(ip_addr) = BRIDGE_CURRENT_IP_ADDRESS.as_ref()
+		&& let Some(name) = BRIDGE_CURRENT_NAME.as_ref()
+		&& mion_ip == *ip_addr
+	{
+		return name.to_owned();
 	}
 	// Next check the config file for a bridge defined with that ip.
 	if let Some(bridge_conf) = lease_bridge_config_optionally().await {
@@ -263,6 +227,7 @@ async fn resolve_name_from_ip(mion_ip: Ipv4Addr) -> String {
 				expected.ip = %mion_ip,
 				found.ip = %bip,
 				filtering.is_equal = bip == mion_ip,
+				"checking bridge ip equality",
 			);
 			if bip == mion_ip {
 				return bridge_name;
@@ -276,18 +241,11 @@ async fn resolve_name_from_ip(mion_ip: Ipv4Addr) -> String {
 	}
 
 	// If we're able to do nothing else, we're relegated to do a search
-	if SHOULD_LOG_JSON() {
-		info!(
-			id = "bridgectl::argv::have_bridge_ip_looking_up_name",
-			suggestion = "In order to prevent lookups being necessary, feel free to add this name/ip to your bridge configuration file (with `bridgectl add`).",
-			"We have a Bridge IP, but can't find a bridge name in environment/configuration files.",
-		);
-	} else {
-		info!(
-			suggestion = "In order to prevent lookups being necessary, feel free to add this bridge name/ip to your bridge configuration file (with `bridgectl add`).",
-			"We have a Bridge IP, but can't find a bridge name in environment/configuration files.",
-		);
-	}
+	info!(
+		id = "bridgectl::argv::have_bridge_ip_looking_up_name",
+		help = "In order to prevent lookups being necessary, feel free to add this name/ip to your bridge configuration file (with `bridgectl add`).",
+		"We have a Bridge IP, but can't find a bridge name in environment/configuration files.",
+	);
 
 	let port = get_control_port().await;
 	let timeout = get_scan_timeout().await;
@@ -298,28 +256,15 @@ async fn resolve_name_from_ip(mion_ip: Ipv4Addr) -> String {
 			get_mion_name_from_scan_result(opt_mion_info, mion_ip, port, timeout)
 		}
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::failed_to_execute_search",
-					?cause,
-					filters.find_by = %MIONFindBy::Ip(mion_ip),
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					help = "Perhaps another program is already using the single MION port?",
-					"Could not execute search for bridge...",
-				);
-			} else {
-				error!(
-					filters.find_by = %MIONFindBy::Ip(mion_ip),
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					"\n{:?}",
-					miette!(
-						help = "Perhaps another program is already using the single MION port?",
-						"Could not send a packet directly to the IP specified, perhaps it wasn't reachable?",
-					).wrap_err(cause),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::failed_to_execute_search",
+				?cause,
+				filters.find_by = %MIONFindBy::Ip(mion_ip),
+				scanning.port = %port,
+				scanning.timeout_seconds = timeout.as_secs(),
+				help = "Perhaps another program is already using the single MION port?",
+				"Could not execute search for bridge...",
+			);
 
 			std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
 		}
@@ -329,12 +274,11 @@ async fn resolve_name_from_ip(mion_ip: Ipv4Addr) -> String {
 async fn resolve_ip_from_name(mion_name: String) -> Ipv4Addr {
 	// First check environment, they may have passed a flag, but the other info
 	// was already in the environment.
-	if let Some(ip_addr) = BRIDGE_CURRENT_IP_ADDRESS.as_ref() {
-		if let Some(name) = BRIDGE_CURRENT_NAME.as_ref() {
-			if name.as_str() == mion_name.as_str() {
-				return ip_addr.to_owned();
-			}
-		}
+	if let Some(ip_addr) = BRIDGE_CURRENT_IP_ADDRESS.as_ref()
+		&& let Some(name) = BRIDGE_CURRENT_NAME.as_ref()
+		&& name.as_str() == mion_name.as_str()
+	{
+		return ip_addr.to_owned();
 	}
 	// Next check the config file for a bridge defined with that ip.
 	if let Some(bridge_conf) = lease_bridge_config_optionally().await {
@@ -352,18 +296,11 @@ async fn resolve_ip_from_name(mion_name: String) -> Ipv4Addr {
 	}
 
 	// If we're able to do nothing else, we're relegated to do a search
-	if SHOULD_LOG_JSON() {
-		info!(
-			id = "bridgectl::argv::have_bridge_name_looking_up_ip",
-			suggestion = "In order to prevent lookups being necessary, feel free to add this name/ip to your bridge configuration file (with `bridgectl add`).",
-			"We have a Bridge Name, but can't find a Bridge IP in environment/configuration files.",
-		);
-	} else {
-		info!(
-			suggestion = "In order to prevent lookups being necessary, feel free to add this bridge name/ip to your bridge configuration file (with `bridgectl add`).",
-			"We have a Bridge Name, but can't find a Bridge IP in environment/configuration files.",
-		);
-	}
+	info!(
+		id = "bridgectl::argv::have_bridge_name_looking_up_ip",
+		help = "In order to prevent lookups being necessary, feel free to add this name/ip to your bridge configuration file (with `bridgectl add`).",
+		"We have a Bridge Name, but can't find a Bridge IP in environment/configuration files.",
+	);
 
 	let port = get_control_port().await;
 	let timeout = get_scan_timeout().await;
@@ -381,28 +318,15 @@ async fn resolve_ip_from_name(mion_name: String) -> Ipv4Addr {
 			get_mion_ip_from_scan_result(opt_mion_info, mion_name, port, timeout)
 		}
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::failed_to_execute_search",
-					?cause,
-					filters.find_by = %MIONFindBy::Name(mion_name),
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					help = "Perhaps another program is already using the single MION port?",
-					"Could not execute search for bridge...",
-				);
-			} else {
-				error!(
-					filters.find_by = %MIONFindBy::Name(mion_name),
-					scanning.port = %port,
-					scanning.timeout_seconds = timeout.as_secs(),
-					"\n{:?}",
-					miette!(
-						help = "Perhaps another program is already using the single MION port?",
-						"Could not send a packet directly to the IP specified, perhaps it wasn't reachable?",
-					).wrap_err(cause),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::failed_to_execute_search",
+				?cause,
+				filters.find_by = %MIONFindBy::Name(mion_name),
+				scanning.port = %port,
+				scanning.timeout_seconds = timeout.as_secs(),
+				help = "Perhaps another program is already using the single MION port?",
+				"Could not execute search for bridge...",
+			);
 
 			std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
 		}
@@ -434,39 +358,19 @@ fn get_mion_mac_from_scan_result(
 		return result.mac_address();
 	}
 
-	if SHOULD_LOG_JSON() {
-		error!(
-			id = "bridgectl::argv::search_returned_no_bridges",
-			filters.find_by = %MIONFindBy::Ip(mion_ip),
-			scanning.port = port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			suggestions = valuable(&[
-				"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
-				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
-				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
-				"Ensure your filters line up with a single CAT-DEV device.",
-			]),
-			"could not find a bridge with the filters on your network.",
-		);
-	} else {
-		error!(
-			filters.find_by = %MIONFindBy::Ip(mion_ip),
-			scanning.port = port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			"\n{:?}",
-			add_context_to(
-				miette!(
-					"Could not find a bridge that matches your filters on your network.",
-				),
-				[
-					miette!("Please ensure the CAT-DEV you're trying to find is powered on, and running."),
-					miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
-					miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
-					miette!("Ensure your filters line up with a single CAT-DEV device."),
-				].into_iter(),
-			),
-		);
-	}
+	error!(
+		id = "bridgectl::argv::search_returned_no_bridges",
+		filters.find_by = %MIONFindBy::Ip(mion_ip),
+		scanning.port = port,
+		scanning.timeout_seconds = timeout.as_secs(),
+		help = valuable(&[
+			"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
+			"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+			"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+			"Ensure your filters line up with a single CAT-DEV device.",
+		]),
+		"could not find a bridge with the filters on your network.",
+	);
 
 	std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
 }
@@ -481,39 +385,19 @@ fn get_mion_ip_from_scan_result(
 		return result.ip_address();
 	}
 
-	if SHOULD_LOG_JSON() {
-		error!(
-			id = "bridgectl::argv::search_returned_no_bridges",
-			filters.find_by = %MIONFindBy::Name(mion_name),
-			scanning.port = port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			suggestions = valuable(&[
-				"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
-				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
-				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
-				"Ensure your filters line up with a single CAT-DEV device.",
-			]),
-			"could not find a bridge with the filters on your network.",
-		);
-	} else {
-		error!(
-			filters.find_by = %MIONFindBy::Name(mion_name),
-			scanning.port = port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			"\n{:?}",
-			add_context_to(
-				miette!(
-					"Could not find a bridge that matches your filters on your network.",
-				),
-				[
-					miette!("Please ensure the CAT-DEV you're trying to find is powered on, and running."),
-					miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
-					miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
-					miette!("Ensure your filters line up with a single CAT-DEV device."),
-				].into_iter(),
-			),
-		);
-	}
+	error!(
+		id = "bridgectl::argv::search_returned_no_bridges",
+		filters.find_by = %MIONFindBy::Name(mion_name),
+		scanning.port = port,
+		scanning.timeout_seconds = timeout.as_secs(),
+		help = valuable(&[
+			"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
+			"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+			"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+			"Ensure your filters line up with a single CAT-DEV device.",
+		]),
+		"could not find a bridge with the filters on your network.",
+	);
 
 	std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
 }
@@ -528,39 +412,19 @@ fn get_mion_name_from_scan_result(
 		return result.name().to_owned();
 	}
 
-	if SHOULD_LOG_JSON() {
-		error!(
-			id = "bridgectl::argv::search_returned_no_bridges",
-			filters.find_by = %MIONFindBy::Ip(mion_ip),
-			scanning.port = port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			suggestions = valuable(&[
-				"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
-				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
-				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
-				"Ensure your filters line up with a single CAT-DEV device.",
-			]),
-			"could not find a bridge with the filters on your network.",
-		);
-	} else {
-		error!(
-			filters.find_by = %MIONFindBy::Ip(mion_ip),
-			scanning.port = port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			"\n{:?}",
-			add_context_to(
-				miette!(
-					"Could not find a bridge that matches your filters on your network.",
-				),
-				[
-					miette!("Please ensure the CAT-DEV you're trying to find is powered on, and running."),
-					miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
-					miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
-					miette!("Ensure your filters line up with a single CAT-DEV device."),
-				].into_iter(),
-			),
-		);
-	}
+	error!(
+		id = "bridgectl::argv::search_returned_no_bridges",
+		filters.find_by = %MIONFindBy::Ip(mion_ip),
+		scanning.port = port,
+		scanning.timeout_seconds = timeout.as_secs(),
+		help = valuable(&[
+			"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
+			"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+			"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+			"Ensure your filters line up with a single CAT-DEV device.",
+		]),
+		"could not find a bridge with the filters on your network.",
+	);
 
 	std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
 }
@@ -584,18 +448,11 @@ async fn target_search_flags(
 					false,
 				)
 			} else {
-				if SHOULD_LOG_JSON() {
-					warn!(
-						id = "bridgectl::argv::mac_flag_invalid",
-						mac_flag = ?target_flags.search_for_mac_raw(),
-						"Mac Flag is not a valid MAC Address, will not be used, and will exit if no other filters present."
-					);
-				} else {
-					warn!(
-						mac_flag = ?target_flags.search_for_mac_raw(),
-						"Mac Flag is not a valid MAC Address, will not be used, and will exit if no other filters present."
-					);
-				}
+				warn!(
+					id = "bridgectl::argv::mac_flag_invalid",
+					mac_flag = ?target_flags.search_for_mac_raw(),
+					"Mac Flag is not a valid MAC Address, will not be used, and will exit if no other filters present."
+				);
 
 				if target_flags.search_for_ip().is_none()
 					&& target_flags.search_for_name().is_none()
@@ -630,9 +487,10 @@ async fn target_search_flags(
 				return None;
 			}
 
-			panic!(
+			error!(
 				"internal_error: target_search_flags() called when no search flags were specified",
 			);
+			std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
 		};
 
 		match MIONFindBy::from(argument.to_owned()) {
@@ -670,28 +528,16 @@ async fn do_scan_initial(
 	let port = get_control_port().await;
 	let timeout = get_scan_timeout().await;
 
-	if SHOULD_LOG_JSON() {
-		info!(
-			id = "bridgectl::argv::scanning_for_bridge",
-			reason = "A MAC Address was specified, so we're scanning to confirm all information is correct.",
-			filters.find_by = %find_by,
-			filters.extra_ip_filter = ?extra_ip_filter,
-			filters.extra_name_filter = ?extra_name_filter,
-			scanning.port = %port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			"looking up MION to target",
-		);
-	} else {
-		info!(
-			reason = "A MAC Address was specified, so we're scanning to confirm all information is correct.",
-			filters.find_by = %find_by,
-			filters.extra_ip_filter = ?extra_ip_filter,
-			filters.extra_name_filter = ?extra_name_filter,
-			scanning.port = %port,
-			scanning.timeout_seconds = timeout.as_secs(),
-			"Looking up MION bridge to target",
-		);
-	}
+	info!(
+		id = "bridgectl::argv::scanning_for_bridge",
+		reason = "A MAC Address was specified, so we're scanning to confirm all information is correct.",
+		filters.find_by = %find_by,
+		filters.extra_ip_filter = ?extra_ip_filter,
+		filters.extra_name_filter = ?extra_name_filter,
+		scanning.port = %port,
+		scanning.timeout_seconds = timeout.as_secs(),
+		"looking up MION to target",
+	);
 
 	match find_mion(find_by.clone(), false, Some(timeout), Some(port)).await {
 		Ok(opt_mion_info) => {
@@ -707,32 +553,17 @@ async fn do_scan_initial(
 		}
 		Err(cause) => {
 			if should_exit {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::argv::failed_to_execute_search",
-						?cause,
-						filters.find_by = %find_by,
-						filters.extra_ip_filter = ?extra_ip_filter,
-						filters.extra_name_filter = ?extra_name_filter,
-						scanning.port = %port,
-						scanning.timeout_seconds = timeout.as_secs(),
-						help = "Perhaps another program is already using the single MION port?",
-						"Could not execute search for bridge...",
-					);
-				} else {
-					error!(
-						filters.find_by = %find_by,
-						filters.extra_ip_filter = ?extra_ip_filter,
-						filters.extra_name_filter = ?extra_name_filter,
-						scanning.port = %port,
-						scanning.timeout_seconds = timeout.as_secs(),
-						"\n{:?}",
-						miette!(
-							help = "Perhaps another program is already using the single MION port?",
-							"Could not send a packet directly to the IP specified, perhaps it wasn't reachable?",
-						).wrap_err(cause),
-					);
-				}
+				error!(
+					id = "bridgectl::argv::failed_to_execute_search",
+					?cause,
+					filters.find_by = %find_by,
+					filters.extra_ip_filter = ?extra_ip_filter,
+					filters.extra_name_filter = ?extra_name_filter,
+					scanning.port = %port,
+					scanning.timeout_seconds = timeout.as_secs(),
+					help = "Perhaps another program is already using the single MION port?",
+					"Could not execute search for bridge...",
+				);
 
 				std::process::exit(ARGV_COULD_NOT_SEARCH_FOR_BRIDGE);
 			}
@@ -753,15 +584,15 @@ async fn process_found_mion(
 	if let Some(result) = found_result {
 		let mut matches_all = true;
 
-		if let Some(ip_filter) = extra_ip_filter {
-			if result.ip_address() != ip_filter {
-				matches_all = false;
-			}
+		if let Some(ip_filter) = extra_ip_filter
+			&& result.ip_address() != ip_filter
+		{
+			matches_all = false;
 		}
-		if let Some(name_filter) = extra_name_filter {
-			if result.name() != name_filter {
-				matches_all = false;
-			}
+		if let Some(name_filter) = extra_name_filter
+			&& result.name() != name_filter
+		{
+			matches_all = false;
 		}
 
 		if matches_all {
@@ -774,43 +605,21 @@ async fn process_found_mion(
 		}
 	}
 
-	if SHOULD_LOG_JSON() {
-		error!(
-			id = "bridgectl::argv::search_returned_no_bridges",
-			filters.find_by = %find_by,
-			filters.extra_ip_filter = ?extra_ip_filter,
-			filters.extra_name_filter = ?extra_name_filter,
-			scanning.port = scan_port,
-			scanning.timeout_seconds = scan_timeout.as_secs(),
-			suggestions = valuable(&[
-				"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
-				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
-				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
-				"Ensure your filters line up with a single CAT-DEV device.",
-			]),
-			"could not find a bridge with the filters on your network.",
-		);
-	} else {
-		error!(
-			filters.find_by = %find_by,
-			filters.extra_ip_filter = ?extra_ip_filter,
-			filters.extra_name_filter = ?extra_name_filter,
-			scanning.port = scan_port,
-			scanning.timeout_seconds = scan_timeout.as_secs(),
-			"\n{:?}",
-			add_context_to(
-				miette!(
-					"Could not find a bridge that matches your filters on your network.",
-				),
-				[
-					miette!("Please ensure the CAT-DEV you're trying to find is powered on, and running."),
-					miette!("Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."),
-					miette!("If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans."),
-					miette!("Ensure your filters line up with a single CAT-DEV device."),
-				].into_iter(),
-			),
-		);
-	}
+	error!(
+		id = "bridgectl::argv::search_returned_no_bridges",
+		filters.find_by = %find_by,
+		filters.extra_ip_filter = ?extra_ip_filter,
+		filters.extra_name_filter = ?extra_name_filter,
+		scanning.port = scan_port,
+		scanning.timeout_seconds = scan_timeout.as_secs(),
+		help = valuable(&[
+			"Please ensure the CAT-DEV you're trying to find is powered on, and running.",
+			"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.",
+			"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.",
+			"Ensure your filters line up with a single CAT-DEV device.",
+		]),
+		"could not find a bridge with the filters on your network.",
+	);
 
 	std::process::exit(ARGV_NO_BRIDGE_SPECIFIED);
 }
@@ -859,31 +668,15 @@ async fn target_default_or_mochiato(
 	if target_flags.specified_bridge_search_flag()
 		|| (first_arg_must_be_bridge && specified_first_arg)
 	{
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::argv::flags_conflict_on_device_search",
-				targeting_flags = valuable(&target_flags),
-				suggestions = valuable(&[
-					"If you want to fetch the default bridge all you need is to specify the `--default` flag, you don't need anything else.",
-					"If you want to apply extra filtering to the output we recommend changing the log format to JSON, and doing the extra filtering using a tool like `jq`.",
-				]),
-				"We were told to not search and just use either the default bridge, or environment. While also being told to search for another device! Not sure which to do.",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("Cannot specify search filters `--ip`/`--mac`/`--name` while also telling us to not search with `--default`, or `--bridge-from-env`!"),
-					[
-						miette!("If you just want to fetch the default bridge, or bridge from the environment, you do not need to specify the search flags, we will find it for you."),
-						miette!(
-							help = format!("{target_flags}"),
-							"If you want to apply extra filtering on the output, or query some inner field feel free to output logs as JSON, and use `jq` to programatically interpret/fetch/filter the results."
-						),
-					].into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::argv::flags_conflict_on_device_search",
+			targeting_flags = valuable(&target_flags),
+			help = valuable(&[
+				"If you want to fetch the default bridge all you need is to specify the `--default` flag, you don't need anything else.",
+				"If you want to apply extra filtering to the output we recommend changing the log format to JSON, and doing the extra filtering using a tool like `jq`.",
+			]),
+			"We were told to not search and just use either the default bridge, or environment. While also being told to search for another device! Not sure which to do.",
+		);
 
 		std::process::exit(ARGV_BRIDGE_CONFLICTING_ARGUMENTS);
 	} else if target_flags.target_default() {
@@ -895,31 +688,15 @@ async fn target_default_or_mochiato(
 
 async fn load_bridge_from_default(config: RwLockReadGuard<'_, BridgeHostState>) {
 	let Some((bridge_name, opt_ip)) = config.get_default_bridge() else {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::argv::no_default_bridge",
-				host_state_path = %config.get_path().display(),
-				suggestions = valuable(&[
-					"Please double check the configuration file located at the path specified, and ensure `BRIDGE_DEFAULT_NAME` is set to a real bridge name.",
-					"If the bridge isn't set as the default you can use `bridge add --default <name> <ip>`, or `bridge set-default <'name' or 'ip'>`.",
-				]),
-				"No default bridge present in configuration file.",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("No default bridge present in the configuration file."),
-					[
-						miette!("Please double check the configuration file located at the path specified, and ensure `BRIDGE_DEFAULT_NAME` is set to a real bridge name."),
-						miette!(
-							help = format!("The bridge configuration file was located at: {}", config.get_path().display()),
-							"If the bridge isn't set as the default you can use `bridge add --default <name> <ip>`, or `bridge set-default <'name' or 'ip'>`.",
-						),
-					].into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::argv::no_default_bridge",
+			host_state_path = %config.get_path().display(),
+			help = valuable(&[
+				"Please double check the configuration file located at the path specified, and ensure `BRIDGE_DEFAULT_NAME` is set to a real bridge name.",
+				"If the bridge isn't set as the default you can use `bridge add --default <name> <ip>`, or `bridge set-default <'name' or 'ip'>`.",
+			]),
+			"No default bridge present in configuration file.",
+		);
 
 		std::process::exit(ARGV_COULD_NOT_GET_DEFAULT_BRIDGE);
 	};
@@ -937,21 +714,12 @@ async fn load_bridge_from_default(config: RwLockReadGuard<'_, BridgeHostState>) 
 
 async fn load_from_mochiato() {
 	if BRIDGE_CURRENT_NAME.is_none() && BRIDGE_CURRENT_IP_ADDRESS.is_none() {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::argv::no_bridge_environment",
-				help = "You can use `cafex`/`mochiato` shells to set these environment variables for you.",
-				"We were told to use the bridge from the environment, but `BRIDGE_CURRENT_NAME` & `BRIDGE_CURRENT_IP_ADDRESS` are not set!",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				miette!(
-					help = "You can use `cafex`/`mochiato` shells to set these environment variables for you.",
-					"We were told to use the bridge for the environment, but `BRIDGE_CURRENT_NAME` & `BRIDGE_CURRENT_IP_ADDRESS` are not set!",
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::argv::no_bridge_environment",
+			help =
+				"You can use `cafex`/`mochiato` shells to set these environment variables for you.",
+			"We were told to use the bridge from the environment, but `BRIDGE_CURRENT_NAME` & `BRIDGE_CURRENT_IP_ADDRESS` are not set!",
+		);
 
 		std::process::exit(ARGV_NO_BRIDGE_ENV);
 	}

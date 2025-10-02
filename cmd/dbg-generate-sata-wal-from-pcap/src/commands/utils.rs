@@ -1,15 +1,10 @@
 //! Utilities that are common across multiple commands.
 
-use crate::{
-	SHOULD_LOG_JSON,
-	exit_codes::{
-		ARGV_PCAP_DOES_NOT_EXIST, ARGV_PCAP_PATH_NOT_UTF8, UTILS_CANNOT_SPAWN_TSHARK,
-		UTILS_TSHARK_READ_FAILURE,
-	},
-	utils::add_context_to,
+use crate::exit_codes::{
+	ARGV_PCAP_DOES_NOT_EXIST, ARGV_PCAP_PATH_NOT_UTF8, UTILS_CANNOT_SPAWN_TSHARK,
+	UTILS_TSHARK_READ_FAILURE,
 };
 use bytes::{BufMut, Bytes, BytesMut};
-use miette::miette;
 use rtshark::{Metadata as RtMetadata, RTShark, RTSharkBuilder};
 use std::{iter::Iterator, path::Path};
 use tracing::{debug, error};
@@ -17,49 +12,22 @@ use tracing::{debug, error};
 /// Validate that the PCAP file exists, and is stored on a UTF-8 path.
 pub fn validate_pcap_path_constraints(pcap_path: &Path) -> String {
 	if !pcap_path.exists() || !pcap_path.is_file() {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "dgswfp::utils::no_source_pcap",
-				pcap.path = %pcap_path.display(),
-				"Source PCAP is not an existing file, cannot parse!",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("cannot parse a PCAP that is not an existing file"),
-					[miette!(
-						"Please ensure the PCAP location you specified is correct: {}",
-						pcap_path.display(),
-					)]
-					.into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "dgswfp::utils::no_source_pcap",
+			pcap.path = %pcap_path.display(),
+			"Source PCAP is not an existing file, cannot parse!",
+		);
 
 		std::process::exit(ARGV_PCAP_DOES_NOT_EXIST);
 	}
 
 	let Some(existing_path) = pcap_path.to_str() else {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "dgswfp::utils::pcap_path_not_utf8",
-				pcap.path = %pcap_path.display(),
-				"Source PCAP path must be representable as a UTF-8 string!",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("cannot parse PCAP whose path is not fully UTF-8!"),
-					[miette!(
-						"Please move the PCAP file into a UTF-8 compatible path: {}",
-						pcap_path.display(),
-					)]
-					.into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "dgswfp::utils::pcap_path_not_utf8",
+			pcap.path = %pcap_path.display(),
+			help = "Please move the file into a path that is fully UTF-8",
+			"Source PCAP path must be representable as a UTF-8 string!",
+		);
 
 		std::process::exit(ARGV_PCAP_PATH_NOT_UTF8);
 	};
@@ -98,21 +66,12 @@ impl PacketsWithDataOnPort {
 		{
 			Ok(builder) => builder,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "dgswfp::utils::pcap_spawn_failure",
-						pcap.path = pcap,
-						"failed to spawn tshark, and read from PCAP/PCAPNG.",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!("Failed to spawn TSHARK, and read from PCAP/PCAPNG."),
-							[miette!("{cause:?}")].into_iter(),
-						),
-					);
-				}
+				error!(
+					?cause,
+					id = "dgswfp::utils::pcap_spawn_failure",
+					pcap.path = pcap,
+					"failed to spawn tshark, and read from PCAP/PCAPNG.",
+				);
 
 				std::process::exit(UTILS_CANNOT_SPAWN_TSHARK);
 			}
@@ -139,7 +98,10 @@ impl Iterator for PacketsWithDataOnPort {
 				Ok(Some(pkt)) => {
 					// Just cause we have a packet doesn't mean it can be used...
 					let Some(tcp_layer) = pkt.layer_name("tcp") else {
-						debug!("packet is missing TCP layer! skipping...");
+						debug!(
+							id = "dgswfp::utils::no_tcp_layer",
+							"packet is missing TCP layer! skipping...",
+						);
 						continue;
 					};
 
@@ -147,19 +109,28 @@ impl Iterator for PacketsWithDataOnPort {
 						.metadata("tcp.srcport")
 						.and_then(|val| val.value().parse::<u16>().ok())
 					else {
-						debug!("packet is missing `tcp.srcport`");
+						debug!(
+							id = "dgswfp::utils::no_tcp_source_port",
+							"packet is missing `tcp.srcport`",
+						);
 						continue;
 					};
 					let Some(dstport) = tcp_layer
 						.metadata("tcp.dstport")
 						.and_then(|val| val.value().parse::<u16>().ok())
 					else {
-						debug!("packet is missing `tcp.dstport`");
+						debug!(
+							id = "dgswfp::utils::no_tcp_dest_port",
+							"packet is missing `tcp.dstport`",
+						);
 						continue;
 					};
 
 					if srcport != self.port && dstport != self.port {
-						debug!("packet is not incoming to the correct port");
+						debug!(
+							id = "dgswfp::utils::not_correct_tcp_port",
+							"packet is not incoming to the correct port",
+						);
 						continue;
 					}
 					let is_request = dstport == self.port;
@@ -168,7 +139,10 @@ impl Iterator for PacketsWithDataOnPort {
 						.metadata("tcp.stream")
 						.and_then(|val| val.value().parse::<u64>().ok())
 					else {
-						debug!("packet is missing `tcp.stream`");
+						debug!(
+							id = "dgswfp::utils::no_tcp_stream",
+							"packet is missing `tcp.stream`",
+						);
 						continue;
 					};
 					let Some(payload) = tcp_layer
@@ -176,7 +150,10 @@ impl Iterator for PacketsWithDataOnPort {
 						.map(RtMetadata::raw_value)
 						.map(string_to_hex_bytes)
 					else {
-						debug!("packet is missing `tcp.payload`");
+						debug!(
+							id = "dgswfp::utils::no_tcp_payload",
+							"packet is missing `tcp.payload`",
+						);
 						continue;
 					};
 
@@ -187,20 +164,11 @@ impl Iterator for PacketsWithDataOnPort {
 					return None;
 				}
 				Err(cause) => {
-					if SHOULD_LOG_JSON() {
-						error!(
-							id = "dgswfp::utils::pcap_read_failure",
-							"failed to read from pcap",
-						);
-					} else {
-						error!(
-							"\n{:?}",
-							add_context_to(
-								miette!("Failed to read data from the PCAP!"),
-								[miette!("{cause:?}")].into_iter(),
-							),
-						);
-					}
+					error!(
+						?cause,
+						id = "dgswfp::utils::pcap_read_failure",
+						"failed to read from pcap",
+					);
 
 					std::process::exit(UTILS_TSHARK_READ_FAILURE);
 				}

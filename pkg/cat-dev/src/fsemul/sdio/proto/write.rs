@@ -29,7 +29,7 @@ impl SdioControlWriteRequest {
 	/// - If the channel's first byte is greater than or equal to `0xC` when
 	///   encoded to little endian.
 	pub fn new(lba: u32, blocks: u32, channel: u32) -> Result<Self, SDIOAPIError> {
-		if lba < SDIO_BLOCK_SIZE_AS_U32 || lba % SDIO_BLOCK_SIZE_AS_U32 != 0 {
+		if lba < SDIO_BLOCK_SIZE_AS_U32 || !lba.is_multiple_of(SDIO_BLOCK_SIZE_AS_U32) {
 			return Err(SDIOAPIError::InvalidLBA(lba));
 		}
 		let as_bytes = channel.to_le_bytes();
@@ -88,7 +88,7 @@ impl SdioControlWriteRequest {
 	/// - If the LBA address is not a possible block address (must be divisble by
 	///   [`SDIO_BLOCK_SIZE_AS_U32`]).
 	pub fn set_lba(&mut self, new_lba: u32) -> Result<(), SDIOAPIError> {
-		if new_lba < SDIO_BLOCK_SIZE_AS_U32 || new_lba % SDIO_BLOCK_SIZE_AS_U32 != 0 {
+		if new_lba < SDIO_BLOCK_SIZE_AS_U32 || !new_lba.is_multiple_of(SDIO_BLOCK_SIZE_AS_U32) {
 			return Err(SDIOAPIError::InvalidLBA(new_lba));
 		}
 

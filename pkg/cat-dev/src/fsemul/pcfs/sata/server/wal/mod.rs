@@ -300,31 +300,31 @@ async fn process_wal(mut stream: BoundedReceiver<WriteAheadLogMessage>, path: Pa
 			let resp = mapper::WaitingResponse::parse(conn_flags, &req, data);
 			match resp {
 				mapper::WaitingResponse::OpenFile(fdres) => {
-					if let Ok(fd) = fdres.result() {
-						if let mapper::WaitingRequest::OpenFile(path, _) = req {
-							fd_map_mut.insert(fd, path);
-						}
+					if let Ok(fd) = fdres.result()
+						&& let mapper::WaitingRequest::OpenFile(path, _) = req
+					{
+						fd_map_mut.insert(fd, path);
 					}
 				}
 				mapper::WaitingResponse::OpenFolder(fdres) => {
-					if let Ok(fd) = fdres.result() {
-						if let mapper::WaitingRequest::OpenFolder(path) = req {
-							folder_map_mut.insert(fd, path);
-						}
+					if let Ok(fd) = fdres.result()
+						&& let mapper::WaitingRequest::OpenFolder(path) = req
+					{
+						folder_map_mut.insert(fd, path);
 					}
 				}
 				mapper::WaitingResponse::CloseFile(rc) => {
-					if rc.0 == 0 {
-						if let mapper::WaitingRequest::CloseFile(fd, _) = req {
-							fd_map_mut.remove(&fd);
-						}
+					if rc.0 == 0
+						&& let mapper::WaitingRequest::CloseFile(fd, _) = req
+					{
+						fd_map_mut.remove(&fd);
 					}
 				}
 				mapper::WaitingResponse::CloseFolder(rc) => {
-					if rc.0 == 0 {
-						if let mapper::WaitingRequest::CloseFolder(fd, _) = req {
-							folder_map_mut.remove(&fd);
-						}
+					if rc.0 == 0
+						&& let mapper::WaitingRequest::CloseFolder(fd, _) = req
+					{
+						folder_map_mut.remove(&fd);
 					}
 				}
 				mapper::WaitingResponse::Pong(ffio, csr) => {

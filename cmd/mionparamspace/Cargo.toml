@@ -11,6 +11,4 @@ publish = false
 
 [dependencies]
 cat-dev = { default-features = false, features = ["clients"], path = "../../pkg/cat-dev" }
-time.workspace = true
 tokio.workspace = true
-

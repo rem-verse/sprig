@@ -37,8 +37,8 @@ pub async fn handle_write_file(
 	let request_header = request.header().clone();
 	let packet = request.body();
 
-	if packet.should_move() {
-		if let Err(cause) = packet
+	if packet.should_move()
+		&& let Err(cause) = packet
 			.move_to_pointer()
 			.do_move(
 				state.host_filesystem(),
@@ -46,20 +46,19 @@ pub async fn handle_write_file(
 				Some(req.stream_id()),
 			)
 			.await
-		{
-			debug!(
-				?cause,
-				packet.fd = packet.file_descriptor(),
-				packet.typ = "PCFSSrvWriteFile",
-				"Failed to seek file!",
-			);
+	{
+		debug!(
+			?cause,
+			packet.fd = packet.file_descriptor(),
+			packet.typ = "PCFSSrvWriteFile",
+			"Failed to seek file!",
+		);
 
-			return Ok(SataResponse::new(
-				state.pid(),
-				request_header,
-				SataResultCode::error(FS_ERROR),
-			));
-		}
+		return Ok(SataResponse::new(
+			state.pid(),
+			request_header,
+			SataResultCode::error(FS_ERROR),
+		));
 	}
 
 	if flags.ffio_enabled() {

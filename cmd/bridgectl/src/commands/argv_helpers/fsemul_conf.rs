@@ -7,19 +7,16 @@
 //! have these series of functions which wrap around a static safely.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	exit_codes::{
 		ARGV_CAFE_ROOT_LOAD_FAILURE, ARGV_FSEMUL_LOAD_FAILURE, ARGV_NO_CAFE_ROOT,
-		ARGV_NO_FSEMUL_PATH,
+		ARGV_NO_FSEMUL_PATH, HOST_FILESYSTEM_INIT_FAILURE,
 	},
 	knobs::{
 		cli::FSEmulConfigurationFlags,
 		env::{CAFE_ROOT, FSMEUL_CONFIG_PATH as FSEMUL_CONFIG_PATH_ENV_ARG},
 	},
-	utils::add_context_to,
 };
 use cat_dev::fsemul::{FSEmulConfig, HostFilesystem};
-use miette::miette;
 use std::{
 	path::PathBuf,
 	sync::{
@@ -45,29 +42,17 @@ static FORCE_UNIQUE_FDS: AtomicBool = AtomicBool::new(false);
 pub async fn initialize_fsemul_config(fsemul_config_flags: &FSEmulConfigurationFlags) {
 	let fsemul_default_path = FSEmulConfig::get_default_host_path();
 	if fsemul_default_path.is_none() {
-		if SHOULD_LOG_JSON() {
-			info!(
-				id = "bridgectl::argv::no_default_fsemul_config_path",
-				"looks like your OS doesn't have a default fsemul config path, please file an issue to support your OS better",
-			);
-		} else {
-			info!(
-				"Hey! It looks like we don't have a default path configured for the fsemul configuration file. This may mean certain configuration options for fsemul may not work! You can always manually specify a manual place to store the file with `--fsemul-config-path`, but we'd really appreciate if you filed an issue to support your OS better!"
-			);
-		}
+		info!(
+			id = "bridgectl::argv::no_default_fsemul_config_path",
+			"looks like your OS doesn't have a default fsemul config path, please file an issue to support your OS better",
+		);
 	}
 	let host_default_path = HostFilesystem::default_cafe_folder();
 	if host_default_path.is_none() {
-		if SHOULD_LOG_JSON() {
-			info!(
-				id = "bridgectl::argv::no_default_host_filesystem_path",
-				"looks like your OS doesn't have a default host filesystem path, please file an issue to support your OS better",
-			);
-		} else {
-			info!(
-				"Hey! It looks like we don't have a default path configured for the cafe sdk data directory. This may mean certain configuration options for fsemul may not work! You can always manually specify a manual place to store the file with `--fsemul-config-path`, but we'd really appreciate if you filed an issue to support your OS better!"
-			);
-		}
+		info!(
+			id = "bridgectl::argv::no_default_host_filesystem_path",
+			"looks like your OS doesn't have a default host filesystem path, please file an issue to support your OS better",
+		);
 	}
 	if fsemul_config_flags.force_unique_fds() {
 		FORCE_UNIQUE_FDS.store(true, Ordering::SeqCst);
@@ -169,29 +154,15 @@ async fn try_to_load_fsemul_config() {
 
 		let read_env_path = FSEMUL_CONFIG_PATH.read().await;
 		if !read_env_path.is_some() {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::bridge_state_path_required",
-					cause = "Could not find the bridge state path aka `bridge_env.ini`",
-					suggestions = valuable(&[
-						"You can specify the path manually with an environment variable: [`BRIDGECTL_BRIDGE_ENV_PATH`]",
-						"You can specify the path manually with a cli argument: [`--bridge-state-path`]",
-						"You can file an issue to get us to auto-detect the best path for your OS.",
-					]),
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Could not find the path to store the bridge-host state file!"),
-						[
-							miette!("You can specify the path to the `bridge_env.ini` file with the environment variable `BRIDGECTL_BRIDGE_ENV_PATH`"),
-							miette!("You can specify the path to the `bridge_env.ini` file with the cli argument `--bridge-state-path`"),
-							miette!("You can file an issue with the project to choose a default directory for your OS."),
-						].into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::bridge_state_path_required",
+				cause = "Could not find the bridge state path aka `bridge_env.ini`",
+				suggestions = valuable(&[
+					"You can specify the path manually with an environment variable: [`BRIDGECTL_BRIDGE_ENV_PATH`]",
+					"You can specify the path manually with a cli argument: [`--bridge-state-path`]",
+					"You can file an issue to get us to auto-detect the best path for your OS.",
+				]),
+			);
 			return;
 		}
 		let fsemul_path = read_env_path.as_ref().expect("impossible");
@@ -201,26 +172,12 @@ async fn try_to_load_fsemul_config() {
 				_ = write_lock.insert(state);
 			}
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::argv::cannot_load_fsemul_configuration",
-						?cause,
-						fsemul_path = %fsemul_path.display(),
-						"failed to load fsemul configuration file",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						miette!(
-							help = format!(
-								"FSEMul Configuration File is located at: {}",
-								fsemul_path.display()
-							),
-							"Cannot load fsemul configuration file!",
-						)
-						.wrap_err(cause),
-					);
-				}
+				error!(
+					id = "bridgectl::argv::cannot_load_fsemul_configuration",
+					?cause,
+					fsemul_path = %fsemul_path.display(),
+					"failed to load fsemul configuration file",
+				);
 			}
 		}
 	}
@@ -231,65 +188,38 @@ async fn try_to_load_host_file_system() {
 
 	_ = HOST_FILE_SYSTEM.get_or_init(|| {
 		if !read_env_path.is_some() {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::host_filesystem_required",
-					cause = "Could not load the cafe root directory, to serve a host filesystem out of",
-					suggestions = valuable(&[
-						"You can specify the path manually with an environment variable: [`CAFE_ROOT`]",
-						"You can specify the path manually with a cli argument: [`--cafe-path`]",
-						"You can file an issue to get us to auto-detect the best path for your OS.",
-					]),
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Could not find the path to load the root cafe root directory!"),
-						[
-							miette!("You can specify the path to the `bridge_env.ini` file with the environment variable `CAFE_ROOT`"),
-							miette!("You can specify the path to the `bridge_env.ini` file with the cli argument `--cafe-path`"),
-							miette!("You can file an issue with the project to choose a default directory for your OS."),
-						].into_iter(),
-					),
-				);
-			}
-			panic!("Failed to find CAFE_ROOT!");
+			error!(
+				id = "bridgectl::argv::host_filesystem_required",
+				cause = "Could not load the cafe root directory, to serve a host filesystem out of",
+				suggestions = valuable(&[
+					"You can specify the path manually with an environment variable: [`CAFE_ROOT`]",
+					"You can specify the path manually with a cli argument: [`--cafe-path`]",
+					"You can file an issue to get us to auto-detect the best path for your OS.",
+				]),
+			);
+			std::process::exit(ARGV_NO_CAFE_ROOT);
 		}
 
 		let host_fs_path = read_env_path.as_ref().expect("impossible");
 
-		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(host_fs_path.clone()))) {
+		match futures::executor::block_on(HostFilesystem::from_cafe_dir(Some(host_fs_path.clone())))
+		{
 			Ok(mut state) => {
 				if FORCE_UNIQUE_FDS.load(Ordering::SeqCst) {
 					// This is guaranteed to work, the host filesystem _just_ created.
 					std::mem::drop(state.force_unique_fds());
 				}
 				state
-			},
+			}
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::argv::cannot_load_host_file_system",
-						?cause,
-						host_fs_path = %host_fs_path.display(),
-						"failed to load cafe root directory",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						miette!(
-							help = format!(
-								"Cafe Root Directory is located at: {}",
-								host_fs_path.display()
-							),
-							"Cannot load fsemul configuration file!",
-						)
-						.wrap_err(cause),
-					);
-				}
+				error!(
+					id = "bridgectl::argv::cannot_load_host_file_system",
+					?cause,
+					host_fs_path = %host_fs_path.display(),
+					"failed to load cafe root directory",
+				);
 
-				panic!("Failed to bootstrap host filesystem!");
+				std::process::exit(HOST_FILESYSTEM_INIT_FAILURE);
 			}
 		}
 	});
@@ -317,29 +247,16 @@ async fn validate_fsemul_config_is_populated() {
 
 		let read_env_path = FSEMUL_CONFIG_PATH.read().await;
 		if !read_env_path.is_some() {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::fsemul_path_required",
-					cause = "Could not find the fsemul path aka `fsemul.ini`",
-					suggestions = valuable(&[
-						"You can specify the path manually with an environment variable: [`BRIDGECTL_FSEMUL_PATH`]",
-						"You can specify the path manually with a cli argument: [`--fsemul-config-path`]",
-						"You can file an issue to get us to auto-detect the best path for your OS.",
-					]),
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Could not find the path to store the fsemul config file!"),
-						[
-							miette!("You can specify the path to the `bridge_env.ini` file with the environment variable `BRIDGECTL_FSEMUL_PATH`"),
-							miette!("You can specify the path to the `bridge_env.ini` file with the cli argument `--fsemul-config-path`"),
-							miette!("You can file an issue with the project to choose a default directory for your OS."),
-						].into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::fsemul_path_required",
+				cause = "Could not find the fsemul path aka `fsemul.ini`",
+				help = valuable(&[
+					"You can specify the path manually with an environment variable: [`BRIDGECTL_FSEMUL_PATH`]",
+					"You can specify the path manually with a cli argument: [`--fsemul-config-path`]",
+					"You can file an issue to get us to auto-detect the best path for your OS.",
+				]),
+				"Failed to find FSEmul path!",
+			);
 
 			std::process::exit(ARGV_NO_FSEMUL_PATH);
 		}
@@ -350,26 +267,12 @@ async fn validate_fsemul_config_is_populated() {
 				_ = write_lock.insert(state);
 			}
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::argv::cannot_load_fsemul_config",
-						?cause,
-						fsemul_config_path = %fsemul_config_path.display(),
-						"failed to load fsemul configuration file",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						miette!(
-							help = format!(
-								"FSEmul Configuration File is located at: {}",
-								fsemul_config_path.display()
-							),
-							"Cannot load fsemul configuration file!",
-						)
-						.wrap_err(cause),
-					);
-				}
+				error!(
+					id = "bridgectl::argv::cannot_load_fsemul_config",
+					?cause,
+					fsemul_config_path = %fsemul_config_path.display(),
+					"failed to load fsemul configuration file",
+				);
 
 				std::process::exit(ARGV_FSEMUL_LOAD_FAILURE);
 			}
@@ -382,36 +285,15 @@ async fn validate_host_file_system_is_populated() {
 	let read_env_path = CAFE_DATA_PATH.read().await;
 	_ = HOST_FILE_SYSTEM.get_or_init(|| {
 		if !read_env_path.is_some() {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::cafe_root_path_required",
-					cause = "Could not find the cafe path for the root filesystem",
-					suggestions = valuable(&[
-						"You can specify the path manually with an environment variable: [`CAFE_ROOT`]",
-						"You can specify the path manually with a cli argument: [`--cafe-dir`]",
-						"You can file an issue to get us to auto-detect the best path for your OS.",
-					]),
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Could not find the cafe path for the root filesystem!"),
-						[
-							miette!(
-								"You can specify the path to the directory with the environment variable `CAFE_ROOT`"
-							),
-							miette!(
-								"You can specify the path to the directory with the cli argument `--cafe-dir`"
-							),
-							miette!(
-								"You can file an issue with the project to choose a default directory for your OS."
-							),
-						]
-						.into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::cafe_root_path_required",
+				help = valuable(&[
+					"You can specify the path manually with an environment variable: [`CAFE_ROOT`]",
+					"You can specify the path manually with a cli argument: [`--cafe-dir`]",
+					"You can file an issue to get us to auto-detect the best path for your OS.",
+				]),
+				"Could not find the cafe path for the root filesystem",
+			);
 
 			std::process::exit(ARGV_NO_CAFE_ROOT);
 		}
@@ -428,26 +310,12 @@ async fn validate_host_file_system_is_populated() {
 				state
 			}
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::argv::cannot_load_host_filesystem",
-						?cause,
-						cafe_root_path = %cafe_root_path.display(),
-						"failed to load host filesystem path",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						miette!(
-							help = format!(
-								"Host Filesystem Path is located at: {}",
-								cafe_root_path.display(),
-							),
-							"Cannot load cafe root host filesystem!",
-						)
-						.wrap_err(cause),
-					);
-				}
+				error!(
+					id = "bridgectl::argv::cannot_load_host_filesystem",
+					?cause,
+					cafe_root_path = %cafe_root_path.display(),
+					"failed to load host filesystem path",
+				);
 
 				std::process::exit(ARGV_CAFE_ROOT_LOAD_FAILURE);
 			}

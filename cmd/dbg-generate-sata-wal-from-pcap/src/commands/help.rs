@@ -4,10 +4,7 @@
 //! We have to handle `help` ourselves, as opposed to FULLY relying on [`clap`]
 //! so we can do things like printing the output in JSON.
 
-use crate::{
-	SHOULD_LOG_JSON,
-	knobs::cli::{CliArguments, Subcommands},
-};
+use crate::knobs::cli::{CliArguments, Subcommands};
 use clap::{Arg, Command, CommandFactory};
 use tracing::{field::valuable, info};
 use valuable::Valuable;
@@ -21,20 +18,6 @@ use valuable::Valuable;
 pub fn handle_help(opt_sub_command: Option<Subcommands>) {
 	let mut top_level_command = CliArguments::command();
 	let mut subcommands_as_command = Subcommands::command();
-
-	if !SHOULD_LOG_JSON() {
-		if let Some(sub_command) = opt_sub_command {
-			let mut subcommands_as_command = Subcommands::command();
-			let my_command = subcommands_as_command
-				.get_subcommands_mut()
-				.find(|potential_command| sub_command.name_matches(potential_command.get_name()))
-				.expect("internal error: recognized subcommand could not be matched on name?");
-			info!("{}", my_command.render_long_help());
-		} else {
-			info!("{}", top_level_command.render_long_help());
-		}
-		return;
-	}
 
 	let (command, is_top_level) = if let Some(sub_command) = opt_sub_command {
 		let my_command = subcommands_as_command
@@ -77,11 +60,11 @@ pub fn handle_help(opt_sub_command: Option<Subcommands>) {
 		},
 		help.args = valuable(&args),
 		help.aliases = valuable(&aliases),
-		help.display_help_text = help,
 		help.options = valuable(&options),
 		help.positionals = valuable(&positionals),
 		help.name = command_name,
 		help.sub_commands = valuable(&subcommands),
+		help,
 	);
 }
 
