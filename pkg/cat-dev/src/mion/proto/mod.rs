@@ -24,6 +24,7 @@
 
 pub mod cgis;
 pub mod control;
+pub mod images;
 pub mod parameter;
 
 /// The port the MION uses for 'control' commands.

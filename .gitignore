@@ -2,6 +2,7 @@
 /target/
 # Editor Artifacts go here.
 /.vscode/
+/.zed/
 
 # Notes can go here.
 /scratch/

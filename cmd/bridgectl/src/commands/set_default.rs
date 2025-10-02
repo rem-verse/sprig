@@ -4,12 +4,9 @@
 //! system.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	commands::argv_helpers::{get_targeted_bridge_name, lease_bridge_config_mut},
 	exit_codes::{SET_DEFAULT_BRIDGE_DOESNT_EXIST, SET_DEFAULT_COULD_NOT_SAVE_TO_DISK},
-	utils::add_context_to,
 };
-use miette::miette;
 use tracing::{error, info};
 
 /// Handle the set default bridge command.
@@ -18,26 +15,12 @@ pub async fn handle_set_default_bridge() {
 	let mut host_state = lease_bridge_config_mut().await;
 
 	if host_state.get_bridge(&name).is_none() {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::set_default::bridge_doesnt_exist",
-				bridge.name = %name,
-				host_state.path = %host_state.get_path().display(),
-				"cannot set a bridge as the default that does not exist",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("cannot set a bridge as the default that does not exist"),
-					[miette!(
-							"Please ensure the bridge name {name} isn't mispelled and is present in the state file at: {}",
-							host_state.get_path().display(),
-						)]
-					.into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::set_default::bridge_doesnt_exist",
+			bridge.name = %name,
+			host_state.path = %host_state.get_path().display(),
+			"cannot set a bridge as the default that does not exist",
+		);
 
 		std::process::exit(SET_DEFAULT_BRIDGE_DOESNT_EXIST);
 	}
@@ -47,27 +30,13 @@ pub async fn handle_set_default_bridge() {
 	_ = host_state.set_default_bridge(&name);
 
 	if let Err(cause) = host_state.write_to_disk().await {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::set_default::could_not_save_to_disk",
-				bridge.name = %name,
-				host_state.path = %host_state.get_path().display(),
-				?cause,
-				"could not save changed to disk",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				miette!(
-					help = format!(
-						"While trying to set bridge named {name} as the default bridge for: {}",
-						host_state.get_path().display()
-					),
-					"could not save changes directly to disk",
-				)
-				.wrap_err(cause),
-			);
-		}
+		error!(
+			id = "bridgectl::set_default::could_not_save_to_disk",
+			bridge.name = %name,
+			host_state.path = %host_state.get_path().display(),
+			?cause,
+			"could not save changed to disk",
+		);
 
 		std::process::exit(SET_DEFAULT_COULD_NOT_SAVE_TO_DISK);
 	}

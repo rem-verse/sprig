@@ -1,7 +1,9 @@
 //! Parameters that are well known, and can be referred to by their name
 //! rather than just their index.
 
-use crate::mion::proto::{control::MIONBootType, parameter::MIONParameterAPIError};
+use crate::mion::proto::{
+	control::MIONBootType, images::MIONDiscImageType, parameter::MIONParameterAPIError,
+};
 use bytes::Bytes;
 use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
 
@@ -55,10 +57,10 @@ impl TryFrom<u16> for ParameterLocationSpecification {
 /// Attempt to get the index of a marater based on a name
 #[must_use]
 pub fn index_from_parameter_name(name: &str) -> Option<usize> {
-	if let Ok(number) = name.parse::<usize>() {
-		if number < 512 {
-			return Some(number);
-		}
+	if let Ok(number) = name.parse::<usize>()
+		&& number < 512
+	{
+		return Some(number);
 	}
 
 	match name {
@@ -69,6 +71,17 @@ pub fn index_from_parameter_name(name: &str) -> Option<usize> {
 		| "sdk minor version" | "minor-version" | "minor_version" | "minor version" | "minor" => Some(4),
 		"sdk-misc" | "sdk_misc" | "sdk misc" | "sdk-misc-version" | "sdk_misc_version"
 		| "sdk misc version" | "misc-version" | "misc_version" | "misc version" | "misc" => Some(5),
+		"bank-0" | "bank_0" | "bank 0" => Some(100),
+		"bank-1" | "bank_1" | "bank 1" => Some(101),
+		"bank-2" | "bank_2" | "bank 2" => Some(102),
+		"bank-3" | "bank_3" | "bank 3" => Some(103),
+		"bank-4" | "bank_4" | "bank 4" => Some(104),
+		"bank-5" | "bank_5" | "bank 5" => Some(105),
+		"bank-6" | "bank_6" | "bank 6" => Some(106),
+		"bank-7" | "bank_7" | "bank 7" => Some(107),
+		"bank-8" | "bank_8" | "bank 8" => Some(108),
+		"bank-9" | "bank_9" | "bank 9" => Some(109),
+		"bank-10" | "bank_10" | "bank 10" => Some(110),
 		_ => None,
 	}
 }
@@ -95,6 +108,11 @@ pub fn validate_value_at_index(
 			MIONBootType::NAND | MIONBootType::PCFS | MIONBootType::DUAL => true,
 			MIONBootType::Unk(_) => false,
 		},
+		// Bank types
+		//
+		//  255 == WUM/WUD/Unset
+		//  254 == WUMAD
+		100..=110 => byte_value >= 254,
 		// Has no specific validation rule we know of.
 		_ => true,
 	}
@@ -105,9 +123,23 @@ const PARAMETER_DUMP_FIELDS: &[NamedField<'static>] = &[
 	NamedField::new("SdkMajor"),
 	NamedField::new("SdkMinor"),
 	NamedField::new("SdkMisc"),
+	NamedField::new("Bank0"),
+	NamedField::new("Bank1"),
+	NamedField::new("Bank2"),
+	NamedField::new("Bank3"),
+	NamedField::new("Bank4"),
+	NamedField::new("Bank5"),
+	NamedField::new("Bank6"),
+	NamedField::new("Bank7"),
+	NamedField::new("Bank8"),
+	NamedField::new("Bank9"),
+	NamedField::new("Bank10"),
 	NamedField::new("UnknownParameters"),
 ];
-const KNOWN_INDEXES: &[usize] = &[2_usize, 3_usize, 4_usize, 5_usize];
+const KNOWN_INDEXES: &[usize] = &[
+	2_usize, 3_usize, 4_usize, 5_usize, 100_usize, 101_usize, 102_usize, 103_usize, 104_usize,
+	105_usize, 106_usize, 107_usize, 108_usize, 109_usize, 110_usize,
+];
 pub struct ValuableParameterDump<'value>(pub &'value Bytes);
 impl Structable for ValuableParameterDump<'_> {
 	fn definition(&self) -> StructDef<'_> {
@@ -138,6 +170,17 @@ impl Valuable for ValuableParameterDump<'_> {
 				Valuable::as_value(&self.0[KNOWN_INDEXES[1]]),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[2]]),
 				Valuable::as_value(&self.0[KNOWN_INDEXES[3]]),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[4]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[5]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[6]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[7]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[8]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[9]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[10]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[11]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[12]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[13]])),
+				Valuable::as_value(&MIONDiscImageType::from(self.0[KNOWN_INDEXES[14]])),
 				Valuable::as_value(&unknown_params),
 			],
 		));

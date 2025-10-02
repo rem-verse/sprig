@@ -34,7 +34,7 @@ pub(super) async fn handle_read_request(
 	stream_id: StreamID,
 	Body(request): Body<SdioControlReadRequest>,
 ) -> Result<(), CatBridgeError> {
-	let Some(data_stream) = SDIO_DATA_STREAMS.get(&stream_id.to_raw()) else {
+	let Some(data_stream) = SDIO_DATA_STREAMS.get_async(&stream_id.to_raw()).await else {
 		return Err(SDIONetworkError::DataStreamMissing(stream_id.to_raw()).into());
 	};
 

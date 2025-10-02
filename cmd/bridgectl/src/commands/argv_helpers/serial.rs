@@ -1,14 +1,11 @@
 use crate::{
-	SHOULD_LOG_JSON,
 	exit_codes::{
 		ARGV_SERIAL_CONFLICTING_ARGUMENTS, SERIAL_PORT_CONNECTION_FAILURE,
 		SHOULD_NEVER_HAPPEN_FAILURE,
 	},
 	knobs::{cli::SharedSerialPortFlags, env::BRIDGECTL_SERIAL_PORT},
-	utils::add_context_to,
 };
 use cat_dev::serial::{AsyncSerialPort, SerialLines};
-use miette::miette;
 use std::{path::PathBuf, time::Duration};
 use tokio::{
 	io::{AsyncBufRead, BufReader},
@@ -67,34 +64,15 @@ pub async fn coalesce_serial_ports(
 ) -> SerialLogger {
 	let arg_to_take =
 		if serial_port_flags.serial_port_flag().is_some() && serial_port_positional.is_some() {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::conflicting_serial_port_args",
-					flags.serial_port = valuable(&serial_port_flags),
-					args.serial_port = ?serial_port_positional,
-					suggestions = valuable(&[
-						"You only need to specify a serial port in one way, either through an argument, or a flag.",
-						"There is no such thing as multiple serial ports for the cat-dev.",
-					]),
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Positional argument conflicts with flag arguments!"),
-						[
-							miette!(
-								"You only need to specify a serial port in one way, either through an argument, or a flag."
-							),
-							miette!(
-								help = format!("Serial Port Flags: {serial_port_flags}"),
-								"A CAT-DEV does not support multiple serial ports at the same time.",
-							),
-						]
-						.into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::conflicting_serial_port_args",
+				flags.serial_port = valuable(&serial_port_flags),
+				args.serial_port = ?serial_port_positional,
+				help = valuable(&[
+					"You only need to specify a serial port in one way, either through an argument, or a flag.",
+					"There is no such thing as multiple serial ports for the cat-dev.",
+				]),
+			);
 
 			std::process::exit(ARGV_SERIAL_CONFLICTING_ARGUMENTS);
 		} else if let Some(flag) = serial_port_flags.serial_port_flag() {
@@ -110,33 +88,13 @@ pub async fn coalesce_serial_ports(
 	let port = match AsyncSerialPort::new(arg_to_take) {
 		Ok(port) => port,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::argv::serial_connection_failure",
-					?cause,
-					help = "Please file an issue if it's not clear with your serial device.",
-					port = %arg_to_take.display(),
-					"failed to connect to serial device specified"
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("{cause:?}"),
-						[
-							miette!("Failed to connect to specified serial device."),
-							miette!(
-								help = format!(
-									"Specified serial device is: {}",
-									arg_to_take.display()
-								),
-								"Please file an issue if it's not clear why your OS is giving us an error.",
-							),
-						]
-						.into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::argv::serial_connection_failure",
+				?cause,
+				help = "Please file an issue if it's not clear with your serial device.",
+				port = %arg_to_take.display(),
+				"failed to connect to serial device specified"
+			);
 
 			std::process::exit(SERIAL_PORT_CONNECTION_FAILURE);
 		}
@@ -194,16 +152,10 @@ impl SerialLogger {
 					tokio::select! {
 						() = sleep(Duration::from_secs(u64::MAX)) => {}
 						_ = ctrl_c_signal() => {
-							if SHOULD_LOG_JSON() {
-								info!(
-									id = "bridgectl::serial::honk_shoo_detected_ctrlc",
-									"ctrl-c has been hit, shutting down empty serial logger!",
-								);
-							} else {
-								info!(
-									"Ctrl-C has been detected as being hit! Shutting down empty serial logger!"
-								);
-							}
+							info!(
+								id = "bridgectl::serial::honk_shoo_detected_ctrlc",
+								"ctrl-c has been hit, shutting down empty serial logger!",
+							);
 
 							break;
 						}
@@ -212,18 +164,11 @@ impl SerialLogger {
 			}) {
 			Ok(port) => port,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					warn!(
-						id = "bridgectl::serial::debug_out_watcher_spawn_failure",
-						?cause,
-						"failed to spawn task to watch serial logs; internal",
-					);
-				} else {
-					warn!(
-						?cause,
-						"internal error: failed to spawn task to watch for debug out serial logs, serial logs will not be watched for.",
-					);
-				}
+				warn!(
+					id = "bridgectl::serial::debug_out_watcher_spawn_failure",
+					?cause,
+					"failed to spawn task to watch serial logs; internal",
+				);
 
 				std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
 			}
@@ -245,18 +190,11 @@ impl SerialLogger {
 			}) {
 			Ok(port) => port,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					warn!(
-						id = "bridgectl::serial::watcher_spawn_failure",
-						?cause,
-						"failed to spawn task to watch serial logs; internal",
-					);
-				} else {
-					warn!(
-						?cause,
-						"internal error: failed to spawn task to watch for serial logs, serial logs will not be watched for.",
-					);
-				}
+				warn!(
+					id = "bridgectl::serial::watcher_spawn_failure",
+					?cause,
+					"failed to spawn task to watch serial logs; internal",
+				);
 
 				std::process::exit(SHOULD_NEVER_HAPPEN_FAILURE);
 			}
@@ -272,59 +210,36 @@ impl SerialLogger {
 			tokio::select! {
 				res = reader.next_line() => {
 					match res {
-						Ok(Some(line)) => if SHOULD_LOG_JSON() {
-							info!(
-								id = "bridgectl::serial_log::watcher::line",
-								%line,
-								"received log line from serial port",
-							);
-						} else {
-							info!(line);
-						}
+						Ok(Some(line)) => info!(
+							id = "bridgectl::serial_log::watcher::line",
+							line,
+						),
 						Ok(None) => {
-							if SHOULD_LOG_JSON() {
-								debug!(
-									id = "bridgectl::serial_log::watcher::graceful_shutdown",
-									shutdown_reason = "empty-receive",
-									"shutting down gracefully"
-								);
-							} else {
-								debug!(
-									shutdown_reason = "empty-receive",
-									"shutting down serial log watcher gracefully..."
-								);
-							}
+							debug!(
+								id = "bridgectl::serial_log::watcher::graceful_shutdown",
+								shutdown_reason = "empty-receive",
+								"shutting down gracefully"
+							);
 
 							break;
 						}
 						Err(cause) => {
-							if SHOULD_LOG_JSON() {
-								warn!(
-									id = "bridgectl::serial_log::watcher::failure",
-									?cause,
-									"could not receive lines from this serial port."
-								);
-							} else {
-								warn!(?cause, "serial port gave us an error trying to read from it.");
-							}
+							warn!(
+								id = "bridgectl::serial_log::watcher::failure",
+								?cause,
+								"could not receive lines from this serial port."
+							);
 
 							break;
 						}
 					}
 				}
 				_ = ctrl_c_signal() => {
-					if SHOULD_LOG_JSON() {
-						debug!(
-							id = "bridgectl::serial_log::watcher::graceful_shutdown",
-							shutdown_reason = "ctrl-c",
-							"shutting down gracefully"
-						);
-					} else {
-						debug!(
-							shutdown_reason = "ctrl-c",
-							"shutting down serial log watcher gracefully..."
-						);
-					}
+					debug!(
+						id = "bridgectl::serial_log::watcher::graceful_shutdown",
+						shutdown_reason = "ctrl-c",
+						"shutting down gracefully"
+					);
 
 					break;
 				}

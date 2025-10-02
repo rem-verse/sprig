@@ -1,16 +1,14 @@
 //! Handling listing all the bridges on the network, or cached bridges.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	commands::argv_helpers::{
 		get_control_port, get_padded_string, get_scan_timeout, lease_bridge_config,
 	},
 	exit_codes::LIST_COULD_NOT_SEARCH,
-	utils::add_context_to,
 };
 use cat_dev::mion::{discovery::discover_bridges, proto::control::MionIdentity};
-use miette::miette;
-use terminal_size::{Width as TermWidth, terminal_size};
+use rm_lisa::display::SuperConsole;
+use std::io::{Stderr, Stdout};
 use tokio::time::sleep;
 use tracing::{error, field::valuable, info, warn};
 
@@ -34,46 +32,28 @@ async fn list_from_network(use_table: bool) {
 	let mut recv_channel = match discover_bridges(true, Some(get_control_port().await)).await {
 		Ok(channel) => channel,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::list::failed_to_execute_broadcast",
-					?cause,
-					help = "Could not setup sockets to broadcast and search for all MIONs; perhaps another program is already using the single MION port?",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					miette!(
-						help = "Perhaps another program is already using the single MION port?",
-						"Could not setup sockets to broadcast and search for all MIONs",
-					)
-					.wrap_err(cause),
-				);
-			}
+			error!(
+				id = "bridgectl::list::failed_to_execute_broadcast",
+				?cause,
+				help = "Could not setup sockets to broadcast and search for all MIONs; perhaps another program is already using the single MION port?",
+			);
 
 			std::process::exit(LIST_COULD_NOT_SEARCH);
 		}
 	};
 
-	if use_table {
-		if let Some((TermWidth(characters_wide), _)) = terminal_size() {
-			if characters_wide < 150 {
-				warn!(
-					id = "bridgectl::list::terminal_may_be_small",
-					width.expected = 150,
-					width.was = characters_wide,
-					"!!! HEY! Your terminal width seems to be smaller than 150 characters! The table renders at ~150 characters, so we recommend making you terminal wider to see the table best !!!",
-				);
-			}
+	if use_table && let Some(characters_wide) = SuperConsole::<Stdout, Stderr>::terminal_width() {
+		if characters_wide < 214 {
+			warn!(
+				id = "bridgectl::list::terminal_may_be_small",
+				width.expected = 214,
+				width.was = characters_wide,
+				"!!! HEY! Your terminal width seems to be smaller than 214 characters! The table renders at ~150 characters, so we recommend making you terminal wider to see the table best !!!",
+			);
 		}
 
-		if SHOULD_LOG_JSON() {
-			info!(id = TABLE_TRACING_ID, line = TABLE_HEADER);
-			info!(id = TABLE_TRACING_ID, line = TABLE_HEADER_LINE);
-		} else {
-			println!("{TABLE_HEADER}");
-			println!("{TABLE_HEADER_LINE}");
-		}
+		info!(id = TABLE_TRACING_ID, line = TABLE_HEADER);
+		info!(id = TABLE_TRACING_ID, line = TABLE_HEADER_LINE);
 	}
 
 	let mut found_bridges = Vec::new();
@@ -132,20 +112,10 @@ fn print_detailed_bridge(bridge: &MionIdentity, use_table: bool) {
 		let full_table_line = format!(
 			"{rendered_name} | {rendered_ip} | {rendered_mac} | {rendered_fpga} | {rendered_fw} | {rendered_sdk} | {rendered_boot_mode} | {rendered_power_status}"
 		);
-		if SHOULD_LOG_JSON() {
-			info!(
-				id = TABLE_TRACING_ID,
-				line = full_table_line,
-				bridge = valuable(&bridge)
-			);
-		} else {
-			println!("{full_table_line}");
-		}
-	} else if SHOULD_LOG_JSON() {
 		info!(
-			id = "bridgectl::list::discovered_bridge_over_network",
+			id = TABLE_TRACING_ID,
 			bridge = valuable(&bridge),
-			"Found a bridge on the network",
+			full_table_line,
 		);
 	} else {
 		info!(
@@ -163,49 +133,26 @@ fn print_detailed_bridge(bridge: &MionIdentity, use_table: bool) {
 }
 
 fn print_no_bridge_found_warning(was_early_exit: bool, early_timeout: Option<u64>) {
-	if SHOULD_LOG_JSON() {
-		let mut suggestions = vec![
-			"Please ensure the CAT-DEV is powered on, and running.".to_owned(),
-			"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.".to_owned(),
-			"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.".to_owned(),
-		];
-		if was_early_exit {
-			suggestions.push(format!(
-				"We stopped searching early, you can raise the time before we give up searching you can use the CLI Argument with `--early-timeout-seconds <seconds>`, we timed out at {} seconds.",
-				early_timeout.unwrap_or(DEFAULT_EARLY_TIMEOUT),
-			));
-		}
-
-		warn!(
-			id = "bridgectl::list::failed_to_find_any_device",
-			suggestions = valuable(&suggestions),
-			"Could not find any bridges while broadcasting"
-		);
-	} else {
-		let mut suggestions = vec![
-			miette!("Please ensure the CAT-DEV is powered on, and running."),
-			miette!(
-				"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device."
-			),
-			miette!(
-				"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the two VLANs/Subnets."
-			),
-		];
-		if was_early_exit {
-			suggestions.push(miette!(format!(
-				"We stopped searching early (at {}s), you can raise the time we stop searching early with the CLI Flag: `--early-timeout-seconds`.",
-				early_timeout.unwrap_or(DEFAULT_EARLY_TIMEOUT),
-			)));
-		}
-
-		warn!(
-			"\n{:?}",
-			add_context_to(
-				miette!("Could not find a bridge by the name, or potentially an ip."),
-				suggestions.into_iter(),
-			),
-		);
+	let mut suggestions = vec![
+		"Please ensure the CAT-DEV is powered on, and running.".to_owned(),
+		"Make sure you are on the same Local Network, Subnet, and VLAN as the CAT-DEV device.".to_owned(),
+		"If you're not on the same VLAN, Subnet you can use something like: <https://github.com/udp-redux/udp-broadcast-relay-redux> to forward between the subnets & vlans.".to_owned(),
+	];
+	if was_early_exit {
+		suggestions.push(format!(
+			"We stopped searching early, you can raise the time before we give up searching you can use the CLI Argument with `--early-timeout-seconds <seconds>`, we timed out at {} seconds.",
+			early_timeout.unwrap_or(DEFAULT_EARLY_TIMEOUT),
+		));
 	}
+
+	warn!(
+		id = "bridgectl::list::failed_to_find_any_device",
+		scan.was_early_exit = was_early_exit,
+		scan.timeout_value = ?early_timeout,
+		scan.timeout_unit = "seconds",
+		help = valuable(&suggestions),
+		"Could not find any bridges while broadcasting"
+	);
 }
 
 /// List the bridges from a cache rather than doing a full broadcast.
@@ -221,25 +168,17 @@ async fn list_from_cache(use_table: bool) {
 	let host_state = lease_bridge_config().await;
 	let bridges = host_state.list_bridges();
 	if bridges.is_empty() {
-		if SHOULD_LOG_JSON() {
-			info!(id = "bridgectl::list::cache_has_no_bridges", ?host_state);
-		} else {
-			info!(
-				host_state.path=%host_state.get_path().display(),
-				"Couldn't find any cached bridges (perhaps try without the cached flag, or validate the path?). You can use `bridgectl add` to add bridges to your host state.",
-			);
-		}
+		info!(
+			id = "bridgectl::list::cache_has_no_bridges",
+			host_state.path=%host_state.get_path().display(),
+			"Couldn't find any cached bridges (perhaps try without the cached flag, or validate the path?). You can use `bridgectl add` to add bridges to your host state.",
+		);
 		return;
 	}
 
 	if use_table {
-		if SHOULD_LOG_JSON() {
-			info!(id = TABLE_TRACING_ID, line = TABLE_HEADER);
-			info!(id = TABLE_TRACING_ID, line = TABLE_HEADER_LINE);
-		} else {
-			println!("{TABLE_HEADER}");
-			println!("{TABLE_HEADER_LINE}");
-		}
+		info!(id = TABLE_TRACING_ID, TABLE_HEADER);
+		info!(id = TABLE_TRACING_ID, TABLE_HEADER_LINE);
 	}
 
 	for (bridge_name, (bridge_ip, is_default)) in bridges {
@@ -253,21 +192,17 @@ async fn list_from_cache(use_table: bool) {
 
 				format!("{name} | {ip} | {is_default}")
 			};
-			if SHOULD_LOG_JSON() {
-				info!(
-					id = TABLE_TRACING_ID,
-					line = table_line,
-					bridge.ip = ?bridge_ip,
-					bridge.is_default = is_default,
-					bridge.name = bridge_name,
-				);
-			} else {
-				println!("{table_line}");
-			}
-		} else if SHOULD_LOG_JSON() {
-			info!(id = "bridgectl::list::bridge_info", bridge.ip = ?bridge_ip, bridge.is_default = is_default, bridge.name = bridge_name);
+
+			info!(
+				id = TABLE_TRACING_ID,
+				bridge.ip = ?bridge_ip,
+				bridge.is_default = is_default,
+				bridge.name = bridge_name,
+				table_line,
+			);
 		} else {
 			info!(
+				id = "bridgectl::list::bridge_info",
 				bridge.ip_address =
 					bridge_ip.map_or("<missing info>".to_owned(), |ip| format!("{ip}")),
 				bridge.is_default = is_default,

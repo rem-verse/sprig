@@ -312,8 +312,9 @@ impl SataClient {
 		let typed_response = match query_type {
 			SataQueryType::FileCount => SataQueryResponse::try_from_small(bytes)?,
 			SataQueryType::FileDetails => SataQueryResponse::try_from_fd_info(bytes)?,
-			SataQueryType::FreeDiskSpace => SataQueryResponse::try_from_large(bytes)?,
-			SataQueryType::SizeOfFolder => SataQueryResponse::try_from_large(bytes)?,
+			SataQueryType::FreeDiskSpace | SataQueryType::SizeOfFolder => {
+				SataQueryResponse::try_from_large(bytes)?
+			}
 		};
 		if let SataQueryResponse::ErrorCode(ec) = typed_response {
 			return Err(NetworkParseError::ErrorCode(ec).into());
@@ -910,11 +911,11 @@ impl SataClientFileHandle<'_> {
 	fn calculate_ideal_block_size_count(amount: usize) -> (u32, u32) {
 		if amount < 512 {
 			(u32::try_from(amount).expect("unreachable()"), 1)
-		} else if amount % 512 == 0 {
+		} else if amount.is_multiple_of(512) {
 			(512, u32::try_from(amount / 512).unwrap_or(u32::MAX))
 		} else {
 			let mut count = 511;
-			while amount % count != 0 {
+			while !amount.is_multiple_of(count) {
 				count -= 1;
 			}
 

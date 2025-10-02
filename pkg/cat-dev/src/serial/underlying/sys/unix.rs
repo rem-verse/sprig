@@ -443,10 +443,9 @@ impl RawSyncSerialPort {
 				// They have a file called `device/driver_override` set to "(null)".
 				if let Ok(driver_override) =
 					std::fs::read(entry.path().join("device/driver_override"))
+					&& driver_override == b"(null)\n"
 				{
-					if driver_override == b"(null)\n" {
-						return None;
-					}
+					return None;
 				}
 
 				Some(dev_path)

@@ -430,15 +430,11 @@ where
 					break;
 				};
 
-				if let Some(filter_mac) = find_by_mac.as_ref() {
-					if *filter_mac == identity.mac_address() {
-						return Ok(Some(identity));
-					}
+				if let Some(filter_mac) = find_by_mac.as_ref() && *filter_mac == identity.mac_address() {
+					return Ok(Some(identity));
 				}
-				if let Some(filter_name) = find_by_name.as_ref() {
-					if filter_name == identity.name() {
-						return Ok(Some(identity));
-					}
+				if let Some(filter_name) = find_by_name.as_ref() && filter_name == identity.name() {
+					return Ok(Some(identity));
 				}
 			}
 			() = sleep(early_scan_timeout.unwrap_or(Duration::from_secs(MION_ANNOUNCE_TIMEOUT_SECONDS * 2))) => {

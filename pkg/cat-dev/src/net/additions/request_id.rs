@@ -28,7 +28,7 @@ use tracing::{
 	field::valuable,
 	instrument::{Instrument, Instrumented},
 };
-use valuable::{Fields, NamedField, NamedValues, StructDef, Structable, Valuable, Value, Visit};
+use valuable::{Valuable, Value, Visit};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct RequestID(Arc<String>);
@@ -113,26 +113,25 @@ impl Deref for RequestID {
 	}
 }
 
-const REQUEST_ID_FIELDS: &[NamedField<'static>] = &[NamedField::new("id")];
-
-impl Structable for RequestID {
-	fn definition(&self) -> StructDef<'_> {
-		StructDef::new_static("RequestID", Fields::Named(REQUEST_ID_FIELDS))
-	}
-}
-
 impl Valuable for RequestID {
 	fn as_value(&self) -> Value<'_> {
-		Value::Structable(self)
+		Value::String(self.0.as_str())
 	}
 
 	fn visit(&self, visitor: &mut dyn Visit) {
-		visitor.visit_named_fields(&NamedValues::new(REQUEST_ID_FIELDS, &[self.0.as_value()]));
+		visitor.visit_value(self.as_value());
 	}
 }
 
 #[derive(Clone, Debug)]
-pub struct RequestIDLayer;
+pub struct RequestIDLayer(String);
+
+impl RequestIDLayer {
+	#[must_use]
+	pub const fn new(service_name: String) -> Self {
+		Self(service_name)
+	}
+}
 
 impl<Layered> Layer<Layered> for RequestIDLayer
 where
@@ -141,13 +140,17 @@ where
 	type Service = LayeredRequestID<Layered>;
 
 	fn layer(&self, inner: Layered) -> Self::Service {
-		LayeredRequestID { inner }
+		LayeredRequestID {
+			inner,
+			service_name: self.0.clone(),
+		}
 	}
 }
 
 #[derive(Clone)]
 pub struct LayeredRequestID<Layered> {
 	inner: Layered,
+	service_name: String,
 }
 
 impl<Layered, State: Clone + Send + Sync + 'static> Service<Request<State>>
@@ -178,9 +181,10 @@ where
 		let req_id = RequestID::generate();
 
 		let span = error_span!(
-		  parent: parent_span,
-		  "WithRequestID",
-		  request.id = valuable(&req_id),
+			parent: parent_span,
+			"WithRequestID",
+			lisa.subsystem = %self.service_name,
+			request.id = valuable(&req_id),
 		);
 		req.extensions_mut().insert::<RequestID>(req_id);
 		req.extensions_mut().insert::<Option<TracingId>>(span.id());

@@ -38,25 +38,24 @@ pub async fn handle_read_file(
 	let ffio_enabled = flags.ffio_enabled();
 	let mut buffer_grew = flags.ffio_buffer_should_have_grown();
 
-	if packet.should_move() {
-		if let Err(cause) = packet
+	if packet.should_move()
+		&& let Err(cause) = packet
 			.move_to_pointer()
 			.do_move(&fs, handle, Some(stream.to_raw()))
 			.await
-		{
-			debug!(
-				?cause,
-				packet.fd = handle,
-				packet.typ = "PCFSSrvReadFile",
-				"Failed to move file to a specific pointer!",
-			);
+	{
+		debug!(
+			?cause,
+			packet.fd = handle,
+			packet.typ = "PCFSSrvReadFile",
+			"Failed to move file to a specific pointer!",
+		);
 
-			if ffio_enabled {
-				return Ok(construct_ffio_error(FS_ERROR));
-			}
-
-			todo!("Implement non-FFIO support.");
+		if ffio_enabled {
+			return Ok(construct_ffio_error(FS_ERROR));
 		}
+
+		todo!("Implement non-FFIO support.");
 	}
 
 	let Some(file_size) = fs.file_length(handle, Some(stream.to_raw())).await else {

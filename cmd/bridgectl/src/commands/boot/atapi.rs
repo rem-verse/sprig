@@ -5,10 +5,8 @@
 //! communications over a similar sata protocol.
 
 use crate::{
-	SHOULD_LOG_JSON,
 	exit_codes::{BOOT_COULD_NOT_CONNECT, BOOT_COULD_NOT_SPAWN},
 	knobs::env::ATAPI_OVERRIDE_LOAD_BEARING_SLEEP_MS,
-	utils::add_context_to,
 };
 use cat_dev::{
 	fsemul::{
@@ -17,7 +15,6 @@ use cat_dev::{
 	},
 	net::server::TCPServer,
 };
-use miette::miette;
 use std::net::Ipv4Addr;
 use tokio::{signal::ctrl_c as ctrl_c_signal, task::Builder as TaskBuilder};
 use tracing::{error, info};
@@ -48,21 +45,11 @@ pub async fn serve_atapi(
 	{
 		Ok(srv) => srv,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::boot::atapi_bind_failure",
-					?cause,
-					"failed to start server for ATAPI Emulation"
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!("Failed to start server for ATAPI Emulation"),
-						[cause.into()].into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::boot::atapi_bind_failure",
+				?cause,
+				"failed to start server for ATAPI Emulation"
+			);
 
 			std::process::exit(BOOT_COULD_NOT_CONNECT);
 		}
@@ -79,50 +66,26 @@ fn spawn_atapi(atapi_emulator: TCPServer<HostFilesystem>) {
 			tokio::select! {
 				res = atapi_emulator.bind() => {
 					if let Err(cause) = res {
-						if SHOULD_LOG_JSON() {
-							error!(
-								id = "bridgectl::boot::atapi_spawn_failure",
-								?cause,
-								"failed to bind server to serve data to MION"
-							);
-						} else {
-							error!(
-								"\n{:?}",
-								add_context_to(
-									miette!("Failed to bind server to serve ATAPI data to MION!"),
-									[miette!("{cause:?}")].into_iter(),
-								),
-							);
-						}
+						error!(
+							id = "bridgectl::boot::atapi_spawn_failure",
+							?cause,
+							"failed to bind server to serve data to MION"
+						);
 					}
 				},
-				_ = ctrl_c_signal() => if SHOULD_LOG_JSON() {
+				_ = ctrl_c_signal() => {
 					info!(
 						id = "bridgectl::boot::atapi_detected_ctrlc",
 						"ctrl-c has been hit, shutting down atapi",
 					);
-				} else {
-					info!(
-						"Ctrl-C has been detected as being hit! Shutting down atapi!"
-					);
 				}
 			}
 		}) {
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::boot::atapi_spawn_failure",
-				?cause,
-				"failed to spawn task to serve atapi data to mion"
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!("Failed to spawn task to serve ATAPI data to MION!"),
-					[miette!("{cause:?}")].into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::boot::atapi_spawn_failure",
+			?cause,
+			"failed to spawn task to serve atapi data to mion"
+		);
 
 		std::process::exit(BOOT_COULD_NOT_SPAWN);
 	}

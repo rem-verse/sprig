@@ -60,10 +60,7 @@ fn process_log_messages(printf_buff: &mut String) {
 
 			// Ignore empty newlines they try to send.
 			if !actual_line.trim().is_empty() {
-				info!(
-					sdio.data.printf = %actual_line.trim(),
-					"Received SDIO message.",
-				);
+				info!("{}", actual_line.trim(),);
 			}
 		}
 		while let Some(line_ending) = printf_buff.find('\n') {
@@ -73,10 +70,7 @@ fn process_log_messages(printf_buff: &mut String) {
 
 			// Ignore empty newlines they try to send.
 			if !actual_line.trim().is_empty() {
-				info!(
-					sdio.data.printf = %actual_line.trim(),
-					"Received SDIO message.",
-				);
+				info!("{}", actual_line.trim(),);
 			}
 		}
 		while let Some(line_ending) = printf_buff.find('\r') {
@@ -86,10 +80,7 @@ fn process_log_messages(printf_buff: &mut String) {
 
 			// Ignore empty newlines they try to send.
 			if !actual_line.trim().is_empty() {
-				info!(
-					sdio.data.printf = %actual_line.trim(),
-					"Received SDIO message.",
-				);
+				info!("{}", actual_line.trim(),);
 			}
 		}
 

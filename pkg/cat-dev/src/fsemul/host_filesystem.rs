@@ -249,7 +249,8 @@ impl HostFilesystem {
 		};
 
 		self.open_file_handles
-			.insert(final_fd, (fd, md.len(), path.clone(), stream_owner))
+			.insert_async(final_fd, (fd, md.len(), path.clone(), stream_owner))
+			.await
 			.map_err(|_| IOError::other("somehow got duplicate fd?"))?;
 		Ok(final_fd)
 	}
@@ -261,7 +262,7 @@ impl HostFilesystem {
 		&self,
 		fd: i32,
 		for_stream: Option<u64>,
-	) -> Option<CMOccupiedEntry<i32, (File, u64, PathBuf, Option<u64>), RandomState>> {
+	) -> Option<CMOccupiedEntry<'_, i32, (File, u64, PathBuf, Option<u64>), RandomState>> {
 		self.open_file_handles
 			.get_async(&fd)
 			.await
@@ -400,11 +401,11 @@ impl HostFilesystem {
 	/// If we cannot close our file handle when our ref count reaches 0, or if
 	/// the file isn't open at all.
 	pub async fn close_file(&self, fd: i32, for_stream: Option<u64>) {
-		if let Some(entry) = self.open_file_handles.get_async(&fd).await {
-			if !Self::allow_file_access(&entry, for_stream) {
-				// Don't allow streams to close other streams files.
-				return;
-			}
+		if let Some(entry) = self.open_file_handles.get_async(&fd).await
+			&& !Self::allow_file_access(&entry, for_stream)
+		{
+			// Don't allow streams to close other streams files.
+			return;
 		}
 
 		self.open_file_handles.remove_async(&fd).await;
@@ -427,7 +428,7 @@ impl HostFilesystem {
 		let fake_fd = FOLDER_FD.fetch_add(1, AtomicOrdering::SeqCst);
 
 		self.open_folder_handles
-			.insert(fake_fd, (dhandle, 0, false, path.clone(), for_stream))
+			.insert_sync(fake_fd, (dhandle, 0, false, path.clone(), for_stream))
 			.map_err(|_| IOError::other("OS returned duplicate fd?"))?;
 		Ok(fake_fd)
 	}
@@ -531,10 +532,10 @@ impl HostFilesystem {
 	/// If we cannot close our folder handle when our ref count reaches 0, or if
 	/// the folder isn't open at all.
 	pub async fn close_folder(&self, fd: i32, for_stream: Option<u64>) {
-		if let Some(real_entry) = self.open_folder_handles.get_async(&fd).await {
-			if !Self::allow_folder_access(&real_entry, for_stream) {
-				return;
-			}
+		if let Some(real_entry) = self.open_folder_handles.get_async(&fd).await
+			&& !Self::allow_folder_access(&real_entry, for_stream)
+		{
+			return;
 		}
 
 		self.open_folder_handles.remove_async(&fd).await;
@@ -1283,21 +1284,21 @@ impl HostFilesystem {
 		let mut wii_file = File::create(wii_path).await.map_err(FSError::IO)?;
 		wii_file
 			.write_all(
-				br#"<?xml version="1.0" encoding="utf-8"?> 
-<wii_acct type="complex"> 
-  <profile type="complex"> 
+				br#"<?xml version="1.0" encoding="utf-8"?>
+<wii_acct type="complex">
+  <profile type="complex">
     <nickname type="hexBinary" length="22">00570069006900000000000000000000000000000000</nickname>
 
-    <language type="unsignedInt" length="4">0</language> 
-    <country type="unsignedInt" length="4">1</country> 
-  </profile> 
-  <pc type="complex"> 
-    <rating type="unsignedInt" length="4">18</rating> 
-    <organization type="unsignedInt" length="4">0</organization> 
-    <rst_internet_ch type="unsignedByte" length="1">0</rst_internet_ch> 
-    <rst_nw_access type="unsignedByte" length="1">0</rst_nw_access> 
-    <rst_pt_order type="unsignedByte" length="1">0</rst_pt_order> 
-  </pc> 
+    <language type="unsignedInt" length="4">0</language>
+    <country type="unsignedInt" length="4">1</country>
+  </profile>
+  <pc type="complex">
+    <rating type="unsignedInt" length="4">18</rating>
+    <organization type="unsignedInt" length="4">0</organization>
+    <rst_internet_ch type="unsignedByte" length="1">0</rst_internet_ch>
+    <rst_nw_access type="unsignedByte" length="1">0</rst_nw_access>
+    <rst_pt_order type="unsignedByte" length="1">0</rst_pt_order>
+  </pc>
 </wii_acct>"#,
 			)
 			.await
@@ -1350,7 +1351,7 @@ impl HostFilesystem {
 			&["data", "mlc", "usr", "import"],
 			&["data", "mlc", "usr", "title"],
 		] {
-			_ = set.insert(Self::join_many(cafe_dir, cafe_sub_paths));
+			_ = set.insert_sync(Self::join_many(cafe_dir, cafe_sub_paths));
 		}
 
 		set
@@ -1376,12 +1377,14 @@ impl Valuable for HostFilesystem {
 
 	fn visit(&self, visitor: &mut dyn Visit) {
 		let mut values = HashMap::with_capacity(self.open_file_handles.len());
-		self.open_file_handles.scan(|k, v| {
+		self.open_file_handles.iter_sync(|k, v| {
 			values.insert(*k, format!("{}", v.2.display()));
+			true
 		});
 		let mut folder_values = HashMap::with_capacity(self.open_folder_handles.len());
-		self.open_folder_handles.scan(|k, v| {
+		self.open_folder_handles.iter_sync(|k, v| {
 			folder_values.insert(*k, format!("{}", v.3.display()));
+			true
 		});
 
 		visitor.visit_named_fields(&NamedValues::new(
@@ -1847,7 +1850,7 @@ mod unit_tests {
 			.await
 			.expect("Failed opening a file that doesn't exist with a create flag?");
 		assert!(
-			fs.open_file_handles.len() == 1 && fs.open_file_handles.get(&fd).is_some(),
+			fs.open_file_handles.len() == 1 && fs.open_file_handles.get_sync(&fd).is_some(),
 			"Open file wasn't in open files list!",
 		);
 		fs.close_file(fd, None).await;

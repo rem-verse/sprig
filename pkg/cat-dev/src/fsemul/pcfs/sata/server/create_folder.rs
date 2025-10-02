@@ -52,16 +52,16 @@ pub async fn handle_create_folder(
 		return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
 	}
 
-	if !fs_location.resolved_path().exists() {
-		if let Err(cause) = create_dir_all(fs_location.resolved_path()).await {
-			error!(
-			  ?cause,
-			  path = %fs_location.resolved_path().display(),
-			  "Failed to create directory for PCFS.",
-			);
+	if !fs_location.resolved_path().exists()
+		&& let Err(cause) = create_dir_all(fs_location.resolved_path()).await
+	{
+		error!(
+		  ?cause,
+		  path = %fs_location.resolved_path().display(),
+		  "Failed to create directory for PCFS.",
+		);
 
-			return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
-		}
+		return SataResponse::new(state.pid(), request_header, SataResultCode::error(FS_ERROR));
 	}
 
 	// Don't set folders as read-only.

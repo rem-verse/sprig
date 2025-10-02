@@ -1,15 +1,11 @@
 //! Handle decrypting a MION firmware file distributed as part of the Cafe SDK.
 
-use crate::{
-	SHOULD_LOG_JSON,
-	exit_codes::{
-		DECRYPT_FW_BAD_OUTPUT_PATH, DECRYPT_FW_COULD_NOT_DECRYPT_FW, DECRYPT_FW_COULD_NOT_READ_FW,
-		DECRYPT_FW_COULD_NOT_WRITE_FW,
-	},
-	utils::add_context_to,
+use crate::exit_codes::{
+	DECRYPT_FW_BAD_OUTPUT_PATH, DECRYPT_FW_COULD_NOT_DECRYPT_FW, DECRYPT_FW_COULD_NOT_READ_FW,
+	DECRYPT_FW_COULD_NOT_WRITE_FW,
 };
 use cat_dev::mion::firmware::raw_decrypt;
-use miette::{IntoDiagnostic, miette};
+use miette::IntoDiagnostic;
 use std::path::{Path, PathBuf};
 use tracing::{error, field::valuable};
 
@@ -25,28 +21,12 @@ pub async fn handle_decrypt_firmware(
 	{
 		Ok(bytes) => bytes,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-					id = "bridgectl::mion::decrypt_firmware::could_not_read_firmware_file",
-					?cause,
-					file = valuable(&firmware_file),
-					"Could not read firmware file to decrypt.",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					add_context_to(
-						miette!(
-							"Could not read the firmware file to decrypt, perhaps some filesystem error?"
-						),
-						[
-							cause,
-							miette!(format!("Was Reading File: {}", firmware_file.display())),
-						]
-						.into_iter(),
-					),
-				);
-			}
+			error!(
+				id = "bridgectl::mion::decrypt_firmware::could_not_read_firmware_file",
+				?cause,
+				file = valuable(&firmware_file),
+				"Could not read firmware file to decrypt.",
+			);
 
 			std::process::exit(DECRYPT_FW_COULD_NOT_READ_FW);
 		}
@@ -57,28 +37,12 @@ pub async fn handle_decrypt_firmware(
 		match raw_decrypt(&encrypted_firmware_contents[..encrypted_firmware_contents.len() - 6]) {
 			Ok(contents) => contents,
 			Err(cause) => {
-				if SHOULD_LOG_JSON() {
-					error!(
-						id = "bridgectl::mion::decrypt_firmware::could_not_decrypt",
-						?cause,
-						file = valuable(&firmware_file),
-						"Could not decrypt the firmware file, must be corrupt.",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						add_context_to(
-							miette!(
-								"Could not decrypt the firmware file, perhaps it is corrupt in some way?"
-							),
-							[
-								cause.into(),
-								miette!(format!("Was Reading File: {}", firmware_file.display())),
-							]
-							.into_iter(),
-						),
-					);
-				}
+				error!(
+					id = "bridgectl::mion::decrypt_firmware::could_not_decrypt",
+					?cause,
+					file = valuable(&firmware_file),
+					"Could not decrypt the firmware file, must be corrupt.",
+				);
 
 				std::process::exit(DECRYPT_FW_COULD_NOT_DECRYPT_FW);
 			}
@@ -93,28 +57,12 @@ pub async fn handle_decrypt_firmware(
 		.await
 		.into_diagnostic()
 	{
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::mion::decrypt_firmware::could_not_write_decrypted_firmware_file",
-				?cause,
-				output_file = valuable(&output_path),
-				"Could not write decrypted file contents.",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				add_context_to(
-					miette!(
-						"Could not write the decrypted firmware file, perhaps some filesystem error?"
-					),
-					[
-						cause,
-						miette!(format!("Was Writing File: {}", output_path.display())),
-					]
-					.into_iter(),
-				),
-			);
-		}
+		error!(
+			id = "bridgectl::mion::decrypt_firmware::could_not_write_decrypted_firmware_file",
+			?cause,
+			output_file = valuable(&output_path),
+			"Could not write decrypted file contents.",
+		);
 
 		std::process::exit(DECRYPT_FW_COULD_NOT_WRITE_FW);
 	}
@@ -128,20 +76,12 @@ fn get_output_path(
 	if (output_path_flag.is_some() && output_path_positional.is_some())
 		&& output_path_flag != output_path_positional
 	{
-		if SHOULD_LOG_JSON() {
-			error!(
-				id = "bridgectl::mion::decrypt_firmware::conflicting_output_paths",
-				flag.output = valuable(&output_path_flag),
-				argument.output = valuable(&output_path_positional),
-				"Specified the Output Path twice with different values, not sure where to output.",
-			);
-		} else {
-			error!(
-				flag.output = valuable(&output_path_flag),
-				argument.output = valuable(&output_path_positional),
-				"Specified the Output Path twice with different values, not sure where to output.",
-			);
-		}
+		error!(
+			id = "bridgectl::mion::decrypt_firmware::conflicting_output_paths",
+			flag.output = valuable(&output_path_flag),
+			argument.output = valuable(&output_path_positional),
+			"Specified the Output Path twice with different values, not sure where to output.",
+		);
 
 		std::process::exit(DECRYPT_FW_BAD_OUTPUT_PATH);
 	}

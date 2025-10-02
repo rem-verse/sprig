@@ -1,8 +1,7 @@
 //! Log statements to match the legacy output of mionps.
 
+use chrono::prelude::*;
 use std::net::Ipv4Addr;
-
-use time::OffsetDateTime;
 
 /// Create a logging hook to use when we're about to call connect with TCP.
 pub fn create_session_logging_hook(verbose: bool) -> impl Fn(u128) + Clone + Send + 'static {
@@ -121,15 +120,15 @@ pub fn log_error(error_msg: &str) {
 
 /// Log a verbose message which includes a timestamp.
 pub fn log_verbose(message: &str) {
-	let current_time = OffsetDateTime::now_utc();
+	let current_time = Utc::now();
 	println!(
 		"mionps: VERBOSE: [{:02}/{:02}/{:04} {:02}:{:02}:{:02}.{:03}] {message}",
-		u8::from(current_time.month()),
+		u8::try_from(current_time.month()).unwrap_or(u8::MAX),
 		current_time.day(),
 		current_time.year(),
 		current_time.hour(),
 		current_time.minute(),
 		current_time.second(),
-		current_time.millisecond(),
+		current_time.timestamp_subsec_millis(),
 	);
 }

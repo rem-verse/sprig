@@ -5,12 +5,10 @@
 //! 3 to be safe).
 
 use crate::{
-	SHOULD_LOG_JSON,
 	commands::argv_helpers::get_targeted_bridge_ip,
 	exit_codes::{DUMP_MEMORY_FAILURE, FAILED_TO_WRITE_TO_DISK},
 };
 use cat_dev::mion::cgis::dump_memory_with_writer;
-use miette::miette;
 use std::{
 	fs::OpenOptions,
 	io::{BufWriter, Write},
@@ -27,18 +25,11 @@ const EARLY_FW_STOP: usize = 3_146_240_usize;
 /// Actual command handler for the `mion dump-firmware-from-memory` command.
 pub async fn handle_dump_firmware_from_memory(output_path: Option<PathBuf>) {
 	let bridge_ip = get_targeted_bridge_ip().await;
-	if SHOULD_LOG_JSON() {
-		info!(
-			id = "bridgectl::mion::dump_firmware_from_memory::start",
-			%bridge_ip,
-			"Dumping MION FW from Memory, this may take a bit (a couple hours max)...",
-		);
-	} else {
-		info!(
-			%bridge_ip,
-			"Dumping MION FW from Memory, this may take a bit (a couple hours max)...",
-		);
-	}
+	info!(
+		id = "bridgectl::mion::dump_firmware_from_memory::start",
+		%bridge_ip,
+		"Dumping MION FW from Memory, this may take a bit (a couple hours max)...",
+	);
 
 	let path = output_path.unwrap_or(PathBuf::from("88F6281-firmware-memory.bin"));
 	let file_writer = match OpenOptions::new()
@@ -50,21 +41,13 @@ pub async fn handle_dump_firmware_from_memory(output_path: Option<PathBuf>) {
 	{
 		Ok(val) => val,
 		Err(cause) => {
-			if SHOULD_LOG_JSON() {
-				error!(
-				  id = "bridgectl::mion::dump_firmware_from_memory::write_failure",
-				  %bridge_ip,
-				  ?cause,
-				  path = %path.to_string_lossy(),
-				  "Failed to write 88F6281 memory to disk!",
-				);
-			} else {
-				error!(
-					"\n{:?}",
-					miette!("Could not write successfully dumped MION's 88F6281 Memory")
-						.wrap_err(cause),
-				);
-			}
+			error!(
+			  id = "bridgectl::mion::dump_firmware_from_memory::open_failure",
+			  %bridge_ip,
+			  ?cause,
+			  path = %path.to_string_lossy(),
+			  "Failed to open file where MION's 88F6281 FW was going to be written!",
+			);
 
 			std::process::exit(FAILED_TO_WRITE_TO_DISK);
 		}
@@ -74,40 +57,25 @@ pub async fn handle_dump_firmware_from_memory(output_path: Option<PathBuf>) {
 	if let Err(cause) =
 		dump_memory_with_writer(bridge_ip, None, Some(EARLY_FW_STOP), |bytes: Vec<u8>| {
 			if let Err(cause) = buff_writer.write(&bytes) {
-				if SHOULD_LOG_JSON() {
-					error!(
-					  id = "bridgectl::mion::dump_firmware_from_memory::write_failure",
-					  %bridge_ip,
-					  ?cause,
-					  path = %path.to_string_lossy(),
-					  "Failed to write 88F6281 memory to disk!",
-					);
-				} else {
-					error!(
-						"\n{:?}",
-						miette!("Could not write successfully dumped MION's 88F6281 Memory")
-							.wrap_err(cause),
-					);
-				}
+				error!(
+				  id = "bridgectl::mion::dump_firmware_from_memory::write_failure",
+				  %bridge_ip,
+				  ?cause,
+				  path = %path.to_string_lossy(),
+				  "Failed to write MION's 88F6281 FW to disk!",
+				);
 
 				std::process::exit(FAILED_TO_WRITE_TO_DISK);
 			}
 		})
 		.await
 	{
-		if SHOULD_LOG_JSON() {
-			error!(
-			  id = "bridgectl::mion::dump_firmware_from_memory::failure",
-			  %bridge_ip,
-			  ?cause,
-			  "Failure to dump MION's memory",
-			);
-		} else {
-			error!(
-				"\n{:?}",
-				miette!("Could not dump MION's Memory.").wrap_err(cause),
-			);
-		}
+		error!(
+		  id = "bridgectl::mion::dump_firmware_from_memory::failure",
+		  %bridge_ip,
+		  ?cause,
+		  "Failure to dump MION's memory",
+		);
 
 		std::process::exit(DUMP_MEMORY_FAILURE);
 	}
